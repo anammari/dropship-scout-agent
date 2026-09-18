@@ -1,0 +1,29 @@
+# Virtual environment
+.venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Secrets — never commit runtime credentials
+.env
+# .env.example IS tracked on purpose: it holds placeholders and documents
+# every key. Real values live only in .env / the process environment.
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Packaging / build artifacts
+*.egg-info/
+build/
+dist/
+
+# Logs
+*.log
+
+# OS noise
+.DS_Store
