@@ -29,6 +29,8 @@ from typing import List, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from src.config import settings
+
 # Intentionally broad (plan Part C): any http(s):// substring, any domain.
 # LLMs cannot know ephemeral marketplace item IDs, so any URL the model
 # emits into a rationale field is by construction a hallucination.
@@ -85,17 +87,21 @@ def _reject_urls_in_cogs_basis(v: str) -> str:
 def _enforce_accept_gates(obj) -> None:
     """ACCEPT-only margin-math and tagging gates (CLAUDE.md §3 gate 2).
 
-    A final ACCEPT must clear the margin floor — markup_multiplier >= 3.0
-    OR estimated_margin_aud strictly greater than AUD 25.0 — and must
-    carry the mandatory `dropship` target tag (case-insensitive,
-    whitespace-tolerant).
+    A final ACCEPT must clear the margin floor — markup_multiplier >=
+    `MIN_MARKUP_MULTIPLIER` OR estimated_margin_aud strictly greater than
+    `MIN_MARGIN_AUD` — and must carry the mandatory `dropship` target tag
+    (case-insensitive, whitespace-tolerant).
     """
     if obj.verdict != "ACCEPT":
         return
-    if not (obj.markup_multiplier >= 3.0 or obj.estimated_margin_aud > 25.0):
+    if not (
+        obj.markup_multiplier >= settings.MIN_MARKUP_MULTIPLIER
+        or obj.estimated_margin_aud > settings.MIN_MARGIN_AUD
+    ):
         raise ValueError(
-            "ACCEPT verdict requires markup_multiplier >= 3.0 or "
-            "estimated_margin_aud > 25.0 AUD gross profit per unit"
+            f"ACCEPT verdict requires markup_multiplier >= "
+            f"{settings.MIN_MARKUP_MULTIPLIER} or estimated_margin_aud > "
+            f"{settings.MIN_MARGIN_AUD} AUD gross profit per unit"
         )
     tags = {tag.strip().lower() for tag in obj.target_tags if tag and tag.strip()}
     if "dropship" not in tags:

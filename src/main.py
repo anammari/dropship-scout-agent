@@ -1,7 +1,7 @@
 """End-to-end CLI orchestrator (Phase 6, rewritten per plan F.5).
 
 Supplier-First pipeline: supplier extractors (CJdropshipping MCP server,
-Apify-managed AliExpress scraper, Etsy Open API) fetch verified
+AliExpress Dropshipping Center, Etsy Open API) fetch verified
 `RawSupplierProduct`s -> LLM viability evaluation (the LLM authors only
 marketing/viability fields) -> deterministic CDN image download with the
 3-image gate -> workspace export -> printed summary with per-run drop
@@ -31,7 +31,10 @@ from typing import Any, List, Optional
 from src.config import settings
 from src.exporter import CandidateExporter, ExportResult
 from src.evaluators.llm_filter import LLMConfigError, LLMEvaluationFilter
-from src.extractors.aliexpress_apify import AliExpressApifyExtractor
+from src.extractors.aliexpress_ds import (
+    AliExpressDsCenterExtractor,
+    DsCenterSessionExpiredError,
+)
 from src.extractors.base import (
     BaseSupplierExtractor,
     ExtractorBlockedException,
@@ -48,7 +51,7 @@ logger = logging.getLogger(__name__)
 # uses; auto mode tries them in that configured order.
 _EXTRACTOR_REGISTRY = {
     "cjdropshipping": CjMcpExtractor,
-    "aliexpress": AliExpressApifyExtractor,
+    "aliexpress": AliExpressDsCenterExtractor,
     "etsy": EtsyApiExtractor,
 }
 
@@ -370,14 +373,32 @@ def main(argv: Optional[List[str]] = None) -> int:
                 reason=str(exc),
                 instructions=[
                     "Check that at least one supplier extractor is "
-                    "configured: CJ_MCP_TOKEN (CJdropshipping MCP server), "
-                    "APIFY_API_TOKEN (AliExpress via Apify), or ETSY_API_KEY "
-                    "(Etsy Open API v3) in .env",
+                    "configured: CJ_MCP_TOKEN (CJdropshipping MCP server) or "
+                    "ETSY_API_KEY (Etsy Open API v3) in .env — the "
+                    "AliExpress Dropshipping Center engine needs no "
+                    "credential of its own",
                     "Verify each configured credential manually against its "
                     "API (auth endpoint ping) before re-running",
                     "Re-run the pipeline after any manual fix: python -m "
                     f"src.main --keyword {args.keyword!r} --target-count "
                     f"{args.target_count}",
+                ],
+            )
+        )
+        return 1
+    except DsCenterSessionExpiredError as exc:
+        print(
+            render_intervention_block(
+                step="AliExpress Dropshipping Center Session",
+                reason=str(exc),
+                instructions=[
+                    "Refresh the saved AliExpress login: python "
+                    "scripts/generate_ali_session.py",
+                    "Or run anonymously by removing the saved session file "
+                    "(ALI_DS_STATE_PATH) — the DS Center answers these "
+                    "calls without a login",
+                    "Re-run the pipeline: python -m src.main --keyword "
+                    f"{args.keyword!r} --target-count {args.target_count}",
                 ],
             )
         )

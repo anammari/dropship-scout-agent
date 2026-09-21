@@ -107,9 +107,19 @@ def test_prompt_carries_the_real_listed_price_not_an_estimate():
 
 def test_system_prompt_demands_margin_floor_and_forbids_urls():
     system = build_messages(_raw_product())[0]["content"]
-    assert "3x" in system
+    assert "2.5x" in system
     assert "dropship" in system
     assert "REJECT" in system
+
+
+def test_system_prompt_prices_realistically_instead_of_by_multiplier():
+    # Phase 5: the model must price for the AU market in the store's niche and
+    # must not mechanically apply a fixed 3x-4x multiplier to the real cost.
+    system = build_messages(_raw_product())[0]["content"]
+    assert "fixed 3x-4x multiplier" in system
+    assert "Modern Arab-Aussie Lifestyle & Cultural Nostalgia" in system
+    # The cost is authoritative: no cheaper basis may be invented.
+    assert "STRICT, landed dropshipping cost" in system
 
 
 # ----------------------------------------------------------------------
@@ -123,6 +133,23 @@ def test_reconcile_keeps_an_accept_clearing_the_margin_floor():
     result = _reconcile(provisional, raw)
     # 49.99 - 16.80 = 33.19 > 25 — passes on the margin alternative.
     assert result.verdict == "ACCEPT"
+
+
+def test_reconcile_keeps_a_realistic_price_under_the_relaxed_floor():
+    # A real DS Center cost basis (COGS 4.00) priced at a realistic AU retail
+    # of 11.00 is 2.75x — below the original 3.0x arm and under the AUD 25
+    # margin arm, so the OLD floor would have downgraded it. The relaxed floor
+    # (2.5x / AUD 20) is what lets realistic premium pricing survive.
+    raw = _raw_product(price_aud=4.00, shipping_cost_aud=0.0)
+    result = _reconcile(_provisional(suggested_retail_aud=11.00), raw)
+    assert result.verdict == "ACCEPT"
+
+
+def test_reconcile_downgrades_an_accept_below_the_relaxed_floor():
+    # 7.00 vs COGS 4.00 is 1.75x with AUD 3.00 margin — under both arms.
+    raw = _raw_product(price_aud=4.00, shipping_cost_aud=0.0)
+    result = _reconcile(_provisional(suggested_retail_aud=7.00), raw)
+    assert result.verdict == "REJECT"
 
 
 def test_reconcile_downgrades_accept_failing_both_floor_arms():

@@ -22,8 +22,9 @@ official **MCP server** (StreamableHTTP) — see §5.
 
 ```
 [Stage 1] Supplier extractors (chain, SUPPLIER_PRIORITY_ORDER)
-          CJdropshipping MCP → AliExpress via Apify → Etsy Open API v3
+          CJdropshipping MCP → AliExpress Dropshipping Center → Etsy Open API v3
           CJ hits must pass the MCP Payload Liveness Gate (§5)
+          AliExpress hits must pass the Winning-Product Gate (§6)
                          │  List[RawSupplierProduct]  (verified ground truth)
                          ▼
 [Stage 2] LLM viability & marketing evaluation (deepseek-v4-flash:cloud)
@@ -47,7 +48,8 @@ official **MCP server** (StreamableHTTP) — see §5.
    cost/materials/freight reasoning.
 4. **LLM arithmetic is never trusted:** margin/markup are recomputed in code,
    and an ACCEPT whose reconciled figures miss the margin floor
-   (markup ≥ 3.0 OR margin > AUD 25) is downgraded to REJECT.
+   (`MIN_MARKUP_MULTIPLIER` ≥ 2.5 OR margin > `MIN_MARGIN_AUD` 20) is
+   downgraded to REJECT.
 5. **Every supplier URL must match its supplier's direct-product-page
    shape** — search/category/gateway URLs are rejected at the schema level:
 
@@ -90,7 +92,7 @@ dropship-scout-agent/
 │   ├── extractors/
 │   │   ├── base.py          # BaseSupplierExtractor + shared exceptions
 │   │   ├── cj_mcp_extractor.py      # CJdropshipping MCP + liveness gate
-│   │   ├── aliexpress_apify.py      # Apify pay-per-result AliExpress scraper
+│   │   ├── aliexpress_ds.py         # native DS Center ingestion + winner gate
 │   │   └── etsy_api.py              # Etsy Open API v3
 │   ├── evaluators/llm_filter.py     # instructor + ProvisionalProductEvaluation
 │   ├── pipeline/
@@ -98,15 +100,17 @@ dropship-scout-agent/
 │   │   └── image_sourcing.py# deterministic CDN image download/validation
 │   ├── exporter.py          # workspace writer (metadata.json + images/)
 │   └── main.py              # CLI orchestrator, funnel counters, exit codes
-└── tests/                   # 292 hermetic tests, zero network (9 modules + conftest)
+└── tests/                   # 302 hermetic tests, zero network (10 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
 (`playwright_scraper.py`, `apify_scraper.py`), fuzzy-match sourcing
 (`pipeline/supplier_sourcing.py`), the CJ REST client and extractor
-(`pipeline/cj_client.py`, `extractors/cj_api_extractor.py`) and the schemas
-they carried (`ScrapedAdData`, `SupplierSearchSeed`, the search-gateway
-forms, `competitor_retail_url`) are deleted. CJ is MCP-only (§5), and
+(`pipeline/cj_client.py`, `extractors/cj_api_extractor.py`), the
+Apify-hosted AliExpress scraper (`extractors/aliexpress_apify.py`, with its
+pay-per-result actor and every `APIFY_*` key) and the per-candidate DS
+Center gate it carried (`ENABLE_DS_CENTER_GATE`) are deleted. AliExpress is
+read natively from the Dropshipping Center (§6), CJ is MCP-only (§5), and
 `supplier_retail_url` is the sole retail link in the export contract (§8).
 Deletion history and rationale: `_docs/plan.md` §14.
 
@@ -175,20 +179,27 @@ usable price, ≥ 3 gallery URLs).
   HTML-stripped, and `price_aud = listed USD × USD_TO_AUD`. The PDP link
   prefers CJ's own `productUrl` (the only known-good form for UUID pids),
   falling back to the canonical `/product/{pid}.html`.
-- **`aliexpress_apify.py`:** managed pay-per-result
-  `cryptosignals/aliexpress-scraper` actor (apify-client 3.x:
-  `actor().call(run_input=..., wait_duration=...)`), one **search run per
-  keyword** — `{"action": "search", "query": <keyword>, "maxItems": N,
-  "country": <target>, "currency": "USD", "sort": "default",
-  "proxyConfiguration": {"useApifyProxy": True}}`. Items quoting a
-  non-USD currency are skipped, so `price_aud = price × USD_TO_AUD` stays
-  valid. Thin galleries (< 3) are upgraded in place by a stealth Playwright
-  session harvesting the item PDP carousel (`Stealth` class API —
+- **`aliexpress_ds.py` (native, `engine_name="aliexpress_ds_center"`):**
+  reads the AliExpress **Dropshipping Center's** own MTOP H5 APIs through a
+  stealth Playwright context's request jar — no HTML scraping, no SPA
+  driving, no per-result billing. Per keyword it calls
+  `selection.search` (`sort=ORDERS_DESC`, page size `ALI_DS_MAX_PRODUCTS`)
+  and expands every hit through `selection.queryByItemUrl` for the item's
+  real AU-market record. Both ride MTOP's token-then-sign handshake (the
+  first call primes `_m_h5_tk` unsigned, the second signs
+  `md5(token&t&appKey&data)`), and the context carries the ship-to cookie
+  (`aep_usuc_f`, `region=<run country>`) because the DS Center's catalogue
+  and prices are market-specific. The record's minor-unit price plus its
+  quoted currency drive `price_aud` (USD → `USD_TO_AUD`; AUD as-is; any
+  other currency skipped rather than mispriced). Every hit must then clear
+  the **Winning-Product Gate** (`MIN_DS_ORDER_COUNT`, `MIN_DS_RATING`; a
+  metric the DS Center does not report is unproven and the item is dropped),
+  survivors are sorted by order volume descending, and each survivor's PDP
+  is harvested once for its gallery + description (`Stealth` class API —
   playwright-stealth ≥ 2.0; v1's `stealth_async()` no longer exists).
-  The actor bills per scraped product, so a run is bounded twice: the
-  per-run item cap (`APIFY_MAX_ITEMS_PER_RUN`, default 100 ≈ $0.50
-  worst case) and a tight `wait_duration` (`APIFY_RUN_TIMEOUT_SECS`,
-  default `60`). The estimated cost is logged before the first call.
+  The saved session (`ALI_DS_STATE_PATH`) is optional: it is injected only
+  when the file exists, and a session/auth refusal raises
+  `DsCenterSessionExpiredError` for the operator.
 - **`etsy_api.py`:** Open API v3 `listings/active` with `includes=Images`
   (`x-api-key`); best-first gallery keys (`url_fullxfull` → …); 401/403/429
   → Blocked; **USD-only listings** are converted (currency guard), others
@@ -292,9 +303,10 @@ Instructions for You:
 
 Current triggers: **Supplier Extraction Stage** (all extractors
 unavailable/blocked), **LLM Evaluation Filter Configuration** (missing LLM
-env config), **Pipeline Funnel Exhausted** (zero exports after all gates).
-Drops at individual gates are surfaced in the run summary, not as
-interventions.
+env config), **AliExpress Dropshipping Center Session** (the DS Center
+refused the client — re-run the session script or run anonymously),
+**Pipeline Funnel Exhausted** (zero exports after all gates). Drops at
+individual gates are surfaced in the run summary, not as interventions.
 
 ## 10. CONFIGURATION (`.env`, read by `src/config.py`)
 
@@ -302,21 +314,21 @@ interventions.
 |---|---|---|
 | `CJ_MCP_TOKEN` | — | cj_mcp_client / cj_mcp_extractor (primary; token in URL path) |
 | `CJ_MCP_BASE_URL` | `https://developers.cjdropshipping.com/mcp` | cj_mcp_client (token appended) |
-| `APIFY_API_TOKEN` | — | aliexpress_apify |
-| `APIFY_ACTOR_ID` | `cryptosignals/aliexpress-scraper` | aliexpress_apify (pay-per-result; never a rental actor) |
-| `APIFY_MAX_ITEMS` | `20` | listings per AliExpress keyword run |
-| `APIFY_MAX_ITEMS_PER_RUN` | `100` | hard item cap per `fetch_products` call (budget guard) |
-| `APIFY_PRICE_PER_RESULT_USD` | `0.005` | run cost estimate (actor's per-result price) |
-| `APIFY_RUN_TIMEOUT_SECS` | `60` | Apify `wait_duration` bound |
+| `ALI_DS_STATE_PATH` | `ali_ds_state.json` | aliexpress_ds (optional saved session; injected only if present) |
+| `ALI_DS_MAX_PRODUCTS` | `20` | DS Center search page size / per-keyword expansion cap |
+| `MIN_DS_ORDER_COUNT` | `500` | aliExpress winning-product gate (historical orders) |
+| `MIN_DS_RATING` | `4.5` | winning-product gate (rating out of 5) |
 | `ETSY_API_KEY` | — | etsy_api |
 | `LLM_BASE_URL` / `LLM_API_KEY` | — | llm_filter |
 | `LLM_MODEL` | `deepseek-v4-flash:cloud` | llm_filter |
 | `SUPPLIER_PRIORITY_ORDER` | `cjdropshipping,aliexpress,etsy` | extractor chain |
 | `USD_TO_AUD` | `1.55` | all USD→AUD price math |
 | `CJ_MAX_PRODUCTS` | `10` | products expanded per CJ keyword (MCP search cap) |
-| `TARGET_COUNTRY` | `AU` | extraction/evaluation target |
+| `MIN_MARKUP_MULTIPLIER` | `2.5` | margin floor (markup leg), llm_filter + models |
+| `MIN_MARGIN_AUD` | `20.0` | margin floor (gross-profit leg), llm_filter + models |
+| `TARGET_COUNTRY` | `AU` | extraction/evaluation target; also the AliExpress ship-to market |
 | `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter |
-| `USER_AGENT` | desktop Chrome UA | CDN downloads, Apify harvest |
+| `USER_AGENT` | desktop Chrome UA | CDN downloads, Playwright PDP harvest |
 
 Every key in `.env.example` is present in `.env` in the same order with the
 same description; a key that is commented out **or present but blank**
@@ -327,12 +339,12 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 292
-  tests, zero network (httpx.MockTransport + fake MCP sessions + a scripted
-  fake `apify_client.ApifyClient`).
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 302
+  tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
+  Playwright/MTOP fakes).
 - Python 3.13 venv at `.venv/`; install with `pip install -e ".[dev]"`;
-  Playwright Chromium: `python -m playwright install chromium` (used only by
-  the AliExpress PDP gallery harvest).
+  Playwright Chromium: `python -m playwright install chromium` (used by the
+  AliExpress DS Center calls and the PDP gallery harvest).
 - The `mcp` SDK is a declared dependency (StreamableHTTP client only).
 
 ## 12. OPERATIONAL NOTES
@@ -351,13 +363,17 @@ only in `.env` / the real environment.
   client retries once after a 2s backoff before surfacing `CjMcpToolError`.
   `CJ_MAX_PRODUCTS=10` means up to 10 detail calls per keyword, so a run
   takes minutes — that is the pacing, not a hang.
-- **Apify budget model:** the AliExpress actor is **pay-per-result**
-  ($0.005/product on `cryptosignals/aliexpress-scraper`), so the free-tier
-  monthly credit covers it — a rental actor ($20–25/month) does **not**,
-  because platform credit cannot pay a rental fee. Set the Apify Console
-  monthly spend limit to $5 as the authoritative ceiling; the in-code
-  per-run item cap and cost log are the early-warning layer. A blocked or
-  throttled run (the actor documents that residential proxies give
-  consistent results, which free-tier API runs cannot use) surfaces as
-  `ExtractorBlockedException` and degrades gracefully to the next extractor
-  in the chain.
+- **AliExpress cost basis:** the DS Center's AU-market quote is the
+  authoritative landed cost. The retired Apify path fed the LLM
+  welcome-deal prices (one item was costed at AUD 1.53 against the DS
+  Center's AUD 11.19), which is why costing is now read natively. The
+  market pin (`aep_usuc_f`) is what keeps it honest — the same item is
+  quoted differently for every market — so never run the DS Center calls
+  without it.
+- **AliExpress pacing:** each search hit costs one item-record round trip
+  (~2-5 s), so `ALI_DS_MAX_PRODUCTS=20` means a keyword takes roughly 1-2
+  minutes before the PDP harvest, which adds one page load per survivor.
+  That is the pacing, not a hang. A failed search exchange raises
+  `ExtractorBlockedException` (the chain moves on) rather than reporting an
+  empty funnel, and a session/auth refusal raises
+  `DsCenterSessionExpiredError`, which halts with re-login instructions.

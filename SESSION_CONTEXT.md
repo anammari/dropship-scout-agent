@@ -1,107 +1,122 @@
-# SESSION_CONTEXT.md — AliExpress Dropshipping Center gate
+# SESSION_CONTEXT.md — AliExpress Dropshipping Center ingestion
 
-Companion to `CLAUDE.md`. Covers the AliExpress Dropshipping Center (DS
-Center) ingestion gate and the authenticated session it depends on.
+Companion to `CLAUDE.md`. Covers the native AliExpress ingestion path, the
+quantitative winning-product gate, and the optional saved session.
 
-## 1. What the gate does
+## 1. Why the Apify path was retired
 
-`ENABLE_DS_CENTER_GATE` (default **off**) adds a DS Center verification step
-to AliExpress ingestion. When on, every candidate returned by the Apify actor
-— not just the thin ones — is checked against the DS Center, and a candidate
-the DS Center does not list is dropped *before* its PDP image extraction, so
-no cost or time is spent on products that cannot be dropshipped. Items that
-pass are harvested exactly as before.
+The previous AliExpress extractor ran a managed Apify actor against
+unauthenticated consumer search pages. Three problems made its data
+unusable for costing:
 
-The Apify actor still runs first and supplies the bulk candidate list; the DS
-Center check is purely a filter in the Playwright verification phase.
+* **Fake "welcome deal" prices.** An unauthenticated, new-user context is
+  fed subsidised SuperDeals prices. One exported package was costed at
+  AUD 1.53 while the DS Center quotes **US $7.22 (AUD 11.19)** for the same
+  item — a cost basis off by roughly 7x, which the LLM then marked up into a
+  hallucinated retail price.
+* **Wrong market.** The actor priced against a US ship-to context and
+  ignored `--country AU`, so logistics were validated for the wrong market.
+* **Per-result billing**, with a cold-container start that could exceed the
+  configured run timeout.
 
-## 2. How the check works
+## 2. The native extractor (`src/extractors/aliexpress_ds.py`)
 
-`src/extractors/aliexpress_apify.py`, gate section:
+`AliExpressDsCenterExtractor` reads the DS Center's own MTOP APIs through a
+Playwright context's request jar — the same internal calls its React UI
+makes — so no HTML scraping and no SPA driving:
 
-1. **Authenticated context, target market pinned.** When the gate is on, the
-   Playwright context is created with `storage_state=ALI_DS_STATE_PATH`. A
-   missing state file raises `DsCenterSessionExpiredError` (a `RuntimeError`)
-   rather than running unverified. The context also carries the AliExpress
-   ship-to cookie (`aep_usuc_f`, `region=<run country>`, defaulted from
-   `TARGET_COUNTRY`) because the DS Center's verdict is market-specific: the
-   same item can be listed for AU and `none_of_item` elsewhere, and without
-   the cookie the DS Center answers for its own default market.
-2. **Navigate.** The item's DS Center Product Analysis entry is opened —
-   `https://ds.aliexpress.com/product-analysis?itemId=<id>` — which is the
-   same flow as pasting the product link into the DS Center and pressing
-   *Analyze* (the page auto-runs the analysis for an `itemId` in the query).
-   A login redirect, or a password field where the analysis should be,
-   raises `DsCenterSessionExpiredError` so the operator knows to refresh the
-   session.
-3. **Item verdict.** The item's DS Center record is read through the
-   authenticated context via MTOP's token-then-sign handshake
-   (`mtop.aidc.ds.center.selection.queryByItemUrl`, the XHR the DS Center UI
-   itself uses): `code "-1"` / `message "none_of_item"` means the DS Center
-   holds no record of the item → **not supported**; a record carrying the
-   item id means **supported**. MTOP session flags
-   (`FAIL_SYS_SESSION_EXPIRED`, `FAIL_SYS_USER_VALIDATE`,
-   `FAIL_SYS_ILLEGAL_ACCESS`) also raise `DsCenterSessionExpiredError`.
-4. **DOM fallback.** If the lookup yields no verdict, the rendered page is
-   read directly: an explicit *no data / not supported* statement is a
-   rejection, and a rendered analysis table is a pass. No signal at all is
-   inconclusive and the candidate is dropped with a warning.
+| Call | Purpose |
+|---|---|
+| `mtop.aidc.ds.center.selection.search` | catalogue search, `sort=ORDERS_DESC` |
+| `mtop.aidc.ds.center.selection.queryByItemUrl` | one item's record: price, orders, rating |
 
-Drops are logged per candidate — `Skipping <id>: Not supported in DS Center`
-— and summarised once per run
-(`DS Center gate dropped N of M verified candidate(s)`). A candidate that
-passes but already has a full gallery is not re-harvested.
+Both use MTOP's token-then-sign handshake (`md5(token&t&appKey&data)`,
+appKey `12574478`); the first call primes the `_m_h5_tk` cookie and is sent
+unsigned, the second is signed. Responses are JSONP-tolerant.
 
-The gate never fabricates or edits product data: it only removes candidates,
-so the `CLAUDE.md` §2 anti-hallucination contract is untouched.
+**The market pin is load-bearing.** The context carries AliExpress's
+ship-to cookie (`aep_usuc_f`, `region=<run country>`). The same item is
+quoted `US $5.23` for the DS Center's default market and `US $7.22` for AU,
+and the catalogue itself differs — without the cookie the cost basis is
+wrong again.
 
-## 3. The session script (`scripts/generate_ali_session.py`)
+**The saved session is optional.** Anonymous access returns byte-identical
+data, so `ALI_DS_STATE_PATH` is injected only when the file exists and its
+absence is never an error. A session/auth refusal (`FAIL_SYS_SESSION_EXPIRED`,
+`FAIL_SYS_USER_VALIDATE`, `FAIL_SYS_ILLEGAL_ACCESS`) or a login-page redirect
+raises `DsCenterSessionExpiredError`, which the CLI renders as a human-
+intervention block with the recovery steps.
 
-The DS Center needs an account login, so the pipeline cannot reach it
-anonymously; a saved browser session supplies the credentials.
+**Currency guard.** The record carries the exact figure in minor units plus
+its currency. USD is converted with `USD_TO_AUD`; AUD is taken as-is; any
+other currency is skipped rather than mispriced.
+
+## 3. The winning-product gate
+
+Enforced in the extractor, before the LLM or any image work, on every
+search hit's item record:
+
+| Config | Default | Drop behaviour |
+|---|---|---|
+| `MIN_DS_ORDER_COUNT` | `500` | logs `Skipping <ID>: Insufficient order volume (<count>)` |
+| `MIN_DS_RATING` | `4.5` | logs `Skipping <ID>: Rating too low (<rating>)` |
+
+Orders arrive as display text (`"148 sold"`, `"10000+ sold"`) and are read
+at their floor; rating is the record's `score`. **A metric the DS Center
+does not report is treated as unproven and the item is dropped** — the same
+inverted tolerance the CJ liveness gate applies to unverifiable stock.
+
+Survivors are sorted by order volume descending, so the target count fills
+with the strongest sellers first.
+
+## 4. Imagery
+
+The DS Center record carries a single `itemMainPic`, so each survivor's own
+PDP is harvested once for its full carousel gallery and meta description
+(`_GALLERY_JS` / `_META_DESCRIPTION_JS`, same probes the retired path used).
+Fewer than 3 distinct gallery URLs after that pass means the candidate is
+dropped — never fabricated, no fallback tier.
+
+## 5. The optional session script (`scripts/generate_ali_session.py`)
 
 ```bash
 source .venv/bin/activate && python scripts/generate_ali_session.py
 ```
 
-* Launches a **non-headless** stealth Chromium (Playwright's bundled build —
-  the operator's own Chrome profile and tabs are untouched).
-* Opens `https://login.aliexpress.com` and prints:
+Opens a non-headless stealth Chromium (Playwright's bundled build — the
+operator's own Chrome profile and tabs are untouched), lets the operator log
+in and open the Dropshipping Center by hand, then writes the context's
+`storage_state` to `ALI_DS_STATE_PATH`. Needed only if AliExpress starts
+requiring a login for the calls above.
 
-  > Please log in to your AliExpress account and navigate to the
-  > Dropshipping Center manually. Press Enter here when done.
+## 6. Margin floor
 
-* On Enter, writes the browser context's `storage_state` to
-  `ALI_DS_STATE_PATH` (default `ali_ds_state.json`, repo root, git-ignored).
+The deterministic half of evaluation gate 2 lives in `models._enforce_accept_gates`
+and `llm_filter._reconcile`, both reading the same config:
 
-Re-run it whenever a run reports `DsCenterSessionExpiredError`. The blocking
-`input()` runs on a worker thread so the event loop keeps servicing the
-browser while the operator logs in.
+* `MIN_MARKUP_MULTIPLIER` (default `2.5`) **or** `MIN_MARGIN_AUD`
+  (default `20.0`) must be cleared against the real landed cost, or the
+  ACCEPT is downgraded to REJECT.
 
-## 4. Configuration
+Relaxed from the original 3.0x / AUD 25 alongside the pricing prompt rework:
+a true DS Center cost is far higher than the retired path's welcome-deal
+prices, so a blind 3x on real cost over-prices the store. The prompt now
+asks for realistic Australian retail pricing in the "Modern Arab-Aussie
+Lifestyle & Cultural Nostalgia" niche and rejects a product whose realistic
+price cannot clear the floor.
 
-| Key | Default | Notes |
-|---|---|---|
-| `ENABLE_DS_CENTER_GATE` | `False` | Off: ingestion is unchanged. On: the gate applies and the session file is required. |
-| `ALI_DS_STATE_PATH` | `ali_ds_state.json` | Playwright `storage_state` written by the session script; git-ignored. |
+## 7. Tests
 
-Both keys are declared in `.env.example` and `.env` in the same order. The
-market the gate asks about is the run's country (`--country`, default
-`TARGET_COUNTRY`).
+`tests/test_aliexpress_ds.py` (hermetic, zero network) covers the payload
+decoding (plain and JSONP), order/rating parsing, the currency guard and
+AUD conversion, the winning-product gate and each documented drop log, the
+MTOP priming-then-signed handshake, ordering by order volume, dedupe across
+keywords, session-expiry and blocked-exchange paths, the optional state
+file, and the PDP gallery/description harvest. `tests/test_config.py`
+covers every new key.
 
-## 5. Tests
-
-`tests/test_ds_center_gate.py` (hermetic, zero network) covers the item-id
-extraction, the MTOP signature, the payload classification, the login-wall
-and session-expiry paths, the DOM fallback, the state-file requirements, and
-the drop/keep wiring through `fetch_products`. Its fixtures are the two live
-products from the gate directive: `1005012359331033` (in the DS Center) and
-`1005007987710373` (not in it). `tests/test_config.py` covers the two new
-keys.
-
-Live check (2026-09-19, read-only, no Apify spend): with the AU market
-pinned, both directive products resolve to a DS Center record (`KEEP`); an
-item id the DS Center has no record of resolves to `none_of_item` and is
-dropped. Verdicts are market-specific — the directive's product labels hold
-for a different region's context, not AU — so the gate is only meaningful
-with the ship-to cookie above.
+Live check (2026-09-21, read-only): `garlic grater` → 20 search hits →
+18 gated out (18 below the order floor or rating floor) → 2 kept, both
+harvested with 13 gallery URLs; a full pipeline run exported one package at
+a real DS cost of AUD 3.86 (the other candidate was REJECTed by the LLM at
+2.01x markup — the realistic-pricing instruction working as intended).

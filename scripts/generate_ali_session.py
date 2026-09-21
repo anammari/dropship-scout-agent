@@ -1,16 +1,17 @@
 #!/usr/bin/env python
 """Generate the AliExpress Dropshipping Center session state.
 
-The DS Center (`ds.aliexpress.com`) is behind an account login, so the
-pipeline cannot reach its product-analysis signal anonymously. This script
-opens a real (non-headless) stealth Chromium, lets the operator log in and
-visit the Dropshipping Center by hand, and then saves the browser context's
-`storage_state` to `ALI_DS_STATE_PATH` (default `ali_ds_state.json` at the
-repo root — git-ignored).
+Optional. `AliExpressDsCenterExtractor` reaches the DS Center's search and
+item-record APIs anonymously, so a run works without this file; the saved
+session is injected into its Playwright context only when it exists, as an
+upgrade for the case where AliExpress starts gating those calls behind a
+login.
 
-`AliExpressApifyExtractor` injects that file into its Playwright context when
-`ENABLE_DS_CENTER_GATE` is true, and raises for the operator to re-run this
-script once the saved session expires.
+This script opens a real (non-headless) stealth Chromium, lets the operator
+log in and visit the Dropshipping Center by hand, and then saves the browser
+context's `storage_state` to `ALI_DS_STATE_PATH` (default
+`ali_ds_state.json` at the repo root — git-ignored). Re-run it if a run
+reports that the DS Center refused the request.
 
 Usage (from the repo root):
 

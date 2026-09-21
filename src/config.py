@@ -7,7 +7,7 @@ environment always win; a missing `.env` is not an error.
 Security: this module never logs or prints the values it holds — `Settings`
 deliberately stays a plain class (its default `object.__repr__` shows no
 field values, so an accidental `repr(settings)` can never leak
-`APIFY_API_TOKEN` / `LLM_API_KEY` / `CJ_MCP_TOKEN` / `ETSY_API_KEY`).
+`LLM_API_KEY` / `CJ_MCP_TOKEN` / `ETSY_API_KEY`).
 """
 
 import os
@@ -33,14 +33,10 @@ DEFAULT_EXPORT_DIR = (
 # appended as a path segment at connect time — see cj_mcp_client.py.
 DEFAULT_CJ_MCP_BASE_URL = "https://developers.cjdropshipping.com/mcp"
 
-# AliExpress actor used by aliexpress_apify.py. Pinned to a pay-per-result
-# actor: the free-tier monthly credit covers per-result charges but cannot
-# pay an actor's flat monthly rental fee.
-DEFAULT_APIFY_ALIEXPRESS_ACTOR = "cryptosignals/aliexpress-scraper"
-
-# Saved AliExpress login (`storage_state`) used by the Dropshipping Center
-# gate; produced by `scripts/generate_ali_session.py`, git-ignored, and read
-# only when ENABLE_DS_CENTER_GATE is true.
+# Saved AliExpress login (`storage_state`) for the Dropshipping Center
+# extractor; produced by `scripts/generate_ali_session.py`, git-ignored, and
+# injected only when the file exists — the DS Center answers these calls
+# anonymously, so its absence is never an error.
 DEFAULT_ALI_DS_STATE_PATH = "ali_ds_state.json"
 
 
@@ -69,7 +65,6 @@ class Settings:
 
     def __init__(self) -> None:
         # --- Credentials (all optional; extractors validate at use time) ---
-        self.APIFY_API_TOKEN: str = os.getenv("APIFY_API_TOKEN") or ""
         self.LLM_BASE_URL: str = os.getenv("LLM_BASE_URL") or ""
         self.LLM_API_KEY: str = os.getenv("LLM_API_KEY") or ""
         # Plan Part C: defaults to deepseek-v4-flash:cloud when unset or
@@ -89,43 +84,27 @@ class Settings:
         # Etsy Open API v3 key (src/extractors/etsy_api.py).
         self.ETSY_API_KEY: str = os.getenv("ETSY_API_KEY") or ""
 
-        # --- Supplier-first extractor config (plan Part F) ---
-        # Apify actor used by aliexpress_apify.py, and how many listings a
-        # single actor run may return.
-        self.APIFY_ALIEXPRESS_ACTOR: str = (
-            os.getenv("APIFY_ACTOR_ID") or DEFAULT_APIFY_ALIEXPRESS_ACTOR
-        )
-        self.APIFY_MAX_ITEMS_PER_KEYWORD: int = _parse_int(
-            os.getenv("APIFY_MAX_ITEMS"), default=20
-        )
-        # Budget guard for the pay-per-result actor: the per-result price is
-        # used for the run's cost estimate, and the per-run item cap bounds
-        # worst-case spend for one `fetch_products` call (the Apify account's
-        # monthly spend limit is the authoritative ceiling).
-        self.APIFY_PRICE_PER_RESULT_USD: float = _parse_float(
-            os.getenv("APIFY_PRICE_PER_RESULT_USD"), default=0.005
-        )
-        self.APIFY_MAX_ITEMS_PER_RUN: int = _parse_int(
-            os.getenv("APIFY_MAX_ITEMS_PER_RUN"), default=100
-        )
-        # Tight bound so a stuck proxy/captcha cannot drain the monthly
-        # credit; the run is abandoned and the chain moves on.
-        self.APIFY_RUN_TIMEOUT_SECS: int = _parse_int(
-            os.getenv("APIFY_RUN_TIMEOUT_SECS"), default=60
-        )
-        # --- AliExpress Dropshipping Center gate ---
-        # Off by default: the gate adds one authenticated DS Center lookup per
-        # AliExpress candidate and requires a saved session (see
-        # `scripts/generate_ali_session.py`). A blank/absent value means the
-        # gate is disabled, never "unset".
-        self.ENABLE_DS_CENTER_GATE: bool = _parse_bool(
-            os.getenv("ENABLE_DS_CENTER_GATE"), default=False
-        )
+        # --- AliExpress Dropshipping Center ingestion ---
         # Playwright `storage_state` JSON holding the operator's AliExpress
-        # login; injected into the extractor's browser context when the gate
-        # is enabled.
+        # login; injected into the extractor's browser context when the file
+        # exists, never required (the DS Center answers anonymously).
         self.ALI_DS_STATE_PATH: str = (
             os.getenv("ALI_DS_STATE_PATH") or DEFAULT_ALI_DS_STATE_PATH
+        )
+        # Catalogue-search page size per keyword: also the ceiling on how many
+        # items one keyword expands through the per-item record call.
+        self.ALI_DS_MAX_PRODUCTS: int = _parse_int(
+            os.getenv("ALI_DS_MAX_PRODUCTS"), default=20
+        )
+        # Quantitative "winning product" gate. Both floors must be cleared by
+        # every candidate before it reaches the LLM or the image stage; a
+        # metric the DS Center does not report counts as unproven, and the
+        # item is dropped.
+        self.MIN_DS_ORDER_COUNT: int = _parse_int(
+            os.getenv("MIN_DS_ORDER_COUNT"), default=500
+        )
+        self.MIN_DS_RATING: float = _parse_float(
+            os.getenv("MIN_DS_RATING"), default=4.5
         )
         # Supplier extractors are tried in this order when the orchestrator
         # runs in auto mode; a comma-separated env override reorders or
@@ -147,12 +126,27 @@ class Settings:
             os.getenv("CJ_MAX_PRODUCTS"), default=10
         )
 
+        # --- Margin floor (the deterministic half of gate 2) ---
+        # An ACCEPT must clear markup_multiplier >= MIN_MARKUP_MULTIPLIER OR
+        # estimated_margin_aud > MIN_MARGIN_AUD against the real landed cost;
+        # anything else is downgraded to REJECT. Relaxed from the original
+        # 3.0x / AUD 25 so realistic premium AU pricing survives (a real DS
+        # Center cost is far higher than the welcome-deal prices the retired
+        # Apify path reported, so a blind 3x on true cost over-prices the
+        # store).
+        self.MIN_MARKUP_MULTIPLIER: float = _parse_float(
+            os.getenv("MIN_MARKUP_MULTIPLIER"), default=2.5
+        )
+        self.MIN_MARGIN_AUD: float = _parse_float(
+            os.getenv("MIN_MARGIN_AUD"), default=20.0
+        )
+
     @staticmethod
     def _parse_supplier_order() -> List[str]:
         raw = os.getenv("SUPPLIER_PRIORITY_ORDER")
         if not raw or not raw.strip():
             # CJ's official MCP server first (no anti-bot surface), then the
-            # Apify-hosted AliExpress scraper, then Etsy (needs a key).
+            # AliExpress Dropshipping Center, then Etsy (needs a key).
             return ["cjdropshipping", "aliexpress", "etsy"]
         return [key.strip().lower() for key in raw.split(",") if key.strip()]
 

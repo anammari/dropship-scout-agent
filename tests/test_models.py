@@ -54,6 +54,11 @@ def _provisional(**overrides) -> ProvisionalProductEvaluation:
     return ProvisionalProductEvaluation(**base)
 
 
+def _low_cogs(**overrides) -> RawSupplierProduct:
+    """A real-DS-Center-shaped cost: AUD 4.00 landed, no quoted shipping."""
+    return _raw_product(price_aud=4.00, shipping_cost_aud=0.0, **overrides)
+
+
 def _final(provisional=None, raw=None) -> ProductCandidateEvaluation:
     return ProductCandidateEvaluation.from_raw(
         provisional or _provisional(), raw or _raw_product()
@@ -265,6 +270,21 @@ def test_final_accept_passes_on_margin_over_25_even_below_3x():
     final = _final(_provisional(suggested_retail_aud=45.00))
     assert final.verdict == "ACCEPT"
     assert final.markup_multiplier < 3.0
+
+
+def test_final_accept_survives_the_relaxed_floor_below_3x():
+    # COGS 4.00 with a 2.75x retail: the original 3.0x / AUD 25 floor rejected
+    # this, which is exactly the realistic AU pricing the DS Center cost basis
+    # now produces. The floor is relaxed to 2.5x / AUD 20.
+    final = _final(_provisional(suggested_retail_aud=11.00), raw=_low_cogs())
+    assert final.verdict == "ACCEPT"
+    assert final.markup_multiplier == pytest.approx(2.75, abs=0.01)
+
+
+def test_final_accept_below_the_relaxed_floor_is_rejected():
+    # 1.75x and AUD 3.00 margin — under both arms of the relaxed floor.
+    with pytest.raises(ValidationError, match="markup_multiplier"):
+        _final(_provisional(suggested_retail_aud=7.00), raw=_low_cogs())
 
 
 def test_final_model_has_no_image_field():
