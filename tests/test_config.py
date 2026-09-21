@@ -233,6 +233,43 @@ def test_cj_max_products_env_override_is_respected(monkeypatch):
 
 
 # ----------------------------------------------------------------------
+# AliExpress Dropshipping Center gate
+# ----------------------------------------------------------------------
+
+
+def test_ds_center_gate_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("ENABLE_DS_CENTER_GATE", raising=False)
+    assert load_settings().ENABLE_DS_CENTER_GATE is False
+
+
+@pytest.mark.parametrize("raw", ["true", "True", "1", "yes"])
+def test_ds_center_gate_accepts_truthy_values(monkeypatch, raw):
+    monkeypatch.setenv("ENABLE_DS_CENTER_GATE", raw)
+    assert load_settings().ENABLE_DS_CENTER_GATE is True
+
+
+@pytest.mark.parametrize("raw", ["", "false", "0", "no"])
+def test_ds_center_gate_blank_or_false_stays_off(monkeypatch, raw):
+    monkeypatch.setenv("ENABLE_DS_CENTER_GATE", raw)
+    assert load_settings().ENABLE_DS_CENTER_GATE is False
+
+
+def test_ali_ds_state_path_defaults_to_the_repo_root_file(monkeypatch):
+    monkeypatch.delenv("ALI_DS_STATE_PATH", raising=False)
+    assert load_settings().ALI_DS_STATE_PATH == "ali_ds_state.json"
+
+
+def test_ali_ds_state_path_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("ALI_DS_STATE_PATH", "/tmp/ali-state.json")
+    assert load_settings().ALI_DS_STATE_PATH == "/tmp/ali-state.json"
+
+
+def test_ali_ds_state_path_blank_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("ALI_DS_STATE_PATH", "")
+    assert load_settings().ALI_DS_STATE_PATH == "ali_ds_state.json"
+
+
+# ----------------------------------------------------------------------
 # .env / .env.example alignment
 # ----------------------------------------------------------------------
 

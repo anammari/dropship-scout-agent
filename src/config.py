@@ -38,6 +38,11 @@ DEFAULT_CJ_MCP_BASE_URL = "https://developers.cjdropshipping.com/mcp"
 # pay an actor's flat monthly rental fee.
 DEFAULT_APIFY_ALIEXPRESS_ACTOR = "cryptosignals/aliexpress-scraper"
 
+# Saved AliExpress login (`storage_state`) used by the Dropshipping Center
+# gate; produced by `scripts/generate_ali_session.py`, git-ignored, and read
+# only when ENABLE_DS_CENTER_GATE is true.
+DEFAULT_ALI_DS_STATE_PATH = "ali_ds_state.json"
+
 
 # Blank or absent values resolve to the caller's default, so a `.env` key that
 # is present but empty means "use the code default", never zero/False.
@@ -107,6 +112,20 @@ class Settings:
         # credit; the run is abandoned and the chain moves on.
         self.APIFY_RUN_TIMEOUT_SECS: int = _parse_int(
             os.getenv("APIFY_RUN_TIMEOUT_SECS"), default=60
+        )
+        # --- AliExpress Dropshipping Center gate ---
+        # Off by default: the gate adds one authenticated DS Center lookup per
+        # AliExpress candidate and requires a saved session (see
+        # `scripts/generate_ali_session.py`). A blank/absent value means the
+        # gate is disabled, never "unset".
+        self.ENABLE_DS_CENTER_GATE: bool = _parse_bool(
+            os.getenv("ENABLE_DS_CENTER_GATE"), default=False
+        )
+        # Playwright `storage_state` JSON holding the operator's AliExpress
+        # login; injected into the extractor's browser context when the gate
+        # is enabled.
+        self.ALI_DS_STATE_PATH: str = (
+            os.getenv("ALI_DS_STATE_PATH") or DEFAULT_ALI_DS_STATE_PATH
         )
         # Supplier extractors are tried in this order when the orchestrator
         # runs in auto mode; a comma-separated env override reorders or

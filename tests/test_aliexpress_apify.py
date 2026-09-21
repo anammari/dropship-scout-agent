@@ -152,6 +152,9 @@ def apify(monkeypatch):
     monkeypatch.setattr(settings, "APIFY_RUN_TIMEOUT_SECS", 60)
     monkeypatch.setattr(settings, "APIFY_PRICE_PER_RESULT_USD", 0.005)
     monkeypatch.setattr(settings, "USD_TO_AUD", 1.55)
+    # Pinned off so these tests exercise the ungated path whatever the local
+    # `.env` says; the gate has its own module (test_ds_center_gate.py).
+    monkeypatch.setattr(settings, "ENABLE_DS_CENTER_GATE", False)
     monkeypatch.setattr(AliExpressApifyExtractor, "_harvest_galleries", _no_harvest)
     return FakeApifyClient
 
