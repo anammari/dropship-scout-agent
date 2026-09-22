@@ -24,6 +24,7 @@ from src.models import (
     ProvisionalProductEvaluation,
     RawSupplierProduct,
 )
+from src.extractors.aliexpress_ds import DsCenterSessionExpiredError
 from src.extractors.base import (
     ExtractorBlockedException,
     ExtractorNotConfiguredError,
@@ -131,7 +132,7 @@ def test_extractor_chain_builds_from_configured_priority_order(monkeypatch):
     )
     chain = _build_extractor_chain()
     assert [e.engine_name for e in chain] == [
-        "cjdropshipping", "aliexpress_apify", "etsy_api",
+        "cjdropshipping", "aliexpress_ds_center", "etsy_api",
     ]
 
 
@@ -423,6 +424,23 @@ def test_cli_funnel_exhausted_exits_1(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "[ACTION REQUIRED: HUMAN INTERVENTION NEEDED]" in out
     assert "Pipeline Funnel Exhausted" in out
+
+
+def test_cli_ds_center_session_refusal_halts_with_instructions(monkeypatch, capsys):
+    """A refused DS Center session is a config problem, not a crash: halt with
+    the exact recovery steps rather than a traceback."""
+    import src.main as m
+
+    async def fake_run(**kwargs):
+        raise DsCenterSessionExpiredError("DS Center refused the request")
+
+    monkeypatch.setattr(m, "run_pipeline", fake_run)
+    code = m.main(["--keyword", "k", "--target-count", "1"])
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "[ACTION REQUIRED: HUMAN INTERVENTION NEEDED]" in out
+    assert "AliExpress Dropshipping Center Session" in out
+    assert "generate_ali_session.py" in out
 
 
 def test_cli_successful_run_exits_0(monkeypatch, capsys):

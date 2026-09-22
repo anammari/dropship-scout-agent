@@ -10,6 +10,10 @@ __pycache__/
 # .env.example IS tracked on purpose: it holds placeholders and documents
 # every key. Real values live only in .env / the process environment.
 
+# Saved AliExpress login for the Dropshipping Center gate (session cookies;
+# written by scripts/generate_ali_session.py)
+ali_ds_state.json
+
 # Test / tooling caches
 .pytest_cache/
 .mypy_cache/

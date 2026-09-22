@@ -35,7 +35,6 @@ def test_llm_model_empty_string_normalises_to_default(monkeypatch):
 
 def test_missing_credentials_resolve_to_empty_strings(monkeypatch):
     for name in (
-        "APIFY_API_TOKEN",
         "LLM_BASE_URL",
         "LLM_API_KEY",
         "ETSY_API_KEY",
@@ -45,7 +44,6 @@ def test_missing_credentials_resolve_to_empty_strings(monkeypatch):
     # Plain str (not Optional/None) — extractor-level NotConfigured checks
     # rely on a plain falsy value.
     for name in (
-        "APIFY_API_TOKEN",
         "LLM_BASE_URL",
         "LLM_API_KEY",
         "ETSY_API_KEY",
@@ -101,74 +99,6 @@ def test_cj_mcp_base_url_blank_falls_back_to_the_default(monkeypatch):
 # ----------------------------------------------------------------------
 # Supplier-first extractor config (plan F)
 # ----------------------------------------------------------------------
-
-
-def test_apify_actor_defaults_to_the_pay_per_result_actor(monkeypatch):
-    monkeypatch.delenv("APIFY_ACTOR_ID", raising=False)
-    assert (
-        load_settings().APIFY_ALIEXPRESS_ACTOR
-        == "cryptosignals/aliexpress-scraper"
-    )
-
-
-def test_apify_actor_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("APIFY_ACTOR_ID", "some/other-actor")
-    assert load_settings().APIFY_ALIEXPRESS_ACTOR == "some/other-actor"
-
-
-def test_apify_max_items_defaults_to_twenty(monkeypatch):
-    monkeypatch.delenv("APIFY_MAX_ITEMS", raising=False)
-    assert load_settings().APIFY_MAX_ITEMS_PER_KEYWORD == 20
-
-
-def test_apify_max_items_malformed_value_fails_loudly(monkeypatch):
-    monkeypatch.setenv("APIFY_MAX_ITEMS", "not-an-int")
-    with pytest.raises(ValueError):
-        load_settings()
-
-
-def test_apify_price_per_result_defaults_to_the_actor_price(monkeypatch):
-    monkeypatch.delenv("APIFY_PRICE_PER_RESULT_USD", raising=False)
-    assert load_settings().APIFY_PRICE_PER_RESULT_USD == 0.005
-
-
-def test_apify_price_per_result_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("APIFY_PRICE_PER_RESULT_USD", "0.006")
-    assert load_settings().APIFY_PRICE_PER_RESULT_USD == 0.006
-
-
-def test_apify_max_items_per_run_defaults_to_one_hundred(monkeypatch):
-    monkeypatch.delenv("APIFY_MAX_ITEMS_PER_RUN", raising=False)
-    assert load_settings().APIFY_MAX_ITEMS_PER_RUN == 100
-
-
-def test_apify_max_items_per_run_malformed_value_fails_loudly(monkeypatch):
-    monkeypatch.setenv("APIFY_MAX_ITEMS_PER_RUN", "not-an-int")
-    with pytest.raises(ValueError):
-        load_settings()
-
-
-def test_apify_price_per_result_blank_falls_back_to_the_actor_price(monkeypatch):
-    monkeypatch.setenv("APIFY_PRICE_PER_RESULT_USD", "")
-    assert load_settings().APIFY_PRICE_PER_RESULT_USD == 0.005
-
-
-def test_apify_max_items_per_run_blank_falls_back_to_the_cap(monkeypatch):
-    # Blank must not collapse to 0 — that would disable AliExpress ingestion.
-    monkeypatch.setenv("APIFY_MAX_ITEMS_PER_RUN", "")
-    assert load_settings().APIFY_MAX_ITEMS_PER_RUN == 100
-
-
-def test_apify_run_timeout_defaults_to_a_tight_sixty_seconds(monkeypatch):
-    # The pay-per-result budget guard relies on a short bound: a stuck
-    # proxy must not keep a run alive (and billing) for minutes.
-    monkeypatch.delenv("APIFY_RUN_TIMEOUT_SECS", raising=False)
-    assert load_settings().APIFY_RUN_TIMEOUT_SECS == 60
-
-
-def test_apify_run_timeout_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("APIFY_RUN_TIMEOUT_SECS", "120")
-    assert load_settings().APIFY_RUN_TIMEOUT_SECS == 120
 
 
 def test_supplier_priority_order_defaults_to_cjdropshipping_first(monkeypatch):
@@ -230,6 +160,78 @@ def test_cj_max_products_defaults_to_ten(monkeypatch):
 def test_cj_max_products_env_override_is_respected(monkeypatch):
     monkeypatch.setenv("CJ_MAX_PRODUCTS", "5")
     assert load_settings().CJ_MAX_PRODUCTS_PER_KEYWORD == 5
+
+
+# ----------------------------------------------------------------------
+# AliExpress Dropshipping Center ingestion
+# ----------------------------------------------------------------------
+
+
+def test_ali_ds_state_path_defaults_to_the_repo_root_file(monkeypatch):
+    monkeypatch.delenv("ALI_DS_STATE_PATH", raising=False)
+    assert load_settings().ALI_DS_STATE_PATH == "ali_ds_state.json"
+
+
+def test_ali_ds_state_path_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("ALI_DS_STATE_PATH", "/tmp/ali-state.json")
+    assert load_settings().ALI_DS_STATE_PATH == "/tmp/ali-state.json"
+
+
+def test_ali_ds_state_path_blank_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("ALI_DS_STATE_PATH", "")
+    assert load_settings().ALI_DS_STATE_PATH == "ali_ds_state.json"
+
+
+def test_ali_ds_max_products_defaults_to_twenty(monkeypatch):
+    monkeypatch.delenv("ALI_DS_MAX_PRODUCTS", raising=False)
+    assert load_settings().ALI_DS_MAX_PRODUCTS == 20
+
+
+def test_ali_ds_max_products_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("ALI_DS_MAX_PRODUCTS", "5")
+    assert load_settings().ALI_DS_MAX_PRODUCTS == 5
+
+
+def test_min_ds_order_count_defaults_to_five_hundred(monkeypatch):
+    monkeypatch.delenv("MIN_DS_ORDER_COUNT", raising=False)
+    assert load_settings().MIN_DS_ORDER_COUNT == 500
+
+
+def test_min_ds_order_count_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("MIN_DS_ORDER_COUNT", "1200")
+    assert load_settings().MIN_DS_ORDER_COUNT == 1200
+
+
+def test_min_ds_rating_defaults_to_four_point_five(monkeypatch):
+    monkeypatch.delenv("MIN_DS_RATING", raising=False)
+    assert load_settings().MIN_DS_RATING == 4.5
+
+
+def test_min_ds_rating_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("MIN_DS_RATING", "4.8")
+    assert load_settings().MIN_DS_RATING == 4.8
+
+
+def test_min_markup_multiplier_defaults_to_the_relaxed_floor(monkeypatch):
+    # Relaxed from the original 3.0x so realistic AU pricing against a real
+    # DS Center cost is not auto-rejected downstream.
+    monkeypatch.delenv("MIN_MARKUP_MULTIPLIER", raising=False)
+    assert load_settings().MIN_MARKUP_MULTIPLIER == 2.5
+
+
+def test_min_markup_multiplier_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("MIN_MARKUP_MULTIPLIER", "3.0")
+    assert load_settings().MIN_MARKUP_MULTIPLIER == 3.0
+
+
+def test_min_margin_aud_defaults_to_the_relaxed_floor(monkeypatch):
+    monkeypatch.delenv("MIN_MARGIN_AUD", raising=False)
+    assert load_settings().MIN_MARGIN_AUD == 20.0
+
+
+def test_min_margin_aud_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("MIN_MARGIN_AUD", "25")
+    assert load_settings().MIN_MARGIN_AUD == 25.0
 
 
 # ----------------------------------------------------------------------

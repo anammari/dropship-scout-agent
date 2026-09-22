@@ -1,7 +1,7 @@
 [project]
 name = "dropship-scout-agent"
 version = "0.1.0"
-description = "Supplier-first dropshipping product scout: live supplier extraction (CJdropshipping MCP, AliExpress via Apify, Etsy API), LLM filtering, and Shopify workspace export."
+description = "Supplier-first dropshipping product scout: live supplier extraction (CJdropshipping MCP, AliExpress Dropshipping Center, Etsy API), LLM filtering, and Shopify workspace export."
 requires-python = ">=3.11"
 # Pinned to the versions verified working in .venv (see _docs/plan.md,
 # "Environment Setup").
@@ -19,7 +19,6 @@ dependencies = [
     # HTML width/height attributes; decode the downloaded bytes themselves.
     "pillow>=11.0",
     "python-dotenv==1.2.3",
-    "apify-client==3.2.0",
     # Official MCP Python SDK — StreamableHTTP client for the remote
     # CJdropshipping MCP server (src/pipeline/cj_mcp_client.py).
     "mcp==2.2.0",

@@ -21,8 +21,9 @@ Anti-hallucination contract (carried from CLAUDE.md §3.5):
   through `image_sourcing.py` deterministically.
 - The LLM's arithmetic is never trusted: margin/markup are recomputed in
   code from the real supplier price, and an ACCEPT whose reconciled
-  figures fail the margin floor (markup >= 3.0 OR margin > AUD 25) is
-  downgraded to REJECT before the final model is constructed.
+  figures fail the margin floor (`MIN_MARKUP_MULTIPLIER` OR
+  `MIN_MARGIN_AUD`) is downgraded to REJECT before the final model is
+  constructed.
 - Schema validation failures exhaust instructor's retry budget and
   propagate to the orchestrator, which counts them as
   `dropped_llm_validation_failed` — never exported.
@@ -52,19 +53,35 @@ class LLMConfigError(Exception):
     """LLM endpoint configuration is missing or incomplete (`.env` keys)."""
 
 
-_SYSTEM_PROMPT = """You are an expert dropshipping evaluator. Review the provided \
-raw supplier product details (title, description, and the supplier's REAL \
-listed price in AUD) and determine whether the product is viable for an \
-Australian eCommerce store. Reply with a structured verdict.
+_SYSTEM_PROMPT = """You are an expert dropshipping evaluator for a premium \
+Australian store in the "Modern Arab-Aussie Lifestyle & Cultural Nostalgia" \
+niche — home, hospitality and everyday-ceremony products that give \
+Arabic-speaking Australians and their families a stronger sense of home, \
+heritage, and generous hosting. Review the provided raw supplier product \
+details (title, description, and the supplier's REAL dropshipping cost in \
+AUD) and determine whether the product is viable. Reply with a structured \
+verdict.
+
+The cost you are given (`price_aud` + `shipping_cost_aud`) is the STRICT, \
+landed dropshipping cost read from the AliExpress Dropshipping Center for \
+the Australian market. Treat it as accurate and final: do not invent a \
+cheaper basis, do not discount it, and do not assume a promotional or \
+new-customer price underlies it.
 
 Viability gates (adapted to real supplier data):
 1. PROBLEM SOLVER OR EMOTIONAL TRIGGER: the product solves an active \
 discomfort (ergonomics, clutter, daily friction) or serves a high-passion \
-enthusiast niche (pets, home barista, outdoor/fitness).
-2. MARGIN VIABILITY (AUSTRALIAN PRICING): your `suggested_retail_aud` must \
-be at least 3x the listed landed cost (`price_aud` + `shipping_cost_aud`) \
-OR leave at least AUD $25 gross profit per unit. The listed price is REAL \
-data — do not invent a cheaper cost basis.
+enthusiast niche (kitchen and home barista, hospitality and entertaining, \
+tea and coffee ceremony, prayer and household ritual, pets, \
+outdoor/fitness).
+2. MARGIN VIABILITY (AUSTRALIAN PRICING): do NOT mechanically apply a \
+fixed 3x-4x multiplier to the cost. Price the product at what it \
+REALISTICALLY sells for in Australia in this niche — what a shopper would \
+happily pay for a considered, well-presented premium item, not a Kmart \
+commodity. Then check it clears the floor: `suggested_retail_aud` must be \
+at least 2.5x the landed cost OR leave at least AUD $20 gross profit per \
+unit. If the realistic Australian price cannot clear that floor, REJECT \
+the product on this gate rather than inflating the price.
 3. AUSTRALIAN LOGISTICAL FEASIBILITY: light and durable is best (under \
 1.2 kg, no fragile untreated glass/ceramics, non-perishable, air-freight \
 compliant — no loose battery hazmat restrictions). Infer physical traits \
@@ -82,12 +99,13 @@ digital goods, spare parts with unclear fit, wholesale bundles).
 
 If ACCEPT, write the marketing payload:
 - `marketing_ad_copy`: compelling shopper-facing copy for the Australian \
-market, grounded ONLY in the supplied product data.
+market in this niche, grounded ONLY in the supplied product data.
 - `key_features`: 3-5 concrete marketing bullets derived ONLY from the \
 title/description — never invent specifications.
 - `shipping_notice_au`: a realistic customer-facing shipping line for \
 standard tracked international shipping to Australia (7-12 business days).
-- `suggested_retail_aud`: AUD retail price clearing the margin floor above.
+- `suggested_retail_aud`: the realistic Australian retail price described \
+in gate 2, not a multiplier-derived figure.
 - `target_tags`: shopper/shopify tags, and ALWAYS include "dropship".
 - `niche_category`, `problem_solved`, `saturation_risk` as instructed.
 
@@ -139,16 +157,20 @@ def _reconcile(
 
     The LLM's verdict is trusted (it applies the viability gate), but its
     arithmetic is not: landed COGS is the actual listed price + shipping,
-    so if its retail suggestion fails the margin floor (markup >= 3.0 OR
-    margin > AUD 25.00), the ACCEPT is downgraded to REJECT — on true
-    numbers the product failed the gate, whatever the model claimed.
+    so if its retail suggestion fails the margin floor (markup >=
+    `MIN_MARKUP_MULTIPLIER` OR margin > `MIN_MARGIN_AUD`), the ACCEPT is
+    downgraded to REJECT — on true numbers the product failed the gate,
+    whatever the model claimed.
     """
     if evaluation.verdict != "ACCEPT":
         return evaluation
     cogs = _landed_cogs(raw)
     margin = round(evaluation.suggested_retail_aud - cogs, 2)
     markup = round(evaluation.suggested_retail_aud / cogs, 2) if cogs > 0 else 0.0
-    if not (markup >= 3.0 or margin > 25.0):
+    if not (
+        markup >= settings.MIN_MARKUP_MULTIPLIER
+        or margin > settings.MIN_MARGIN_AUD
+    ):
         logger.info(
             "Downgraded ACCEPT to REJECT for %r: reconciled margin %.2f AUD "
             "/ markup %.2fx fails the margin floor against the real listed "
