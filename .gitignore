@@ -14,6 +14,10 @@ __pycache__/
 # written by scripts/generate_ali_session.py)
 ali_ds_state.json
 
+# Scratch session notes — operating context lives in CLAUDE.md, so this file
+# is never tracked even if recreated locally.
+SESSION_CONTEXT.md
+
 # Test / tooling caches
 .pytest_cache/
 .mypy_cache/

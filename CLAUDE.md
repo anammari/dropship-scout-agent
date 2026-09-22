@@ -1,8 +1,10 @@
 # CLAUDE.md - Dropship Scout Agent (Supplier-First Architecture)
 
-> Aligned with the implemented codebase as of 2026-09-18. The full
+> Aligned with the implemented codebase as of 2026-09-23. The full
 > engineering spec — schemas, validator code, liveness-gate rules, config
-> reference — lives in `_docs/plan.md`. This file is the operating mandate.
+> reference — lives in `_docs/plan.md`. This file is the operating mandate
+> and the single source of operating context; there is no companion
+> session file.
 
 ## 1. MISSION & HIGH-LEVEL OBJECTIVE
 
@@ -69,9 +71,16 @@ Any candidate failing two or more points is marked `REJECT`:
 
 1. **Problem Solver or Emotional Trigger** — solves an active discomfort or
    serves a high-passion enthusiast niche.
-2. **Margin Viability (AUD)** — landed cost must support a minimum 3x markup
-   or at least AUD $25–$30 gross profit per unit (enforced twice: `_reconcile`
-   downgrade in `llm_filter.py` and `_enforce_accept_gates` in `models.py`).
+2. **Margin Viability (AUD)** — priced for **realistic Australian retail** in
+   the store's "Modern Arab-Aussie Lifestyle & Cultural Nostalgia" niche,
+   against the **strict landed cost** read from the supplier record: never a
+   cheaper invented basis, and never a mechanical 3x–4x multiplier on cost.
+   The honest price must clear `MIN_MARKUP_MULTIPLIER` (2.5x) **or** leave
+   `MIN_MARGIN_AUD` (AUD 20) gross profit per unit; a product whose realistic
+   AU price cannot clear that floor is REJECTed on this gate rather than
+   priced up to fit (enforced twice: `_reconcile` downgrade in
+   `llm_filter.py` and `_enforce_accept_gates` in `models.py`, both reading
+   the same config keys).
 3. **Australian Logistical Feasibility** — < 1.2 kg, durable, non-perishable,
    air-freight compliant (inferred from title/description only).
 4. **Local Saturation Resistance** — not an everyday Kmart/Target/Bunnings/
@@ -100,7 +109,9 @@ dropship-scout-agent/
 │   │   └── image_sourcing.py# deterministic CDN image download/validation
 │   ├── exporter.py          # workspace writer (metadata.json + images/)
 │   └── main.py              # CLI orchestrator, funnel counters, exit codes
-└── tests/                   # 302 hermetic tests, zero network (10 modules + conftest)
+├── scripts/
+│   └── generate_ali_session.py  # optional saved DS Center login (§6)
+└── tests/                   # 308 hermetic tests, zero network (9 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -108,11 +119,13 @@ dropship-scout-agent/
 (`pipeline/supplier_sourcing.py`), the CJ REST client and extractor
 (`pipeline/cj_client.py`, `extractors/cj_api_extractor.py`), the
 Apify-hosted AliExpress scraper (`extractors/aliexpress_apify.py`, with its
-pay-per-result actor and every `APIFY_*` key) and the per-candidate DS
-Center gate it carried (`ENABLE_DS_CENTER_GATE`) are deleted. AliExpress is
+pay-per-result actor, its US-market unauthenticated welcome-deal pricing and
+every `APIFY_*` key) and the per-candidate DS Center gate it carried
+(`ENABLE_DS_CENTER_GATE`) are deleted. AliExpress is
 read natively from the Dropshipping Center (§6), CJ is MCP-only (§5), and
 `supplier_retail_url` is the sole retail link in the export contract (§8).
-Deletion history and rationale: `_docs/plan.md` §14.
+Costing rationale for the replacement: §12. Deletion history:
+`_docs/plan.md` §14.
 
 ## 5. CJ MCP PAYLOAD LIVENESS GATE (MANDATORY)
 
@@ -181,29 +194,56 @@ usable price, ≥ 3 gallery URLs).
   falling back to the canonical `/product/{pid}.html`.
 - **`aliexpress_ds.py` (native, `engine_name="aliexpress_ds_center"`):**
   reads the AliExpress **Dropshipping Center's** own MTOP H5 APIs through a
-  stealth Playwright context's request jar — no HTML scraping, no SPA
-  driving, no per-result billing. Per keyword it calls
-  `selection.search` (`sort=ORDERS_DESC`, page size `ALI_DS_MAX_PRODUCTS`)
-  and expands every hit through `selection.queryByItemUrl` for the item's
-  real AU-market record. Both ride MTOP's token-then-sign handshake (the
-  first call primes `_m_h5_tk` unsigned, the second signs
-  `md5(token&t&appKey&data)`), and the context carries the ship-to cookie
-  (`aep_usuc_f`, `region=<run country>`) because the DS Center's catalogue
-  and prices are market-specific. The record's minor-unit price plus its
-  quoted currency drive `price_aud` (USD → `USD_TO_AUD`; AUD as-is; any
-  other currency skipped rather than mispriced). Every hit must then clear
-  the **Winning-Product Gate** (`MIN_DS_ORDER_COUNT`, `MIN_DS_RATING`; a
-  metric the DS Center does not report is unproven and the item is dropped),
-  survivors are sorted by order volume descending, and each survivor's PDP
-  is harvested once for its gallery + description (`Stealth` class API —
-  playwright-stealth ≥ 2.0; v1's `stealth_async()` no longer exists).
-  The saved session (`ALI_DS_STATE_PATH`) is optional: it is injected only
-  when the file exists, and a session/auth refusal raises
-  `DsCenterSessionExpiredError` for the operator.
+  stealth Playwright context's request jar — the same internal calls its
+  React UI makes, so no HTML scraping, no SPA driving, no per-result
+  billing. Per keyword it calls
+  `mtop.aidc.ds.center.selection.search` (`sort=ORDERS_DESC`, page size
+  `ALI_DS_MAX_PRODUCTS`) and expands every hit through
+  `mtop.aidc.ds.center.selection.queryByItemUrl` for the item's
+  real AU-market record. Both ride MTOP's token-then-sign handshake
+  (appKey `12574478`; the first call primes the `_m_h5_tk` cookie unsigned,
+  the second signs `md5(token&t&appKey&data)`), responses are
+  JSONP-tolerant, and the context carries AliExpress's ship-to cookie
+  (`aep_usuc_f`, `site=glo&region=<run country>&b_locale=en_US`) because the
+  DS Center's catalogue and prices are market-specific — the same item is
+  quoted US $5.23 in the default market and US $7.22 for AU, so the pin is
+  load-bearing. The record's minor-unit price plus its quoted currency drive
+  `price_aud` (USD → `USD_TO_AUD`; AUD as-is; any other currency skipped
+  rather than mispriced). Every hit must then clear the **Winning-Product
+  Gate** (§6.1), survivors are sorted by order volume descending, and each
+  survivor's PDP is harvested once for its gallery + description: the record
+  itself carries only a single `itemMainPic`, so the full carousel comes from
+  that one page load (`_GALLERY_JS` / `_META_DESCRIPTION_JS` probes;
+  `Stealth` class API — playwright-stealth ≥ 2.0, v1's `stealth_async()` no
+  longer exists). The saved session (`ALI_DS_STATE_PATH`) is optional —
+  anonymous AU access returns byte-identical data — so it is injected only
+  when the file exists and its absence is never an error; a session/auth
+  refusal (`FAIL_SYS_SESSION_EXPIRED`, `FAIL_SYS_USER_VALIDATE`,
+  `FAIL_SYS_ILLEGAL_ACCESS`) or a login-page redirect raises
+  `DsCenterSessionExpiredError`, which the CLI renders as an intervention
+  block with the recovery steps.
+
 - **`etsy_api.py`:** Open API v3 `listings/active` with `includes=Images`
   (`x-api-key`); best-first gallery keys (`url_fullxfull` → …); 401/403/429
   → Blocked; **USD-only listings** are converted (currency guard), others
   skipped.
+
+### 6.1 WINNING-PRODUCT GATE (AliExpress, MANDATORY)
+
+Enforced in the extractor on every search hit's item record — before the LLM
+and before any image work — so no weak seller ever costs a downstream call:
+
+| Config | Default | Drop behaviour |
+|---|---|---|
+| `MIN_DS_ORDER_COUNT` | `500` | logs `Skipping <ID>: Insufficient order volume (<count>)` |
+| `MIN_DS_RATING` | `4.5` | logs `Skipping <ID>: Rating too low (<rating>)` |
+
+Orders arrive as display text (`"148 sold"`, `"10000+ sold"`) and are read at
+their floor; rating is the record's `score`. **A metric the DS Center does
+not report is treated as unproven and the item is dropped** (logged
+`…(unavailable)` / `…Rating unavailable`) — the same inverted tolerance §5
+applies to unverifiable CJ stock. Survivors are sorted by order volume
+descending, so the target count fills with the strongest sellers first.
 
 ## 7. IMAGE SOURCING (`src/pipeline/image_sourcing.py`)
 
@@ -304,9 +344,22 @@ Instructions for You:
 Current triggers: **Supplier Extraction Stage** (all extractors
 unavailable/blocked), **LLM Evaluation Filter Configuration** (missing LLM
 env config), **AliExpress Dropshipping Center Session** (the DS Center
-refused the client — re-run the session script or run anonymously),
-**Pipeline Funnel Exhausted** (zero exports after all gates). Drops at
-individual gates are surfaced in the run summary, not as interventions.
+refused the client — re-run `scripts/generate_ali_session.py`, or delete
+`ALI_DS_STATE_PATH` and run anonymously), **Pipeline Funnel Exhausted** (zero
+exports after all gates). Drops at individual gates are surfaced in the run
+summary, not as interventions.
+
+### Optional DS Center session script
+
+```bash
+source .venv/bin/activate && python scripts/generate_ali_session.py
+```
+
+Opens a non-headless stealth Chromium (Playwright's bundled build — the
+operator's own Chrome profile and tabs are untouched), lets the operator log
+in and open the Dropshipping Center by hand, then writes the context's
+`storage_state` to `ALI_DS_STATE_PATH`. Needed only if AliExpress starts
+requiring a login for the MTOP calls in §6.
 
 ## 10. CONFIGURATION (`.env`, read by `src/config.py`)
 
@@ -339,9 +392,21 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 302
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 308
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes).
+- `tests/test_aliexpress_ds.py` covers the payload decoding (plain and
+  JSONP), order/rating parsing, the currency guard and AUD conversion, the
+  §6.1 gate and each documented drop log, the MTOP priming-then-signed
+  handshake, ordering by order volume, dedupe across keywords, the
+  session-expiry and blocked-exchange paths, the optional state file, and the
+  PDP gallery/description harvest. `tests/test_config.py` covers every key in
+  §10.
+- **Live evidence (2026-09-21, read-only):** `garlic grater` → 20 search hits
+  → 18 gated out → 2 kept, both harvested with 13 gallery URLs; a full
+  pipeline run exported one package at a real DS cost of **AUD 3.86** and the
+  other candidate was REJECTed by the LLM at 2.01x markup — the realistic-AU
+  pricing rule of §3 doing its job.
 - Python 3.13 venv at `.venv/`; install with `pip install -e ".[dev]"`;
   Playwright Chromium: `python -m playwright install chromium` (used by the
   AliExpress DS Center calls and the PDP gallery harvest).
@@ -363,13 +428,24 @@ only in `.env` / the real environment.
   client retries once after a 2s backoff before surfacing `CjMcpToolError`.
   `CJ_MAX_PRODUCTS=10` means up to 10 detail calls per keyword, so a run
   takes minutes — that is the pacing, not a hang.
+- **Why the Apify path was retired (three failures, all costing):** an
+  unauthenticated, new-user context is fed subsidised SuperDeals "welcome
+  deal" prices — one exported package was costed at **AUD 1.53** against the
+  DS Center's **US $7.22 (AUD 11.19)** for the same item, roughly 7x off,
+  which the LLM then marked up into a hallucinated retail price; the actor
+  priced against a **US** ship-to context and ignored `--country AU`, so
+  logistics were validated for the wrong market; and it billed **per result**
+  with a cold-container start that could exceed the run timeout.
 - **AliExpress cost basis:** the DS Center's AU-market quote is the
-  authoritative landed cost. The retired Apify path fed the LLM
-  welcome-deal prices (one item was costed at AUD 1.53 against the DS
-  Center's AUD 11.19), which is why costing is now read natively. The
-  market pin (`aep_usuc_f`) is what keeps it honest — the same item is
-  quoted differently for every market — so never run the DS Center calls
-  without it.
+  authoritative landed cost. The market pin (`aep_usuc_f`) is what keeps it
+  honest — the same item is quoted differently for every market — so never
+  run the DS Center calls without it.
+- **Static FX, by design:** `price_aud` converts the record's USD with the
+  static `USD_TO_AUD` (1.55). The DS Center UI shows its own live daily rate,
+  so the operator will see a small gap (observed: AUD 3.86 ingested vs AUD
+  3.64 on screen). It is commercially negligible for margin work and is
+  deliberately not "fixed" — a live FX feed adds a failure mode for ~6%
+  on a cost basis that the relaxed floor of §3 already absorbs.
 - **AliExpress pacing:** each search hit costs one item-record round trip
   (~2-5 s), so `ALI_DS_MAX_PRODUCTS=20` means a keyword takes roughly 1-2
   minutes before the PDP harvest, which adds one page load per survivor.
