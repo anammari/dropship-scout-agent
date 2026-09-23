@@ -1,10 +1,10 @@
 # CLAUDE.md - Dropship Scout Agent (Supplier-First Architecture)
 
-> Aligned with the implemented codebase as of 2026-09-23. The full
-> engineering spec — schemas, validator code, liveness-gate rules, config
-> reference — lives in `_docs/plan.md`. This file is the operating mandate
-> and the single source of operating context; there is no companion
-> session file.
+> Aligned with the implemented codebase as of 2026-09-23. This file is the
+> operating mandate and the single source of operating context: it carries
+> the schemas, gate rules, config reference and operational notes. The
+> retired `_docs/plan.md` engineering spec was deleted — it described the
+> pre-MCP implementation and had drifted out of date.
 
 ## 1. MISSION & HIGH-LEVEL OBJECTIVE
 
@@ -139,8 +139,7 @@ the `SUPPLIER_PRIORITY_ORDER` default, `KNOWN_SUPPLIERS`, the CLI's
 `--extractor` choices and the config surface. AliExpress is
 read natively from the Dropshipping Center (§6), CJ is MCP-only (§5), and
 `supplier_retail_url` is the sole retail link in the export contract (§8).
-Costing rationale for the replacement: §12. Deletion history:
-`_docs/plan.md` §14.
+Costing rationale for the replacement: §12.
 
 ## 5. CJ MCP PAYLOAD LIVENESS GATE (MANDATORY)
 

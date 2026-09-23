@@ -521,7 +521,6 @@ dropship-scout-agent/
 ├── pyproject.toml             # Pinned dependencies + pytest configuration
 ├── .env.example               # Template for runtime configuration
 ├── .env                       # Actual credentials — never committed
-├── _docs/plan.md              # Full engineering spec (schemas, gates, config)
 ├── src/
 │   ├── config.py              # Env-driven settings singleton
 │   ├── models.py              # Pydantic schemas + sourcing/anti-hallucination validators
