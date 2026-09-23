@@ -37,7 +37,6 @@ def test_missing_credentials_resolve_to_empty_strings(monkeypatch):
     for name in (
         "LLM_BASE_URL",
         "LLM_API_KEY",
-        "ETSY_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
     fresh = load_settings()
@@ -46,7 +45,6 @@ def test_missing_credentials_resolve_to_empty_strings(monkeypatch):
     for name in (
         "LLM_BASE_URL",
         "LLM_API_KEY",
-        "ETSY_API_KEY",
     ):
         assert getattr(fresh, name) == ""
 
@@ -106,13 +104,15 @@ def test_supplier_priority_order_defaults_to_cjdropshipping_first(monkeypatch):
     assert load_settings().SUPPLIER_PRIORITY_ORDER == [
         "cjdropshipping",
         "aliexpress",
-        "etsy",
     ]
 
 
 def test_supplier_priority_order_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "etsy,aliexpress")
-    assert load_settings().SUPPLIER_PRIORITY_ORDER == ["etsy", "aliexpress"]
+    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "aliexpress,cjdropshipping")
+    assert load_settings().SUPPLIER_PRIORITY_ORDER == [
+        "aliexpress",
+        "cjdropshipping",
+    ]
 
 
 def test_supplier_priority_order_is_normalised(monkeypatch):
@@ -127,13 +127,15 @@ def test_supplier_priority_order_empty_string_falls_back_to_default(monkeypatch)
     assert load_settings().SUPPLIER_PRIORITY_ORDER == [
         "cjdropshipping",
         "aliexpress",
-        "etsy",
     ]
 
 
 def test_supplier_priority_order_drops_blank_segments(monkeypatch):
-    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "aliexpress,,,etsy")
-    assert load_settings().SUPPLIER_PRIORITY_ORDER == ["aliexpress", "etsy"]
+    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "aliexpress,,,cjdropshipping")
+    assert load_settings().SUPPLIER_PRIORITY_ORDER == [
+        "aliexpress",
+        "cjdropshipping",
+    ]
 
 
 def test_usd_to_aud_defaults_to_one_point_five_five(monkeypatch):

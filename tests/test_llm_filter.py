@@ -124,7 +124,7 @@ def test_system_prompt_prices_realistically_instead_of_by_multiplier():
 
 
 def test_system_prompt_distinguishes_an_unquoted_cost_from_a_verified_one():
-    # AliExpress and Etsy quote no freight, so their landed cost is a floor.
+    # AliExpress quotes no freight, so its landed cost is a floor.
     # Describing it as verified is how margin gets overstated, so the prompt
     # must tell the model which kind of number it is judging.
     system = build_messages(_raw_product())[0]["content"]
@@ -134,7 +134,7 @@ def test_system_prompt_distinguishes_an_unquoted_cost_from_a_verified_one():
 
 def test_payload_carries_the_shipping_quote_state():
     quoted = _raw_product()  # supplier-quoted shipping
-    unquoted = _raw_product(shipping_cost_aud=0.0)  # no quote, as Ali/Etsy
+    unquoted = _raw_product(shipping_cost_aud=0.0)  # no quote, as AliExpress
     assert '"shipping_quoted": true' in build_messages(quoted)[1]["content"]
     assert '"shipping_quoted": false' in build_messages(unquoted)[1]["content"]
 

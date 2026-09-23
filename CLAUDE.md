@@ -24,7 +24,7 @@ official **MCP server** (StreamableHTTP) — see §5.
 
 ```
 [Stage 1] Supplier extractors (chain, SUPPLIER_PRIORITY_ORDER)
-          CJdropshipping MCP → AliExpress Dropshipping Center → Etsy Open API v3
+          CJdropshipping MCP → AliExpress Dropshipping Center
           CJ hits must pass the MCP Payload Liveness Gate (§5)
           AliExpress hits must pass the Winning-Product Gate (§6)
                          │  List[RawSupplierProduct]  (verified ground truth)
@@ -60,7 +60,6 @@ official **MCP server** (StreamableHTTP) — see §5.
    | Supplier | Required URL shape |
    |---|---|
    | AliExpress | `/item/<id>.html` |
-   | Etsy | `/listing/<id>/` |
    | CJdropshipping | `/product/<pid>.html` or `/product/<slug>-p-<pid>.html`; `<pid>` is numeric **or** UUID-form (`B03F2DFF-276D-481C-AD18-28DF22E411CC`) |
 
 6. **Strict schema validation over prompt trust:** instructor/Pydantic
@@ -112,8 +111,7 @@ dropship-scout-agent/
 │   ├── extractors/
 │   │   ├── base.py          # BaseSupplierExtractor + shared exceptions
 │   │   ├── cj_mcp_extractor.py      # CJdropshipping MCP: commercial gate, liveness gate, freight quote
-│   │   ├── aliexpress_ds.py         # native DS Center ingestion + winner gate
-│   │   └── etsy_api.py              # Etsy Open API v3
+│   │   └── aliexpress_ds.py         # native DS Center ingestion + winner gate
 │   ├── evaluators/llm_filter.py     # instructor + ProvisionalProductEvaluation
 │   ├── pipeline/
 │   │   ├── cj_mcp_client.py # CJ MCP client + MCP Payload Liveness Gate
@@ -123,7 +121,7 @@ dropship-scout-agent/
 ├── scripts/
 │   ├── generate_ali_session.py  # optional saved DS Center login (§6)
 │   └── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
-└── tests/                   # 358 hermetic tests, zero network (9 modules + conftest)
+└── tests/                   # 359 hermetic tests, zero network (9 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -133,7 +131,12 @@ dropship-scout-agent/
 Apify-hosted AliExpress scraper (`extractors/aliexpress_apify.py`, with its
 pay-per-result actor, its US-market unauthenticated welcome-deal pricing and
 every `APIFY_*` key) and the per-candidate DS Center gate it carried
-(`ENABLE_DS_CENTER_GATE`) are deleted. AliExpress is
+(`ENABLE_DS_CENTER_GATE`), and the Etsy extractor (`extractors/etsy_api.py`,
+with every `ETSY_API_KEY` reference) are deleted. **Etsy is retired as a
+source outright: it does not support dropshipping, so it is not a supplier
+this pipeline will ever use again** — it is gone from the extractor chain,
+the `SUPPLIER_PRIORITY_ORDER` default, `KNOWN_SUPPLIERS`, the CLI's
+`--extractor` choices and the config surface. AliExpress is
 read natively from the Dropshipping Center (§6), CJ is MCP-only (§5), and
 `supplier_retail_url` is the sole retail link in the export contract (§8).
 Costing rationale for the replacement: §12. Deletion history:
@@ -237,11 +240,6 @@ usable price, ≥ 3 gallery URLs).
   `FAIL_SYS_ILLEGAL_ACCESS`) or a login-page redirect raises
   `DsCenterSessionExpiredError`, which the CLI renders as an intervention
   block with the recovery steps.
-
-- **`etsy_api.py`:** Open API v3 `listings/active` with `includes=Images`
-  (`x-api-key`); best-first gallery keys (`url_fullxfull` → …); 401/403/429
-  → Blocked; **USD-only listings** are converted (currency guard), others
-  skipped.
 
 ### 6.1 WINNING-PRODUCT GATE (AliExpress, MANDATORY)
 
@@ -396,7 +394,7 @@ the service name and transit window — never LLM-authored (§2.2). It states
 only what the quote supports and makes no claim about what the customer pays;
 an earlier LLM-authored version invented "Free standard shipping on this
 item" against a real AUD 14.52 freight cost. A product with **no quote at all**
-(AliExpress, Etsy) gets `Ships to Australia from the supplier.` and nothing
+(AliExpress) gets `Ships to Australia from the supplier.` and nothing
 more: naming a service or a transit window without a quote is the same class
 of unsupported claim.
 
@@ -404,7 +402,7 @@ of unsupported claim.
 
 ```bash
 python -m src.main --keyword "kitchen gadgets" --target-count 3 \
-                   [--country AU] [--extractor {auto,cjdropshipping,aliexpress,etsy}]
+                   [--country AU] [--extractor {auto,cjdropshipping,aliexpress}]
 ```
 
 - The LLM filter is constructed **before** extraction (fail-fast on a bad
@@ -474,10 +472,9 @@ requiring a login for the MTOP calls in §6.
 | `ALI_DS_MAX_PRODUCTS` | `20` | DS Center search page size / per-keyword expansion cap |
 | `MIN_DS_ORDER_COUNT` | `500` | aliExpress winning-product gate (historical orders) |
 | `MIN_DS_RATING` | `4.5` | winning-product gate (rating out of 5) |
-| `ETSY_API_KEY` | — | etsy_api |
 | `LLM_BASE_URL` / `LLM_API_KEY` | — | llm_filter |
 | `LLM_MODEL` | `deepseek-v4-flash:cloud` | llm_filter |
-| `SUPPLIER_PRIORITY_ORDER` | `cjdropshipping,aliexpress,etsy` | extractor chain |
+| `SUPPLIER_PRIORITY_ORDER` | `cjdropshipping,aliexpress` | extractor chain |
 | `USD_TO_AUD` | `1.55` | all USD→AUD price math |
 | `MIN_CJ_LISTED_COUNT` | `150` | CJ commercial gate (minimum `listedNum`; CJ reports no sales figure) |
 | `CJ_FREIGHT_METHOD` | *(blank = cheapest)* | CJ freight quote: pin a shipping service by CJ's own name |
@@ -497,7 +494,7 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 358
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 359
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes).
 - `tests/test_aliexpress_ds.py` covers the payload decoding (plain and

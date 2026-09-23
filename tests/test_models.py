@@ -17,7 +17,6 @@ from src.models import (
 )
 
 _ALI_URL = "https://www.aliexpress.com/item/1005006112233445.html"
-_ETSY_URL = "https://www.etsy.com/listing/123456789/wooden-desk-organiser"
 _CJ_URL = "https://developers.cjdropshipping.com/product/12345678.html"
 _IMG1 = "https://ae01.alicdn.com/kf/S123.jpg"
 _IMG2 = "https://ae01.alicdn.com/kf/S456.jpg"
@@ -77,14 +76,23 @@ def test_valid_raw_product_round_trips():
     assert raw.image_urls == [_IMG1, _IMG2, _IMG3]
 
 
-def test_all_three_suppliers_are_known():
-    assert KNOWN_SUPPLIERS == {"AliExpress", "Etsy", "CJdropshipping"}
+def test_every_registered_supplier_is_known():
+    assert KNOWN_SUPPLIERS == {"AliExpress", "CJdropshipping"}
     for supplier, url in [
         ("AliExpress", _ALI_URL),
-        ("Etsy", _ETSY_URL),
         ("CJdropshipping", _CJ_URL),
     ]:
         assert _raw_product(supplier_name=supplier, supplier_retail_url=url)
+
+
+def test_a_retired_supplier_is_no_longer_acceptable():
+    # Etsy was retired as a source (no dropshipping support), so naming it is
+    # now a schema violation rather than a valid supplier.
+    with pytest.raises(ValidationError, match="supplier_name"):
+        _raw_product(
+            supplier_name="Etsy",
+            supplier_retail_url="https://www.etsy.com/listing/123456789/x",
+        )
 
 
 def test_unknown_supplier_name_is_rejected():
@@ -98,9 +106,9 @@ def test_supplier_url_must_be_absolute():
 
 
 def test_supplier_url_must_match_the_supplier_pdp_shape():
-    # An AliExpress-named product whose URL is an Etsy listing shape.
+    # An AliExpress-named product whose URL is an eBay listing shape.
     with pytest.raises(ValidationError, match="product-page shape"):
-        _raw_product(supplier_retail_url=_ETSY_URL)
+        _raw_product(supplier_retail_url="https://www.ebay.com.au/itm/123456")
     # A CJ-named product pointing at an AliExpress item page.
     with pytest.raises(ValidationError, match="product-page shape"):
         _raw_product(
@@ -294,7 +302,7 @@ def test_shipping_notice_omits_the_window_when_the_quote_reports_none():
 
 
 def test_unquoted_shipping_notice_claims_no_service_or_transit():
-    # AliExpress and Etsy quote no freight, so there is nothing to assert
+    # AliExpress quotes no freight, so there is nothing to assert
     # about tracking or a delivery window — asserting one anyway is the same
     # class of unsupported claim as the "free shipping" line this field
     # replaced.

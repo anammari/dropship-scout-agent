@@ -37,7 +37,7 @@ fabricated — the same skip-don't-invent rule every extractor follows.
 Chain exception mapping (plan §4.2): `CjMcpNotConfiguredError` ->
 `ExtractorNotConfiguredError("CJ_MCP_TOKEN")`; `CjMcpConnectionError` /
 `CjMcpToolError` -> `ExtractorBlockedException`, so the orchestrator's
-chain falls through to AliExpress/Etsy rather than retrying a dead
+chain falls through to AliExpress rather than retrying a dead
 endpoint.
 
 Zero LLM involvement — every field is tool-returned data for the exact SKU

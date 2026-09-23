@@ -59,7 +59,6 @@ _CJ_PID_PATTERN = (
 # /product/{pid}.html detail URL.
 _SUPPLIER_PDP_PATTERNS = {
     "AliExpress": re.compile(r"/item/\d+\.html"),
-    "Etsy": re.compile(r"/listing/\d+/"),
     "CJdropshipping": re.compile(
         rf"/product/(?:[\w-]+-p-)?{_CJ_PID_PATTERN}\.html"
     ),
@@ -120,7 +119,7 @@ class RawSupplierProduct(BaseModel):
     """
 
     supplier_name: str = Field(
-        description="'AliExpress', 'Etsy', or 'CJdropshipping' (canonical name)"
+        description="'AliExpress' or 'CJdropshipping' (canonical name)"
     )
     supplier_retail_url: str = Field(
         description="100% live, direct product-detail page URL from the extractor."
@@ -162,11 +161,11 @@ class RawSupplierProduct(BaseModel):
         """Whether a freight quote backs `shipping_cost_aud` (plan §6).
 
         Only an extractor that obtained a real quote (CJ) can report a
-        positive shipping cost; the paths that cannot quote freight
-        (AliExpress, Etsy) leave it at 0.0 with no service or transit. The
-        distinction is load-bearing: an unquoted figure is a floor, not a
-        verified landed cost, so anything that describes or judges the cost
-        must ask this rather than read a zero as "free shipping".
+        positive shipping cost; AliExpress, which cannot quote freight,
+        leaves it at 0.0 with no service or transit. The distinction is
+        load-bearing: an unquoted figure is a floor, not a verified landed
+        cost, so anything that describes or judges the cost must ask this
+        rather than read a zero as "free shipping".
         """
         return self.shipping_cost_aud > 0
 
@@ -297,7 +296,7 @@ def _derive_shipping_notice(raw: RawSupplierProduct) -> str:
     freight cost was AUD 14.52.
 
     A quoted product states the service and window the quote reports. An
-    unquoted one (AliExpress, Etsy) states only that it ships to Australia,
+    unquoted one (AliExpress) states only that it ships to Australia,
     because a transit window asserted without a quote is the same class of
     unsupported claim. Neither version says anything about what the customer
     pays, which is a commercial decision this pipeline is not party to.
