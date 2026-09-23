@@ -224,6 +224,21 @@ def test_min_cj_listed_count_env_override_is_respected(monkeypatch):
     assert load_settings().MIN_CJ_LISTED_COUNT == 400
 
 
+def test_cj_freight_method_defaults_to_blank_meaning_cheapest(monkeypatch):
+    monkeypatch.delenv("CJ_FREIGHT_METHOD", raising=False)
+    assert load_settings().CJ_FREIGHT_METHOD == ""
+
+
+def test_cj_freight_method_blank_pin_normalises_to_cheapest(monkeypatch):
+    monkeypatch.setenv("CJ_FREIGHT_METHOD", "   ")
+    assert load_settings().CJ_FREIGHT_METHOD == ""
+
+
+def test_cj_freight_method_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("CJ_FREIGHT_METHOD", "CJPacket Eub")
+    assert load_settings().CJ_FREIGHT_METHOD == "CJPacket Eub"
+
+
 def test_min_markup_multiplier_defaults_to_the_relaxed_floor(monkeypatch):
     # Relaxed from the original 3.0x so realistic AU pricing against a real
     # DS Center cost is not auto-rejected downstream.

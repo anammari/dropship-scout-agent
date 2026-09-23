@@ -53,7 +53,6 @@ def _provisional(**overrides) -> ProvisionalProductEvaluation:
         marketing_ad_copy="Tame the cable snake.",
         saturation_risk="LOW",
         target_tags=["dropship"],
-        shipping_notice_au="7-12 business days",
         key_features=["Modular", "Steel base", "Under-desk"],
     )
     base.update(overrides)

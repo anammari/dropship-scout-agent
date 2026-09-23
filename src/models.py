@@ -25,9 +25,9 @@ Data-integrity rules carried over from earlier remediations:
 """
 
 import re
-from typing import List, Literal
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.config import settings
 
@@ -136,6 +136,22 @@ class RawSupplierProduct(BaseModel):
         ge=0,
         description="Supplier-quoted tracked shipping to AU in AUD (0 when unquoted).",
     )
+    shipping_method: Optional[str] = Field(
+        default=None,
+        description=(
+            "The shipping service the quote was taken from, in the "
+            "supplier's own naming (e.g. 'CJPacket Eub'). Supplier-quoted "
+            "fact, never LLM-authored; None when unquoted."
+        ),
+    )
+    shipping_transit_days: Optional[str] = Field(
+        default=None,
+        description=(
+            "The quoted transit window (e.g. '6-10' business days), copied "
+            "verbatim from the freight quote. Supplier-quoted fact, never "
+            "LLM-authored; None when unquoted."
+        ),
+    )
     image_urls: List[str] = Field(
         min_length=3,
         description="Direct CDN links from the supplier's own product gallery.",
@@ -190,11 +206,21 @@ class RawSupplierProduct(BaseModel):
 class ProvisionalProductEvaluation(BaseModel):
     """LLM-authored marketing/viability fields only (plan F.4).
 
-    Deliberately carries NO supplier, COGS, or image fields: the LLM's
-    entire job is the ACCEPT/REJECT verdict and the marketing payload.
+    Deliberately carries NO supplier, COGS, shipping, or image fields: the
+    LLM's entire job is the ACCEPT/REJECT verdict and the marketing payload.
+    `shipping_notice_au` is excluded on purpose — it is a customer-facing
+    logistics claim, so it is derived in code from the real freight quote
+    rather than written by a model that has never seen one (plan §7).
     `ProductCandidateEvaluation.from_raw` merges this with a
     `RawSupplierProduct` in code.
+
+    Unknown fields are REJECTED rather than ignored: a field this model does
+    not declare is one the LLM must not author, and silently dropping it
+    would let a forbidden field look accepted in development and vanish in
+    production.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     verdict: Literal["ACCEPT", "REJECT"]
     niche_category: str
@@ -209,7 +235,6 @@ class ProvisionalProductEvaluation(BaseModel):
     )
     saturation_risk: Literal["LOW", "MEDIUM", "HIGH"]
     target_tags: List[str] = Field(default_factory=lambda: ["dropship"])
-    shipping_notice_au: str
     key_features: List[str] = Field(
         default_factory=list,
         description=(
@@ -242,6 +267,39 @@ class ProvisionalProductEvaluation(BaseModel):
         return self
 
 
+# The transit window used only when a supplier quotes a freight price without
+# a transit estimate; matches the wording the export contract has always used.
+_DEFAULT_TRANSIT_NOTICE = "7-12 business days"
+
+
+def _derive_shipping_notice(raw: RawSupplierProduct) -> str:
+    """The customer-facing shipping line, built from the quote, not a model.
+
+    Derived rather than authored because it is a logistics claim, and the LLM
+    never sees the freight quote: when it was allowed to write this field it
+    invented "Free standard shipping on this item" on a listing whose real
+    freight cost was AUD 14.52. The line therefore states only what the
+    supplier's own quote supports — that the item ships tracked to Australia,
+    by which service and within which window — and makes no claim at all about
+    what the customer pays, which is a commercial decision this pipeline is
+    not party to.
+    """
+    if not raw.shipping_transit_days:
+        return (
+            "Standard tracked international shipping to Australia: "
+            f"{_DEFAULT_TRANSIT_NOTICE}."
+        )
+    transit = raw.shipping_transit_days.strip()
+    # A quote that already carries its own unit ("6-10 days") must not be
+    # given a second one.
+    unit = "" if any(char.isalpha() for char in transit) else " business days"
+    service = f" via {raw.shipping_method}" if raw.shipping_method else ""
+    return (
+        f"Standard tracked international shipping to Australia{service}: "
+        f"{transit}{unit}."
+    )
+
+
 class ProductCandidateEvaluation(BaseModel):
     """Final evaluation: LLM marketing fields + programmatic supplier/cost data.
 
@@ -262,10 +320,18 @@ class ProductCandidateEvaluation(BaseModel):
     marketing_ad_copy: str
     saturation_risk: Literal["LOW", "MEDIUM", "HIGH"]
     target_tags: List[str] = Field(default_factory=lambda: ["dropship"])
-    shipping_notice_au: str
     key_features: List[str] = Field(default_factory=list)
 
     # --- Mapped programmatically from RawSupplierProduct (never the LLM) ---
+    shipping_notice_au: str = Field(
+        description=(
+            "Customer-facing shipping line, DERIVED IN CODE from the "
+            "supplier's own freight quote (service + transit window). Never "
+            "LLM-authored: a model that has not seen the quote cannot make a "
+            "truthful shipping claim, and one previously invented "
+            "'free shipping' against a real freight cost."
+        )
+    )
     supplier_name: str = Field(
         description=(
             "The marketplace this live product came from, copied verbatim "
@@ -355,10 +421,14 @@ class ProductCandidateEvaluation(BaseModel):
         """
         cogs = round(raw.price_aud + raw.shipping_cost_aud, 2)
         if raw.shipping_cost_aud > 0:
+            service = (
+                f" via {raw.shipping_method}" if raw.shipping_method else ""
+            )
             basis = (
                 f"Supplier listed price AUD ${raw.price_aud:.2f} plus AUD "
-                f"${raw.shipping_cost_aud:.2f} tracked shipping to AU, taken "
-                f"directly from the live {raw.supplier_name} listing."
+                f"${raw.shipping_cost_aud:.2f} tracked shipping to AU"
+                f"{service}, taken directly from the live "
+                f"{raw.supplier_name} listing and its own freight quote."
             )
         else:
             basis = (
@@ -377,7 +447,7 @@ class ProductCandidateEvaluation(BaseModel):
             marketing_ad_copy=provisional.marketing_ad_copy,
             saturation_risk=provisional.saturation_risk,
             target_tags=provisional.target_tags,
-            shipping_notice_au=provisional.shipping_notice_au,
+            shipping_notice_au=_derive_shipping_notice(raw),
             key_features=list(provisional.key_features),
             supplier_name=raw.supplier_name,
             supplier_retail_url=raw.supplier_retail_url,

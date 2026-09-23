@@ -21,9 +21,14 @@ from src.pipeline.cj_mcp_client import (
     CjMcpToolError,
     build_tool_arguments,
     decode_json_loosely,
+    extract_cheapest_variant,
+    extract_freight_quotes,
     extract_gallery,
+    extract_listed_count,
+    extract_logistics_props,
     extract_payload,
     extract_price_usd,
+    extract_weight_grams,
     is_mcp_payload_live,
     iter_product_dicts,
     merge_product_payloads,
@@ -136,11 +141,44 @@ def _search_schema(**overrides):
     return {"type": "object", "properties": properties}
 
 
+def _freight_schema():
+    """CJ's live `calculate_freight` schema: per-variant quoting."""
+    return {
+        "type": "object",
+        "properties": {
+            "endCountryCode": {"type": "string"},
+            "startCountryCode": {"type": "string"},
+            "products": {"type": "array"},
+        },
+    }
+
+
+def _freight_tip_schema():
+    """CJ's live `calculate_freight_tip` schema: weight-based quoting."""
+    return {
+        "type": "object",
+        "properties": {
+            "srcAreaCode": {"type": "string"},
+            "destAreaCode": {"type": "string"},
+            "productProp": {"type": "array"},
+            "weight": {"type": "number"},
+        },
+    }
+
+
 _DEFAULT_TOOLS = [
     FakeTool("search_products", _search_schema()),
     FakeTool("query_sku_details", _schema("pid")),
     FakeTool("get_order_list", _schema("status")),
-    FakeTool("calculate_freight", _schema("pid")),
+    FakeTool("calculate_freight", _freight_schema()),
+    FakeTool("calculate_freight_tip", _freight_tip_schema()),
+]
+
+# The two tools every connected client must also bind, for the tests that
+# build their own catalog to exercise one resolution rule in isolation.
+_FREIGHT_TOOLS = [
+    FakeTool("calculate_freight", _freight_schema()),
+    FakeTool("calculate_freight_tip", _freight_tip_schema()),
 ]
 
 
@@ -261,6 +299,7 @@ async def test_tool_catalog_is_discovered_on_connect():
     async with client:
         assert client.tool_names == [
             "calculate_freight",
+            "calculate_freight_tip",
             "get_order_list",
             "query_sku_details",
             "search_products",
@@ -302,6 +341,7 @@ async def test_renamed_search_tool_is_bound_by_alias():
     tools = [
         FakeTool("search_products_v2", _search_schema()),
         FakeTool("query_sku_details", _schema("pid")),
+        *_FREIGHT_TOOLS,
     ]
     client, _ = _client(tools=tools)
     async with client:
@@ -424,6 +464,7 @@ async def test_search_without_a_mappable_schema_raises_tool_error():
     tools = [
         FakeTool("search_products", {"type": "object", "properties": {}}),
         FakeTool("query_sku_details", _schema("pid")),
+        *_FREIGHT_TOOLS,
     ]
     session = FakeSession(tools)
     client, _ = _client(session=session)
@@ -445,6 +486,7 @@ async def test_sku_detail_binds_an_alternative_id_parameter_name():
     tools = [
         FakeTool("search_products", _search_schema()),
         FakeTool("query_sku_details", _schema("productId")),
+        *_FREIGHT_TOOLS,
     ]
     session = FakeSession(tools)
     client, _ = _client(session=session)
@@ -706,6 +748,7 @@ async def test_get_product_detail_is_preferred_over_query_sku_details():
         FakeTool("search_products", _search_schema()),
         FakeTool("query_sku_details", _schema("productId")),
         FakeTool("get_product_detail", _schema("pid")),
+        *_FREIGHT_TOOLS,
     ]
     client, _ = _client(tools=tools)
     async with client:
@@ -1160,3 +1203,206 @@ def test_gate_accepts_top_level_stock_fields():
     alive, reason = is_mcp_payload_live(payload)
     assert alive is True
     assert "stock=25" in reason
+
+
+# ----------------------------------------------------------------------
+# The commercial gate's demand metric
+# ----------------------------------------------------------------------
+
+
+def test_listed_count_is_read_as_an_int():
+    assert extract_listed_count({"listedNum": 44}) == 44
+    assert extract_listed_count({"listedNum": "2607"}) == 2607
+
+
+def test_unreported_listed_count_is_none_not_zero():
+    # None ("we couldn't tell") is what the gate drops on; 0 would be a
+    # different, and wrong, claim.
+    assert extract_listed_count({"listedNum": None}) is None
+    assert extract_listed_count({"listedNum": ""}) is None
+    assert extract_listed_count({"nameEn": "no count here"}) is None
+
+
+# ----------------------------------------------------------------------
+# Freight quoting
+# ----------------------------------------------------------------------
+
+
+_FREIGHT_REPLY = [
+    {
+        "logisticName": "CJPacket Eub",
+        "logisticPrice": 9.37,
+        "logisticPriceCn": 57.99,
+        "logisticAging": "6-10",
+        "totalPostageFee": 9.37,
+    },
+    {
+        "logisticName": "DHL Official",
+        "logisticPrice": 33.54,
+        "logisticAging": "4-6",
+        "totalPostageFee": 33.54,
+    },
+]
+
+_FREIGHT_TIP_REPLY = [
+    {
+        "arrivalTime": "6-10",
+        "discountFee": 9.37,
+        "discountFeeCNY": 57.99,
+        # The pre-discount figure is lower and must never win.
+        "postage": 8.14,
+        "option": {"enName": "CJPacket Eub", "cnName": "CJ义乌EUB", "id": "239"},
+    },
+    {
+        "arrivalTime": "4-6",
+        "discountFee": 33.54,
+        "postage": 30.0,
+        "option": {"enName": "DHL Official", "id": "1"},
+    },
+]
+
+
+def test_freight_quotes_are_read_from_the_per_variant_shape():
+    quotes = extract_freight_quotes(_FREIGHT_REPLY)
+    assert quotes == [
+        {"method": "CJPacket Eub", "price_usd": 9.37, "transit_days": "6-10"},
+        {"method": "DHL Official", "price_usd": 33.54, "transit_days": "4-6"},
+    ]
+
+
+def test_freight_quotes_are_read_from_the_weight_trial_shape():
+    # Same facts, different names: the method nests under `option`, and the
+    # all-in price is `discountFee` rather than the lower pre-discount
+    # `postage`.
+    quotes = extract_freight_quotes(_FREIGHT_TIP_REPLY)
+    assert quotes == [
+        {"method": "CJPacket Eub", "price_usd": 9.37, "transit_days": "6-10"},
+        {"method": "DHL Official", "price_usd": 33.54, "transit_days": "4-6"},
+    ]
+
+
+def test_freight_entries_without_a_usable_price_are_skipped():
+    quotes = extract_freight_quotes(
+        [
+            {"logisticName": "Free Lunch", "logisticPrice": None},
+            {"logisticName": "Zero", "logisticPrice": 0},
+            {"logisticName": "Negative", "logisticPrice": -3},
+            {"logisticName": "Real", "logisticPrice": 11.86},
+        ]
+    )
+    assert [quote["method"] for quote in quotes] == ["Real"]
+
+
+def test_an_empty_freight_payload_yields_no_quotes():
+    assert extract_freight_quotes([]) == []
+    assert extract_freight_quotes(None) == []
+    assert extract_freight_quotes({"list": []}) == []
+
+
+def test_cheapest_variant_is_chosen_and_names_its_id():
+    variant = extract_cheapest_variant(
+        {
+            "variants": [
+                {"vid": "a", "variantSellPrice": 11.29},
+                {"vid": "b", "variantSellPrice": 4.89},
+                {"vid": "c", "variantSellPrice": 7.53},
+            ]
+        }
+    )
+    assert variant == {"vid": "b", "sku": "", "price_usd": 4.89}
+
+
+def test_a_variant_without_a_usable_price_is_not_chosen():
+    assert extract_cheapest_variant({"variants": [{"vid": "a"}]}) is None
+    assert extract_cheapest_variant({"variants": []}) is None
+    assert extract_cheapest_variant({"pid": "1"}) is None
+
+
+def test_weight_is_read_at_the_low_end_of_the_range():
+    assert extract_weight_grams({"productWeight": "402.00-1194.00"}) == 402.0
+    assert extract_weight_grams({"packingWeight": "410"}) == 410.0
+    assert extract_weight_grams({"productWeight": None}) is None
+
+
+def test_logistics_props_accept_a_list_or_a_json_string():
+    assert extract_logistics_props({"productProEnSet": ["COMMON", "THIN"]}) == [
+        "COMMON",
+        "THIN",
+    ]
+    assert extract_logistics_props({"productProEnSet": '["COMMON"]'}) == ["COMMON"]
+    assert extract_logistics_props({"pid": "1"}) == []
+
+
+async def test_per_variant_freight_call_sends_the_declared_arguments():
+    session = FakeSession(
+        _DEFAULT_TOOLS,
+        responses={"calculate_freight": [FakeCallToolResult(text=json.dumps(_FREIGHT_REPLY))]},
+    )
+    client, _ = _client(session=session)
+    async with client:
+        quotes = await client.calculate_freight("456", "AU")
+
+    name, arguments = session.calls[0]
+    assert name == "calculate_freight"
+    assert arguments["endCountryCode"] == "AU"
+    assert arguments["startCountryCode"] == "CN"
+    assert arguments["products"] == [{"vid": "456", "quantity": 1}]
+    assert quotes[0]["method"] == "CJPacket Eub"
+
+
+async def test_freight_call_refuses_a_schema_without_a_product_list():
+    tools = [
+        FakeTool("search_products", _search_schema()),
+        FakeTool("get_product_detail", _schema("pid")),
+        FakeTool("calculate_freight", _schema("pid")),
+        FakeTool("calculate_freight_tip", _freight_tip_schema()),
+    ]
+    client, _ = _client(tools=tools)
+    with pytest.raises(CjMcpToolError, match="refusing to call it blind"):
+        async with client:
+            await client.calculate_freight("456", "AU")
+
+
+async def test_weight_trial_call_sends_the_declared_arguments():
+    session = FakeSession(
+        _DEFAULT_TOOLS,
+        responses={
+            "calculate_freight_tip": [FakeCallToolResult(text=json.dumps(_FREIGHT_TIP_REPLY))]
+        },
+    )
+    client, _ = _client(session=session)
+    async with client:
+        quotes = await client.calculate_freight_tip(402.0, ["COMMON"], "AU")
+
+    name, arguments = session.calls[0]
+    assert name == "calculate_freight_tip"
+    assert arguments["srcAreaCode"] == "CN"
+    assert arguments["destAreaCode"] == "AU"
+    assert arguments["productProp"] == ["COMMON"]
+    assert arguments["weight"] == 402.0
+    assert quotes[0]["price_usd"] == 9.37
+
+
+async def test_weight_trial_defaults_the_logistics_attribute():
+    session = FakeSession(
+        _DEFAULT_TOOLS,
+        responses={
+            "calculate_freight_tip": [FakeCallToolResult(text=json.dumps(_FREIGHT_TIP_REPLY))]
+        },
+    )
+    client, _ = _client(session=session)
+    async with client:
+        await client.calculate_freight_tip(402.0, [], "AU")
+    assert session.calls[0][1]["productProp"] == ["COMMON"]
+
+
+async def test_a_missing_freight_tool_fails_the_connection():
+    # Freight is mandatory: an engine that cannot quote shipping would cost
+    # every candidate at zero, so the chain is meant to fall through instead.
+    tools = [
+        FakeTool("search_products", _search_schema()),
+        FakeTool("get_product_detail", _schema("pid")),
+    ]
+    client, _ = _client(tools=tools)
+    with pytest.raises(CjMcpToolError, match="calculate_freight"):
+        await client.connect()

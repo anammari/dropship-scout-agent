@@ -59,7 +59,6 @@ def _final(title="Ergonomic Desk Cable Organiser") -> ProductCandidateEvaluation
         marketing_ad_copy="Buy it.",
         saturation_risk="LOW",
         target_tags=["dropship"],
-        shipping_notice_au="7-12 business days",
         key_features=["A", "B", "C"],
     )
     raw = _raw_product(title)

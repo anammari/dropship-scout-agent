@@ -47,7 +47,6 @@ def _provisional(**overrides) -> ProvisionalProductEvaluation:
         marketing_ad_copy="Tame the cable snake under your desk.",
         saturation_risk="LOW",
         target_tags=["dropship", "workspace"],
-        shipping_notice_au="Standard tracked international shipping: 7-12 business days",
         key_features=["Modular segments", "Steel base", "Under-desk mount"],
     )
     base.update(overrides)
@@ -239,6 +238,75 @@ def test_from_raw_basis_notes_unquoted_shipping():
     final = _final(raw=_raw_product(shipping_cost_aud=0.0))
     assert final.estimated_cogs_aud == 12.50
     assert "does not quote shipping" in final.cogs_estimation_basis
+
+
+# ----------------------------------------------------------------------
+# The derived shipping notice (plan §7)
+# ----------------------------------------------------------------------
+
+
+def test_shipping_notice_is_derived_from_the_quote():
+    final = _final(
+        raw=_raw_product(
+            shipping_cost_aud=6.67,
+            shipping_method="CJPacket Eub",
+            shipping_transit_days="6-10",
+        )
+    )
+    assert final.shipping_notice_au == (
+        "Standard tracked international shipping to Australia via "
+        "CJPacket Eub: 6-10 business days."
+    )
+
+
+def test_shipping_notice_never_claims_free_shipping():
+    # The hole this closes: the LLM shipped "Free standard shipping on this
+    # item" against a real quoted freight cost.
+    final = _final(
+        raw=_raw_product(
+            shipping_cost_aud=14.52,
+            shipping_method="CJPacket Eub",
+            shipping_transit_days="6-10",
+        )
+    )
+    assert "free" not in final.shipping_notice_au.lower()
+
+
+def test_shipping_notice_tolerates_a_transit_that_carries_its_own_unit():
+    final = _final(
+        raw=_raw_product(shipping_transit_days="6-10 days", shipping_method="PostNL")
+    )
+    assert final.shipping_notice_au.endswith("6-10 days.")
+
+
+def test_shipping_notice_falls_back_when_the_quote_has_no_transit():
+    final = _final(raw=_raw_product(shipping_transit_days=None))
+    assert "7-12 business days" in final.shipping_notice_au
+
+
+def test_basis_credits_the_quoted_shipping_service():
+    final = _final(
+        raw=_raw_product(shipping_cost_aud=6.67, shipping_method="CJPacket Eub")
+    )
+    assert "AUD $6.67" in final.cogs_estimation_basis
+    assert "via CJPacket Eub" in final.cogs_estimation_basis
+
+
+def test_the_llm_may_not_author_the_shipping_notice():
+    # A forbidden field must fail loudly rather than be silently dropped —
+    # silently ignoring it is how an invented claim survives to production.
+    with pytest.raises(ValidationError):
+        ProvisionalProductEvaluation(
+            verdict="ACCEPT",
+            niche_category="Home Office",
+            problem_solved="Cable clutter",
+            suggested_retail_aud=49.99,
+            marketing_ad_copy="Tame the cable snake.",
+            saturation_risk="LOW",
+            target_tags=["dropship"],
+            key_features=["Modular", "Steel base", "Under-desk"],
+            shipping_notice_au="Free standard shipping on this item.",
+        )
 
 
 def test_from_raw_recomputes_margin_math_from_real_cogs():

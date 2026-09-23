@@ -131,6 +131,16 @@ class Settings:
             os.getenv("MIN_CJ_LISTED_COUNT"), default=150
         )
 
+        # Which CJ shipping method to cost against, by its own name (e.g.
+        # "CJPacket Eub"). Blank selects the cheapest method the freight quote
+        # offers, which is the usual intent; a pin is for when the operator
+        # wants the cost basis tied to a specific service. A pin the quote
+        # does not offer logs and falls back to the cheapest rather than
+        # dropping the product.
+        self.CJ_FREIGHT_METHOD: str = (
+            os.getenv("CJ_FREIGHT_METHOD") or ""
+        ).strip()
+
         # The CJ MCP extractor fetches full galleries per product via the
         # sku-detail tool; this caps how many products one keyword expands to.
         self.CJ_MAX_PRODUCTS_PER_KEYWORD: int = _parse_int(

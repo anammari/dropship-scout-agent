@@ -42,9 +42,11 @@ official **MCP server** (StreamableHTTP) — see §5.
    No image-URL field exists on any evaluation model. Imagery flows from
    `RawSupplierProduct.image_urls` through `image_sourcing.py` directly.
 2. **The LLM never authors** `supplier_name`, `supplier_retail_url`,
-   `estimated_cogs_aud`, or `cogs_estimation_basis` — those are mapped
-   programmatically from the verified raw product via
-   `ProductCandidateEvaluation.from_raw`.
+   `estimated_cogs_aud`, `cogs_estimation_basis`, or `shipping_notice_au` —
+   those are mapped or derived programmatically from the verified raw product
+   via `ProductCandidateEvaluation.from_raw`. `ProvisionalProductEvaluation`
+   forbids unknown fields outright, so a field the LLM must not author cannot
+   be silently dropped in development only to vanish in production.
 3. **`cogs_estimation_basis` is zero-URL** — any `http(s)://` substring is
    rejected by a Pydantic field validator; the field carries only numerical
    cost/materials/freight reasoning.
@@ -100,7 +102,7 @@ dropship-scout-agent/
 │   │                        #   ProductCandidateEvaluation (+ from_raw)
 │   ├── extractors/
 │   │   ├── base.py          # BaseSupplierExtractor + shared exceptions
-│   │   ├── cj_mcp_extractor.py      # CJdropshipping MCP + liveness gate
+│   │   ├── cj_mcp_extractor.py      # CJdropshipping MCP: commercial gate, liveness gate, freight quote
 │   │   ├── aliexpress_ds.py         # native DS Center ingestion + winner gate
 │   │   └── etsy_api.py              # Etsy Open API v3
 │   ├── evaluators/llm_filter.py     # instructor + ProvisionalProductEvaluation
@@ -110,8 +112,9 @@ dropship-scout-agent/
 │   ├── exporter.py          # workspace writer (metadata.json + images/)
 │   └── main.py              # CLI orchestrator, funnel counters, exit codes
 ├── scripts/
-│   └── generate_ali_session.py  # optional saved DS Center login (§6)
-└── tests/                   # 318 hermetic tests, zero network (9 modules + conftest)
+│   ├── generate_ali_session.py  # optional saved DS Center login (§6)
+│   └── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
+└── tests/                   # 351 hermetic tests, zero network (9 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -190,7 +193,8 @@ usable price, ≥ 3 gallery URLs).
   commercial gate** (§6.2) before anything else, so an unproven seller never
   costs a detail round-trip. Each surviving hit is expanded through the
   **product-detail** tool (`get_product_detail`), the liveness
-  gate runs, the gallery comes from `productImageSet`, the description is
+  gate runs, shipping is quoted for the real destination (§6.3), the gallery
+  comes from `productImageSet`, the description is
   HTML-stripped, and `price_aud = listed USD × USD_TO_AUD`. The PDP link
   prefers CJ's own `productUrl` (the only known-good form for UUID pids),
   falling back to the canonical `/product/{pid}.html`.
@@ -281,6 +285,50 @@ live REST payloads were indistinguishable on this and every other field. A
 hit that clears this gate must still pass the §5 liveness gate, which remains
 the sole arbiter of availability.
 
+### 6.3 CJ FREIGHT QUOTE (MANDATORY)
+
+Shipping is half a landed cost, and CJ used to be costed at **zero** because
+its listing tools quote no freight — which understated
+`estimated_cogs_aud`, overstated `projected_margin_aud`, and exported a
+product that fails the margin floor once freight is real (a live export was
+costed at AUD 5.19 when the quoted freight alone was AUD 19.42, making true
+markup 1.4x against a 2.5x floor). Every emitted CJ product therefore carries
+a quoted freight figure:
+
+* **Primary:** `calculate_freight` with the listing's **cheapest variant**
+  (`endCountryCode` = `TARGET_COUNTRY`, origin CN). CJ quotes per variant and
+  weight differs between them, so the quote must name a specific one. The
+  variant's price is used only to *choose* the cheapest — the cost basis
+  stays the listing's own quoted price.
+* **Fallback:** `calculate_freight_tip`, quoting by weight (`productWeight`
+  low end) plus the listing's logistics attributes (`productProEnSet`), for a
+  listing that exposes no usable variant id.
+* **Method:** `CJ_FREIGHT_METHOD` pins a service by CJ's own name; blank takes
+  the cheapest offered. An unoffered pin logs at WARNING and falls back to the
+  cheapest rather than dropping the listing.
+* **Fail-closed:** no usable quote from either path → the candidate is dropped
+  (`freight quote unavailable`). Costing freight at zero is the understatement
+  this gate exists to remove, so "we couldn't quote it" is a DROP, the same
+  inverted tolerance §5 and §6.2 apply. A freight *tool* failure is contained
+  to the one candidate (it never becomes `ExtractorBlockedException`, which
+  would hand the whole keyword to the next engine).
+* Both freight tools are resolved at connect time, and a client that cannot
+  bind them **fails the connection** rather than proceeding to cost freight at
+  zero, so the chain falls through to the next supplier instead.
+
+**Both freight tools are hard requirements, not optional enrichment.** The
+figures reach `shipping_cost_aud`, hence COGS, the basis note and both legs of
+the margin floor; and `shipping_method` / `shipping_transit_days` carry the
+quote onto `RawSupplierProduct` so the basis and the customer-facing
+`shipping_notice_au` stay auditable (§8).
+
+**Operator note — CJ's freight quotes are not stable between calls.** The same
+variant and destination have returned both USD 9.37 and USD 12.53 within an
+hour, presumably from CJ recomputing weight or zone. The pipeline takes the
+cheapest offered method on each run, so a COGS figure carries a little
+run-to-run variance. That is a property of the source, not of the pipeline;
+re-run or pin `CJ_FREIGHT_METHOD` if a cost basis needs to be reproduced.
+
 ## 7. IMAGE SOURCING (`src/pipeline/image_sourcing.py`)
 
 Single, exclusive source: `RawSupplierProduct.image_urls` (the
@@ -316,12 +364,12 @@ directory, candidate counted as `dropped_no_valid_images`.
   "category": "...",
   "suggested_price_aud": 49.99,
   "estimated_cogs_aud": 18.60,
-  "cogs_estimation_basis": "Supplier listed price AUD $18.60 taken directly from the live CJdropshipping listing; ...",
+  "cogs_estimation_basis": "Supplier listed price AUD $5.19 plus AUD $12.53 tracked shipping to AU via CJPacket Eub, taken directly from the live CJdropshipping listing and its own freight quote.",
   "projected_margin_aud": 31.39,
   "marketing_ad_copy": "...",
   "features": ["...", "...", "..."],
   "target_tags": ["dropship", "..."],
-  "shipping_notice_au": "Standard tracked international shipping: 7-12 business days",
+  "shipping_notice_au": "Standard tracked international shipping to Australia via CJPacket Eub: 6-10 business days.",
   "supplier_name": "CJdropshipping",
   "supplier_retail_url": "https://cjdropshipping.com/product/<pid>.html",
   "image_source": "supplier_gallery"
@@ -330,8 +378,15 @@ directory, candidate counted as `dropped_no_valid_images`.
 
 `supplier_retail_url` is the **sole fulfillment link** (verified, live,
 exact-match PDP — never a search gateway). `cogs_estimation_basis` is an
-internal accounting note (zero URLs). `image_source` is always
-`"supplier_gallery"`.
+internal accounting note (zero URLs) that cites the listed price *and* the
+quoted freight (§6.3), so a reviewer can see both halves of the landed cost.
+`image_source` is always `"supplier_gallery"`.
+
+`shipping_notice_au` is **derived in code** from the supplier's own quote —
+the service name and transit window — never LLM-authored (§2.2). It states
+only what the quote supports and makes no claim about what the customer pays;
+an earlier LLM-authored version invented "Free standard shipping on this
+item" against a real AUD 14.52 freight cost.
 
 ## 9. ORCHESTRATION (`src/main.py`)
 
@@ -413,6 +468,7 @@ requiring a login for the MTOP calls in §6.
 | `SUPPLIER_PRIORITY_ORDER` | `cjdropshipping,aliexpress,etsy` | extractor chain |
 | `USD_TO_AUD` | `1.55` | all USD→AUD price math |
 | `MIN_CJ_LISTED_COUNT` | `150` | CJ commercial gate (minimum `listedNum`; CJ reports no sales figure) |
+| `CJ_FREIGHT_METHOD` | *(blank = cheapest)* | CJ freight quote: pin a shipping service by CJ's own name |
 | `CJ_MAX_PRODUCTS` | `10` | products expanded per CJ keyword (MCP search cap) |
 | `MIN_MARKUP_MULTIPLIER` | `2.5` | margin floor (markup leg), llm_filter + models |
 | `MIN_MARGIN_AUD` | `20.0` | margin floor (gross-profit leg), llm_filter + models |
@@ -429,7 +485,7 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 318
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 351
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes).
 - `tests/test_aliexpress_ds.py` covers the payload decoding (plain and
@@ -453,6 +509,15 @@ only in `.env` / the real environment.
   `MIN_CJ_LISTED_COUNT=20` every hit on both keywords passed — the gate
   filtered nothing, which is why the default is 150 (§6.2); at 150 the
   weakest `garlic grater` hit (15) drops and the remaining nine survive.
+- **CJ freight evidence (2026-09-23, read-only):** the first live export
+  (`coffee accessories`, product-06) was costed with shipping at zero; its
+  quoted freight to AU is **AUD 19.42** via CJPacket Eub, making the true
+  landed cost AUD 24.61 against a AUD 34.95 retail — 1.42x markup, below both
+  margin floors, so the export was a false positive (§6.3). With quoting
+  wired in, that same listing is now costed correctly and the gate rejects it.
+  `calculate_freight` returned 15 AU methods for it (USD 9.37 to 33.54), and
+  the same variant quoted both 9.37 and 12.53 within an hour — hence the
+  variance note in §6.3.
 - Python 3.13 venv at `.venv/`; install with `pip install -e ".[dev]"`;
   Playwright Chromium: `python -m playwright install chromium` (used by the
   AliExpress DS Center calls and the PDP gallery harvest).

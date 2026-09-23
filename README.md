@@ -46,15 +46,18 @@ the Shopify store workspace.
 - **Candidates are real before the LLM sees them.** Every candidate is a
   `RawSupplierProduct`: a live supplier product-detail URL, a listed price
   converted to AUD, and ≥ 3 gallery URLs — or it never enters the pipeline.
-- **The LLM never touches images, supplier data, or costs.** No image-URL field
-  exists on any evaluation model; `supplier_name` / `supplier_retail_url` /
-  `estimated_cogs_aud` / `cogs_estimation_basis` are mapped programmatically
-  from the verified raw product.
+- **The LLM never touches images, supplier data, logistics, or costs.** No
+  image-URL field exists on any evaluation model; `supplier_name` /
+  `supplier_retail_url` / `estimated_cogs_aud` / `cogs_estimation_basis` are
+  mapped programmatically from the verified raw product, and
+  `shipping_notice_au` is derived from the supplier's own freight quote.
 - **Every supplier URL must be a direct product page** — search/category/
   gateway URLs are rejected at the schema level.
 - **LLM arithmetic is never trusted** — margins and markups are recomputed in
-  code, and an ACCEPT that misses the margin floor (markup ≥ 3.0 OR margin
-  > AUD 25) is downgraded to REJECT.
+  code, and an ACCEPT that misses the margin floor (markup ≥ 2.5 OR margin
+  > AUD 20) is downgraded to REJECT.
+- **Shipping is quoted, never assumed** — a CJ product carries its real freight
+  cost to the target country, or it is dropped.
 - **No incomplete packages** — a candidate with fewer than 3 validated images
   is dropped entirely; an `images/`-less directory is never written.
 
@@ -144,6 +147,7 @@ ETSY_API_KEY=""
 TARGET_COUNTRY=AU
 USD_TO_AUD=1.55
 MIN_CJ_LISTED_COUNT=150
+CJ_FREIGHT_METHOD=
 CJ_MAX_PRODUCTS=10
 EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates
 ```
@@ -163,6 +167,7 @@ EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates
 | `SUPPLIER_PRIORITY_ORDER` | — | Comma-separated chain order (default `cjdropshipping,aliexpress,etsy`) |
 | `USD_TO_AUD` | — | USD→AUD rate for all price math (default `1.55`) |
 | `MIN_CJ_LISTED_COUNT` | — | CJ commercial gate: minimum dropshipper listing count (`listedNum`). CJ publishes no historical-sales figure on any tool, so this is the gate's only metric (default `150`) |
+| `CJ_FREIGHT_METHOD` | — | Pin the shipping service the CJ landed cost is based on, by CJ's own name (e.g. `CJPacket Eub`). Blank takes the cheapest method the quote offers (default) |
 | `CJ_MAX_PRODUCTS` | — | CJ products expanded (detail + gallery) per keyword (default `10`) |
 | `MIN_MARKUP_MULTIPLIER` | — | Margin floor, markup leg: an ACCEPT must clear this **or** `MIN_MARGIN_AUD` against the real landed cost (default `2.5`) |
 | `MIN_MARGIN_AUD` | — | Margin floor, gross-profit leg, in AUD per unit (default `20.0`) |
@@ -259,7 +264,7 @@ Exactly these 13 keys, every run:
   "category": "Kitchen & Household",
   "suggested_price_aud": 49.95,
   "estimated_cogs_aud": 18.6,
-  "cogs_estimation_basis": "Supplier listed price AUD $18.60 taken directly from the live CJdropshipping listing; quoted shipping AUD $0.00 (unquoted by the supplier at scrape time).",
+  "cogs_estimation_basis": "Supplier listed price AUD $5.19 plus AUD $19.42 tracked shipping to AU via CJPacket Eub, taken directly from the live CJdropshipping listing and its own freight quote.",
   "projected_margin_aud": 31.35,
   "marketing_ad_copy": "...",
   "features": [
@@ -268,7 +273,7 @@ Exactly these 13 keys, every run:
     "Sponge + brush storage with drainage"
   ],
   "target_tags": ["dropship", "kitchen", "organisation"],
-  "shipping_notice_au": "Ships from overseas: 7-12 business days via tracked air freight to Australia.",
+  "shipping_notice_au": "Standard tracked international shipping to Australia via CJPacket Eub: 6-10 business days.",
   "supplier_name": "CJdropshipping",
   "supplier_retail_url": "https://cjdropshipping.com/product/2097985041113341954.html",
   "image_source": "supplier_gallery"
@@ -277,12 +282,22 @@ Exactly these 13 keys, every run:
 
 | Field | Provenance / guarantee |
 |---|---|
-| `product_title`, `category`, `marketing_ad_copy`, `features`, `target_tags`, `shipping_notice_au` | LLM-authored, grounded only in the real supplier listing (no invented specs) |
+| `product_title`, `category`, `marketing_ad_copy`, `features`, `target_tags` | LLM-authored, grounded only in the real supplier listing (no invented specs) |
 | `suggested_price_aud` | LLM verdict under the 5-point gate, reconciled against the real cost |
-| `estimated_cogs_aud` + `cogs_estimation_basis` | **Not LLM-authored** — copied from the supplier's real listed price (+ quoted shipping); the basis string is zero-URL (any URL substring fails schema validation) |
+| `estimated_cogs_aud` + `cogs_estimation_basis` | **Not LLM-authored** — the supplier's real listed price **plus its own quoted freight**; the basis string is zero-URL (any URL substring fails schema validation) and cites both halves of the landed cost |
 | `projected_margin_aud` | Recomputed deterministically in code (`retail − COGS`) — the LLM's arithmetic is never trusted |
+| `shipping_notice_au` | **Not LLM-authored** — derived in code from the freight quote's service name and transit window. It makes no claim about what the customer pays, because the pipeline does not know the store's shipping policy |
 | `supplier_name`, `supplier_retail_url` | **Not LLM-authored** — copied verbatim from the verified `RawSupplierProduct`; the URL must match the supplier's direct-product-page shape |
 | `image_source` | Always `"supplier_gallery"` — imagery provenance for the files in `images/` |
+
+The landed cost is only as honest as the freight quote behind it, so the CJ
+path quotes real shipping for the target country on every product, and drops
+a listing whose freight cannot be quoted rather than costing it at zero (see
+`CLAUDE.md` §6.3). Two earlier exports were costed with shipping at AUD
+0.00; one of them had a quoted freight cost of AUD 19.42, which made its true
+markup 1.4x against a 2.5x floor — a false positive that the quote now
+catches. Freight figures move between calls, so a re-run can shift a cost
+basis slightly; pin `CJ_FREIGHT_METHOD` when you need one reproduced.
 
 ### 3.3 Image validation gates (every image)
 
@@ -479,10 +494,11 @@ Playbook:
 python -m pytest tests/ -v
 ```
 
-- **318 hermetic tests** across 9 test modules (schema validators incl. the
+- **351 hermetic tests** across 9 test modules (schema validators incl. the
   zero-URL `cogs_estimation_basis` rule and PDP-shape rejection, the MCP
   Payload Liveness Gate and the CJ commercial gate with their wiring in the
-  CJ extractor, the DS Center payload decoding / order-rating gate / currency
+  CJ extractor (commercial gate, freight quoting, derived shipping notice),
+  the DS Center payload decoding / order-rating gate / currency
   guard and failure taxonomy against scripted MTOP fakes, LLM
   prompt/reconcile contract, image gates against real PIL-encoded fixtures
   with mocked httpx, exporter hard-fail rules, orchestrator counters and CLI
@@ -518,7 +534,7 @@ dropship-scout-agent/
 ├── scripts/
 │   ├── generate_ali_session.py  # Optional saved DS Center login
 │   └── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
-└── tests/                     # 318 hermetic tests, zero network
+└── tests/                     # 351 hermetic tests, zero network
 ```
 
 ---

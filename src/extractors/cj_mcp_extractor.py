@@ -23,10 +23,13 @@ Per keyword the extractor:
 4. puts the merged payload through the **MCP Payload Liveness Gate**
    (`is_mcp_payload_live`) — a delisted, out-of-stock, or
    ambiguous-liveness payload is dropped immediately and logged at INFO;
-5. maps the survivors to `RawSupplierProduct` with the canonical
+5. quotes real **shipping to the target country** through CJ's own freight
+   tools, so `shipping_cost_aud` is the supplier's figure rather than zero
+   (see `_quote_shipping`); a listing that cannot be quoted is dropped;
+6. maps the survivors to `RawSupplierProduct` with the canonical
    `https://cjdropshipping.com/product/{pid}.html` PDP URL, the listed USD
-   price converted by `settings.USD_TO_AUD`, an HTML-stripped description,
-   and >= 3 distinct CDN gallery URLs.
+   price converted by `settings.USD_TO_AUD`, the quoted freight, an
+   HTML-stripped description, and >= 3 distinct CDN gallery URLs.
 
 Hits that cannot yield a fully-formed product are skipped, never
 fabricated — the same skip-don't-invent rule every extractor follows.
@@ -59,13 +62,16 @@ from src.pipeline.cj_mcp_client import (
     CjMcpConnectionError,
     CjMcpNotConfiguredError,
     CjMcpToolError,
+    extract_cheapest_variant,
     extract_description,
     extract_gallery,
     extract_listed_count,
+    extract_logistics_props,
     extract_pid,
     extract_price_usd,
     extract_product_url,
     extract_title,
+    extract_weight_grams,
     is_mcp_payload_live,
     merge_product_payloads,
     product_page_url,
@@ -289,6 +295,12 @@ class CjMcpExtractor(BaseSupplierExtractor):
                 f"cj_mcp pid={pid} gallery has only {len(gallery)} image(s)"
             )
 
+        # Shipping is half the landed cost, so it is quoted rather than
+        # assumed: a listing whose freight cannot be quoted is dropped, since
+        # costing it at zero is precisely the understatement this step exists
+        # to remove (plan §6).
+        quote = await self._quote_shipping(merged, client, country, pid)
+
         return RawSupplierProduct(
             supplier_name=_SUPPLIER_NAME,
             # CJ's own PDP link when it publishes one (authoritative, and
@@ -298,6 +310,81 @@ class CjMcpExtractor(BaseSupplierExtractor):
             product_title=title,
             product_description=extract_description(merged) or title,
             price_aud=round(price_usd * settings.USD_TO_AUD, 2),
-            shipping_cost_aud=0.0,
+            shipping_cost_aud=round(quote["price_usd"] * settings.USD_TO_AUD, 2),
+            shipping_method=quote["method"],
+            shipping_transit_days=quote["transit_days"] or None,
             image_urls=gallery,
         )
+
+    async def _quote_shipping(
+        self, merged: dict, client: Any, country: str, pid: str
+    ) -> dict:
+        """The freight quote to cost this listing against (plan §6).
+
+        Prefers `calculate_freight`, which quotes per variant, naming the
+        listing's cheapest variant. Falls back to the weight-based
+        `calculate_freight_tip` for a listing that exposes no usable variant
+        id. A tool failure on either path is contained here — it means "this
+        path offered no quote", not "the CJ engine is down" — so a single
+        unquotable listing drops on its own instead of taking the run with it.
+
+        Raises when neither path yields a usable quote: the caller drops the
+        candidate, per the same inverted tolerance the liveness and commercial
+        gates apply.
+        """
+        quotes: List[dict] = []
+        variant = extract_cheapest_variant(merged)
+        if variant and variant.get("vid"):
+            try:
+                quotes = await client.calculate_freight(variant["vid"], country)
+            except CjMcpToolError as exc:
+                logger.info(
+                    "cj_mcp pid=%s per-variant freight quote failed (%s); "
+                    "trying the weight-based trial",
+                    pid,
+                    exc,
+                )
+                quotes = []
+
+        if not quotes:
+            weight = extract_weight_grams(merged)
+            if weight:
+                try:
+                    quotes = await client.calculate_freight_tip(
+                        weight, extract_logistics_props(merged), country
+                    )
+                except CjMcpToolError as exc:
+                    logger.info(
+                        "cj_mcp pid=%s weight-based freight quote failed (%s)",
+                        pid,
+                        exc,
+                    )
+                    quotes = []
+
+        if not quotes:
+            raise ValueError(f"freight quote unavailable for cj_mcp pid={pid}")
+
+        return self._select_quote(quotes, pid)
+
+    @staticmethod
+    def _select_quote(quotes: List[dict], pid: str) -> dict:
+        """The configured shipping method, or the cheapest one offered.
+
+        `CJ_FREIGHT_METHOD` pins a service by CJ's own name. A pin the quote
+        does not offer logs and falls back to the cheapest rather than
+        dropping the listing — the operator asked for a preference, not a
+        hard filter, and an unavailable service is not the product's fault.
+        """
+        pinned = settings.CJ_FREIGHT_METHOD
+        if pinned:
+            for quote in quotes:
+                if quote["method"].strip().lower() == pinned.lower():
+                    return quote
+            logger.warning(
+                "CJ freight method %r is not offered for pid=%s; using the "
+                "cheapest of %d quoted method(s)",
+                pinned,
+                pid,
+                len(quotes),
+            )
+        return min(quotes, key=lambda quote: quote["price_usd"])
