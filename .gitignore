@@ -18,6 +18,11 @@ ali_ds_state.json
 # is never tracked even if recreated locally.
 SESSION_CONTEXT.md
 
+# Agent plan prompts — working directives, not deliverables. They live on the
+# operator's machine only (and in the session they came from), so no plan
+# prompt is ever tracked, here or in any future checkout.
+plans/
+
 # Test / tooling caches
 .pytest_cache/
 .mypy_cache/
