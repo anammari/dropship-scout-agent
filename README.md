@@ -401,18 +401,21 @@ python -m src.main --keyword "coffee accessories" --target-count 2 --extractor c
 `*.log` is git-ignored, so `run.log` stays local.
 
 **The CJ commercial gate announces itself in that stream** (`CLAUDE.md` §6.2).
-Every gated-out hit logs from `src.extractors.cj_mcp_extractor` at WARNING:
+Every gated-out hit logs from `src.extractors.cj_mcp_extractor` at WARNING, and
+each keyword's survivors log once at INFO in the order they will be processed:
 
 ```
 WARNING src.extractors.cj_mcp_extractor: Skipping 2601230843431638300: Insufficient CJ list count (15)
 WARNING src.extractors.cj_mcp_extractor: Skipping <pid>: Insufficient CJ list count (unavailable)
+INFO src.extractors.cj_mcp_extractor: CJ commercial gate passed 3/10 hit(s) for 'garlic grater' (listed counts, strongest first: [1071, 480, 439])
 ```
 
-Hits that clear `MIN_CJ_LISTED_COUNT` are the only ones that cost a
-`get_product_detail` call, and they are ranked strongest-first — so the
-candidates reaching the LLM are the highest-`listedNum` slice of that keyword's
-page. To see a keyword's whole threshold distribution *without* spending an LLM
-call or writing a package, run `scripts/verify_cj_gate.py`.
+The counts in that INFO line are in descending order, so it is the direct
+evidence that the ranking ran: the hits listed there are the ones that cost a
+`get_product_detail` call, and the candidates reaching the LLM are the
+highest-`listedNum` slice of the keyword's page. To see a keyword's whole
+threshold distribution *without* spending an LLM call or writing a package, run
+`scripts/verify_cj_gate.py`.
 
 ### 4.3 CJ liveness: the manual verification step (important)
 
@@ -476,7 +479,7 @@ Playbook:
 python -m pytest tests/ -v
 ```
 
-- **317 hermetic tests** across 9 test modules (schema validators incl. the
+- **318 hermetic tests** across 9 test modules (schema validators incl. the
   zero-URL `cogs_estimation_basis` rule and PDP-shape rejection, the MCP
   Payload Liveness Gate and the CJ commercial gate with their wiring in the
   CJ extractor, the DS Center payload decoding / order-rating gate / currency
@@ -515,7 +518,7 @@ dropship-scout-agent/
 ├── scripts/
 │   ├── generate_ali_session.py  # Optional saved DS Center login
 │   └── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
-└── tests/                     # 317 hermetic tests, zero network
+└── tests/                     # 318 hermetic tests, zero network
 ```
 
 ---

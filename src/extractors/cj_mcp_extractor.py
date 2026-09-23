@@ -125,7 +125,7 @@ class CjMcpExtractor(BaseSupplierExtractor):
             async with client:
                 for keyword in keywords:
                     hits = await self._search(client, keyword, country)
-                    for hit in self._gate_hits(hits):
+                    for hit in self._gate_hits(hits, keyword):
                         try:
                             products.append(
                                 await self._build_product(hit, client, country)
@@ -170,7 +170,7 @@ class CjMcpExtractor(BaseSupplierExtractor):
             inventory_available=True,
         )
 
-    def _gate_hits(self, hits: List[dict]) -> List[dict]:
+    def _gate_hits(self, hits: List[dict], keyword: str) -> List[dict]:
         """Apply the commercial gate to a keyword's hits and rank survivors.
 
         Runs on the raw search hits, before any detail round-trip, so an
@@ -192,6 +192,18 @@ class CjMcpExtractor(BaseSupplierExtractor):
         # Every survivor carries a count (the gate rejects unreported ones),
         # so the sort key is total even though it is written defensively.
         survivors.sort(key=lambda hit: extract_listed_count(hit) or 0, reverse=True)
+        if survivors:
+            # The keep side of the gate, in the order the pipeline will
+            # process them — the drop lines alone cannot show that the
+            # strongest listings were ranked to the front.
+            logger.info(
+                "CJ commercial gate passed %d/%d hit(s) for %r "
+                "(listed counts, strongest first: %s)",
+                len(survivors),
+                len(hits),
+                keyword,
+                [extract_listed_count(hit) for hit in survivors],
+            )
         return survivors
 
     def _passes_winner_gate(self, item_id: str, hit: dict) -> bool:

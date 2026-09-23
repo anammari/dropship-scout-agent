@@ -441,6 +441,29 @@ async def test_commercial_gate_runs_before_the_detail_call():
     assert client.detail_calls == [good_pid]
 
 
+async def test_the_keep_side_of_the_gate_is_logged_in_ranked_order(caplog):
+    # The drop lines alone cannot show that the ranking happened, so the
+    # survivors' counts are logged strongest-first.
+    ranked = [("111", 200), ("222", 4175), ("333", 900)]
+    client = FakeMcpClient(
+        hits=[
+            _search_hit(pid=pid, title=f"T{pid}", listed=listed)
+            for pid, listed in ranked
+        ],
+        details={
+            pid: _detail_payload(pid=pid, productNameEn=f"T{pid}")
+            for pid, _ in ranked
+        },
+    )
+    with caplog.at_level("INFO"):
+        await _gate_extractor(client).fetch_products(["kitchen gadgets"])
+
+    assert (
+        "CJ commercial gate passed 3/3 hit(s) for 'kitchen gadgets' "
+        "(listed counts, strongest first: [4175, 900, 200])"
+    ) in caplog.text
+
+
 async def test_hits_are_ranked_by_list_count_descending():
     # Survivors are expanded strongest-first, so the LLM meets the most
     # widely listed products before the target count fills.

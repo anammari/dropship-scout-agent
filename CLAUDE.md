@@ -111,7 +111,7 @@ dropship-scout-agent/
 │   └── main.py              # CLI orchestrator, funnel counters, exit codes
 ├── scripts/
 │   └── generate_ali_session.py  # optional saved DS Center login (§6)
-└── tests/                   # 317 hermetic tests, zero network (9 modules + conftest)
+└── tests/                   # 318 hermetic tests, zero network (9 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -269,9 +269,11 @@ the raw hits **before** the `get_product_detail` expansion. A hit that does
 not report a count is unproven and dropped (logged `…(unavailable)`), per the
 same inverted tolerance §5 applies to stock. Survivors are sorted by listing
 count descending, so the detail expansion and the LLM meet the most widely
-listed products first. The pool is the search page CJ already returned
-(capped at `CJ_MAX_PRODUCTS`), so this re-ranks that page, not CJ's
-catalogue.
+listed products first — the run logs them once at INFO
+(`CJ commercial gate passed <kept>/<total> hit(s) … (listed counts, strongest
+first: […])`), which is the direct evidence the ranking ran. The pool is the
+search page CJ already returned (capped at `CJ_MAX_PRODUCTS`), so this
+re-ranks that page, not CJ's catalogue.
 
 **This is a commercial verdict, not a liveness one.** `listedNum` cannot
 settle whether a listing is still live — §5.0 records exactly that: dead and
@@ -427,7 +429,7 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 317
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 318
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes).
 - `tests/test_aliexpress_ds.py` covers the payload decoding (plain and
