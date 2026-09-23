@@ -57,7 +57,10 @@ the Shopify store workspace.
   code, and an ACCEPT that misses the margin floor (markup ≥ 2.5 OR margin
   > AUD 20) is downgraded to REJECT.
 - **Shipping is quoted, never assumed** — a CJ product carries its real freight
-  cost to the target country, or it is dropped.
+  cost to the target country, or it is dropped. Where a supplier cannot quote
+  freight, the evaluator is told the landed cost is a floor rather than a
+  verified figure, and the customer-facing shipping line asserts no service or
+  transit window.
 - **No incomplete packages** — a candidate with fewer than 3 validated images
   is dropped entirely; an `images/`-less directory is never written.
 
@@ -263,9 +266,9 @@ Exactly these 13 keys, every run:
   "product_title": "Kitchen Sink Caddy Organiser",
   "category": "Kitchen & Household",
   "suggested_price_aud": 49.95,
-  "estimated_cogs_aud": 18.6,
+  "estimated_cogs_aud": 24.61,
   "cogs_estimation_basis": "Supplier listed price AUD $5.19 plus AUD $19.42 tracked shipping to AU via CJPacket Eub, taken directly from the live CJdropshipping listing and its own freight quote.",
-  "projected_margin_aud": 31.35,
+  "projected_margin_aud": 25.34,
   "marketing_ad_copy": "...",
   "features": [
     "Rust-resistant stainless steel construction",
@@ -286,7 +289,7 @@ Exactly these 13 keys, every run:
 | `suggested_price_aud` | LLM verdict under the 5-point gate, reconciled against the real cost |
 | `estimated_cogs_aud` + `cogs_estimation_basis` | **Not LLM-authored** — the supplier's real listed price **plus its own quoted freight**; the basis string is zero-URL (any URL substring fails schema validation) and cites both halves of the landed cost |
 | `projected_margin_aud` | Recomputed deterministically in code (`retail − COGS`) — the LLM's arithmetic is never trusted |
-| `shipping_notice_au` | **Not LLM-authored** — derived in code from the freight quote's service name and transit window. It makes no claim about what the customer pays, because the pipeline does not know the store's shipping policy |
+| `shipping_notice_au` | **Not LLM-authored** — derived in code from the freight quote's service name and transit window. When the supplier quoted no shipping (AliExpress, Etsy) it asserts nothing about tracking or transit, because nothing verified them. It makes no claim about what the customer pays, because the pipeline does not know the store's shipping policy |
 | `supplier_name`, `supplier_retail_url` | **Not LLM-authored** — copied verbatim from the verified `RawSupplierProduct`; the URL must match the supplier's direct-product-page shape |
 | `image_source` | Always `"supplier_gallery"` — imagery provenance for the files in `images/` |
 
@@ -298,6 +301,14 @@ a listing whose freight cannot be quoted rather than costing it at zero (see
 markup 1.4x against a 2.5x floor — a false positive that the quote now
 catches. Freight figures move between calls, so a re-run can shift a cost
 basis slightly; pin `CJ_FREIGHT_METHOD` when you need one reproduced.
+
+AliExpress and Etsy do not quote freight at all, so their landed cost is a
+**floor, not a verified figure**. The evaluator is told which it is holding —
+the prompt payload carries a `shipping_quoted` flag — and is instructed to
+price conservatively and reject a product whose case rests on that best case.
+Their margin verdict is therefore honest but still optimistic in absolute
+terms: the margin floor itself is unchanged, and nothing here invents a
+freight figure for a supplier that will not give one.
 
 ### 3.3 Image validation gates (every image)
 
@@ -494,7 +505,7 @@ Playbook:
 python -m pytest tests/ -v
 ```
 
-- **351 hermetic tests** across 9 test modules (schema validators incl. the
+- **358 hermetic tests** across 9 test modules (schema validators incl. the
   zero-URL `cogs_estimation_basis` rule and PDP-shape rejection, the MCP
   Payload Liveness Gate and the CJ commercial gate with their wiring in the
   CJ extractor (commercial gate, freight quoting, derived shipping notice),
@@ -534,7 +545,7 @@ dropship-scout-agent/
 ├── scripts/
 │   ├── generate_ali_session.py  # Optional saved DS Center login
 │   └── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
-└── tests/                     # 351 hermetic tests, zero network
+└── tests/                     # 358 hermetic tests, zero network
 ```
 
 ---

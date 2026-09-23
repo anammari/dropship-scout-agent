@@ -1406,3 +1406,51 @@ async def test_a_missing_freight_tool_fails_the_connection():
     client, _ = _client(tools=tools)
     with pytest.raises(CjMcpToolError, match="calculate_freight"):
         await client.connect()
+
+
+def test_import_num_is_not_accepted_as_a_listing_count():
+    # This lookup is FAIL-OPEN: whatever it reads is admitted as proven
+    # demand. `importNum` was probed and found absent from CJ's payload, so
+    # aliasing it to the listed count would let an unverified metric satisfy
+    # the gate. Only spellings of the verified concept are accepted.
+    assert extract_listed_count({"importNum": 4200}) is None
+    assert extract_listed_count({"import_num": 4200}) is None
+    assert extract_listed_count({"listedNum": 4200}) == 4200
+
+
+async def test_freight_tools_are_bound_exactly_not_by_substring():
+    # `calculate_freight` is a substring of `calculate_freight_tip`, so the
+    # fuzzy resolver would bind either tool to the other's slot. Both are
+    # hard requirements, so an absent one must fail the connection and let
+    # the chain fall through rather than silently call the wrong tool.
+    only_tip = [
+        FakeTool("search_products", _search_schema()),
+        FakeTool("get_product_detail", _schema("pid")),
+        FakeTool("calculate_freight_tip", _freight_tip_schema()),
+    ]
+    client, _ = _client(tools=only_tip)
+    with pytest.raises(CjMcpToolError, match="calculate_freight"):
+        await client.connect()
+
+    only_primary = [
+        FakeTool("search_products", _search_schema()),
+        FakeTool("get_product_detail", _schema("pid")),
+        FakeTool("calculate_freight", _freight_schema()),
+    ]
+    client, _ = _client(tools=only_primary)
+    with pytest.raises(CjMcpToolError, match="calculate_freight_tip"):
+        await client.connect()
+
+
+async def test_the_fuzzy_resolver_still_serves_search_and_detail():
+    # The exact-only rule is for the two nesting freight tools; the search and
+    # detail bindings keep their documented alias fallbacks.
+    tools = [
+        FakeTool("search_products_v2", _search_schema()),
+        FakeTool("get_product_details", _schema("pid")),
+        *_FREIGHT_TOOLS,
+    ]
+    client, _ = _client(tools=tools)
+    async with client:
+        assert client._search_tool.name == "search_products_v2"
+        assert client._sku_detail_tool.name == "get_product_details"

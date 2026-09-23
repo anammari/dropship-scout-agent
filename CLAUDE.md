@@ -83,6 +83,15 @@ Any candidate failing two or more points is marked `REJECT`:
    priced up to fit (enforced twice: `_reconcile` downgrade in
    `llm_filter.py` and `_enforce_accept_gates` in `models.py`, both reading
    the same config keys).
+
+   The prompt tells the model **which kind of cost it is judging**, via the
+   payload's `shipping_quoted` flag (`RawSupplierProduct.shipping_quoted`):
+   a supplier-quoted figure is VERIFIED and final, whereas a supplier that
+   quotes no freight leaves a **floor** — the model is instructed to price
+   conservatively and to REJECT a product whose case rests on that best case.
+   Only the prompt changes on that path; the margin floor itself is unchanged,
+   and no freight figure is ever invented for a supplier that will not quote
+   one.
 3. **Australian Logistical Feasibility** — < 1.2 kg, durable, non-perishable,
    air-freight compliant (inferred from title/description only).
 4. **Local Saturation Resistance** — not an everyday Kmart/Target/Bunnings/
@@ -114,7 +123,7 @@ dropship-scout-agent/
 ├── scripts/
 │   ├── generate_ali_session.py  # optional saved DS Center login (§6)
 │   └── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
-└── tests/                   # 351 hermetic tests, zero network (9 modules + conftest)
+└── tests/                   # 358 hermetic tests, zero network (9 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -362,10 +371,10 @@ directory, candidate counted as `dropped_no_valid_images`.
 {
   "product_title": "...",
   "category": "...",
-  "suggested_price_aud": 49.99,
-  "estimated_cogs_aud": 18.60,
-  "cogs_estimation_basis": "Supplier listed price AUD $5.19 plus AUD $12.53 tracked shipping to AU via CJPacket Eub, taken directly from the live CJdropshipping listing and its own freight quote.",
-  "projected_margin_aud": 31.39,
+  "suggested_price_aud": 49.95,
+  "estimated_cogs_aud": 24.61,
+  "cogs_estimation_basis": "Supplier listed price AUD $5.19 plus AUD $19.42 tracked shipping to AU via CJPacket Eub, taken directly from the live CJdropshipping listing and its own freight quote.",
+  "projected_margin_aud": 25.34,
   "marketing_ad_copy": "...",
   "features": ["...", "...", "..."],
   "target_tags": ["dropship", "..."],
@@ -386,7 +395,10 @@ quoted freight (§6.3), so a reviewer can see both halves of the landed cost.
 the service name and transit window — never LLM-authored (§2.2). It states
 only what the quote supports and makes no claim about what the customer pays;
 an earlier LLM-authored version invented "Free standard shipping on this
-item" against a real AUD 14.52 freight cost.
+item" against a real AUD 14.52 freight cost. A product with **no quote at all**
+(AliExpress, Etsy) gets `Ships to Australia from the supplier.` and nothing
+more: naming a service or a transit window without a quote is the same class
+of unsupported claim.
 
 ## 9. ORCHESTRATION (`src/main.py`)
 
@@ -485,7 +497,7 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 351
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 358
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes).
 - `tests/test_aliexpress_ds.py` covers the payload decoding (plain and
@@ -493,8 +505,16 @@ only in `.env` / the real environment.
   §6.1 gate and each documented drop log, the MTOP priming-then-signed
   handshake, ordering by order volume, dedupe across keywords, the
   session-expiry and blocked-exchange paths, the optional state file, and the
-  PDP gallery/description harvest. `tests/test_config.py` covers every key in
-  §10.
+  PDP gallery/description harvest.
+- `tests/test_cj_mcp_client.py` covers tool discovery and the alias binding
+  (§5.1) including the exact-only rule for the nesting freight tools, the
+  liveness gate, the listing-count and freight-quote parsing, and both freight
+  call paths; `tests/test_cj_mcp_extractor.py` covers the §6.2 commercial gate
+  and its ranking, the §6.3 freight quote with its pin and fallback, the
+  liveness drops, and the chain exception mapping.
+- `tests/test_models.py` covers the schema validators, the zero-URL basis
+  rule, `from_raw` cost and margin math, and the §8 shipping-notice derivation
+  including the unquoted case; `tests/test_config.py` covers every key in §10.
 - **Live evidence (2026-09-21, read-only):** `garlic grater` → 20 search hits
   → 18 gated out → 2 kept, both harvested with 13 gallery URLs; a full
   pipeline run exported one package at a real DS cost of **AUD 3.86** and the

@@ -100,7 +100,10 @@ def report(keyword: str, hits: List[dict], floor: int) -> None:
         print(f"  {unproven} hit(s) reported no count — dropped as unproven")
 
     print("\n  survivors by candidate floor:")
-    for candidate in CANDIDATE_FLOORS:
+    # The configured floor is always reported, wherever it sits — otherwise a
+    # threshold outside the bracketing set (say 400) would be the one value
+    # the operator most wants to see and the one the table omits.
+    for candidate in sorted({*CANDIDATE_FLOORS, floor}):
         kept = sum(1 for count in known if count >= candidate)
         marker = "  <== configured" if candidate == floor else ""
         print(

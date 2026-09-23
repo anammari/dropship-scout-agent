@@ -279,9 +279,35 @@ def test_shipping_notice_tolerates_a_transit_that_carries_its_own_unit():
     assert final.shipping_notice_au.endswith("6-10 days.")
 
 
-def test_shipping_notice_falls_back_when_the_quote_has_no_transit():
-    final = _final(raw=_raw_product(shipping_transit_days=None))
-    assert "7-12 business days" in final.shipping_notice_au
+def test_shipping_notice_omits_the_window_when_the_quote_reports_none():
+    # A quote can carry a price without a transit estimate. The service is
+    # still quoted, so it is named — but no window is invented for it.
+    final = _final(
+        raw=_raw_product(
+            shipping_method="CJPacket Eub", shipping_transit_days=None
+        )
+    )
+    assert final.shipping_notice_au == (
+        "Standard tracked international shipping to Australia via "
+        "CJPacket Eub."
+    )
+
+
+def test_unquoted_shipping_notice_claims_no_service_or_transit():
+    # AliExpress and Etsy quote no freight, so there is nothing to assert
+    # about tracking or a delivery window — asserting one anyway is the same
+    # class of unsupported claim as the "free shipping" line this field
+    # replaced.
+    final = _final(raw=_low_cogs())
+    assert final.shipping_notice_au == "Ships to Australia from the supplier."
+    lowered = final.shipping_notice_au.lower()
+    for unsupported in ("business days", "tracked", "free", "7-12"):
+        assert unsupported not in lowered
+
+
+def test_shipping_quoted_reflects_whether_a_quote_backs_the_figure():
+    assert _raw_product().shipping_quoted is True
+    assert _low_cogs().shipping_quoted is False
 
 
 def test_basis_credits_the_quoted_shipping_service():

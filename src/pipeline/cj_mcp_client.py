@@ -234,13 +234,19 @@ _PRICE_KEYS: Tuple[str, ...] = (
 # dropshippers have imported the listing, and it is the *only* demand metric
 # CJ's MCP surface reports: probed live across `search_products` and
 # `get_product_detail`, no historical-sales field exists under any name
-# (`sellNum`, `sales`, `soldNum`, `orderNum`, …), and none of the 62
-# advertised tools carries one. Both records do carry `listedNum`. Note
+# (`sellNum`, `sales`, `soldNum`, `orderNum`, `importNum`, …), and none of the
+# 62 advertised tools carries one. Both records do carry `listedNum`. Note
 # `variantVolume` is NOT sales — it is the variant's volumetric freight
 # dimension in mm³.
+#
+# Only spellings of the SAME verified concept are acceptable here. This lookup
+# is fail-OPEN — a hit it reads is admitted as proven demand — so an alias for
+# a *different* field would let an unverified metric satisfy the gate. That is
+# why `importNum`, which the spike probed and found absent, is deliberately not
+# listed even though its name reads like a listing count.
 _LISTED_COUNT_KEYS: Tuple[str, ...] = (
     "listedNum", "listed_num", "listNum", "list_num", "listedCount",
-    "listed_count", "importNum", "import_num",
+    "listed_count",
 )
 # Freight-quote vocabulary. The two freight tools report the same facts under
 # different names, and `calculate_freight_tip` nests the method inside an
@@ -1108,6 +1114,8 @@ class CjMcpClient:
         self._tools = {}
         self._search_tool = None
         self._sku_detail_tool = None
+        self._freight_tool = None
+        self._freight_tip_tool = None
         if stack is not None:
             try:
                 await stack.aclose()
@@ -1146,21 +1154,34 @@ class CjMcpClient:
         # `ExtractorBlockedException`, so the chain falls through) rather than
         # quietly costing freight at zero.
         self._freight_tool = self._resolve_tool(
-            catalog, (FREIGHT_TOOL_NAME,), FREIGHT_TOOL_NAME
+            catalog, (FREIGHT_TOOL_NAME,), FREIGHT_TOOL_NAME, exact_only=True
         )
         self._freight_tip_tool = self._resolve_tool(
-            catalog, (FREIGHT_TIP_TOOL_NAME,), FREIGHT_TIP_TOOL_NAME
+            catalog,
+            (FREIGHT_TIP_TOOL_NAME,),
+            FREIGHT_TIP_TOOL_NAME,
+            exact_only=True,
         )
 
     @staticmethod
     def _resolve_tool(
-        catalog: Dict[str, Any], aliases: Tuple[str, ...], canonical: str
+        catalog: Dict[str, Any],
+        aliases: Tuple[str, ...],
+        canonical: str,
+        exact_only: bool = False,
     ) -> Any:
         """Bind a catalog entry to a canonical tool name, deterministically.
 
         Exact name, then case-insensitive name, then normalised name, then
         normalised substring — shortest match wins so the choice never
         depends on catalog ordering. Nothing found is an error, not a guess.
+
+        `exact_only` stops before the normalised and substring passes, for the
+        tools whose names nest inside each other: `calculate_freight` is a
+        substring of `calculate_freight_tip`, so the fuzzy passes would happily
+        bind either one to the other's slot. Those tools are hard requirements
+        (plan §6), so an absent one must fail the connection and let the chain
+        fall through, not silently bind the wrong tool.
         """
         if not catalog:
             raise CjMcpToolError(
@@ -1174,6 +1195,13 @@ class CjMcpClient:
             match = lowered.get(alias.lower())
             if match is not None:
                 return catalog[match]
+
+        if exact_only:
+            raise CjMcpToolError(
+                f"CJ MCP tool {canonical!r} is not in the discovered catalog "
+                f"({sorted(catalog)}); it is required and is bound by exact "
+                "name only, so no substitute is accepted"
+            )
 
         normalised = {_normalise_tool_name(name): name for name in catalog}
         for alias in aliases:

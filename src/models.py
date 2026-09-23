@@ -157,6 +157,19 @@ class RawSupplierProduct(BaseModel):
         description="Direct CDN links from the supplier's own product gallery.",
     )
 
+    @property
+    def shipping_quoted(self) -> bool:
+        """Whether a freight quote backs `shipping_cost_aud` (plan §6).
+
+        Only an extractor that obtained a real quote (CJ) can report a
+        positive shipping cost; the paths that cannot quote freight
+        (AliExpress, Etsy) leave it at 0.0 with no service or transit. The
+        distinction is load-bearing: an unquoted figure is a floor, not a
+        verified landed cost, so anything that describes or judges the cost
+        must ask this rather than read a zero as "free shipping".
+        """
+        return self.shipping_cost_aud > 0
+
     @field_validator("supplier_name")
     @classmethod
     def must_be_known_supplier(cls, v: str) -> str:
@@ -267,9 +280,12 @@ class ProvisionalProductEvaluation(BaseModel):
         return self
 
 
-# The transit window used only when a supplier quotes a freight price without
-# a transit estimate; matches the wording the export contract has always used.
-_DEFAULT_TRANSIT_NOTICE = "7-12 business days"
+# The customer-facing line for a product with NO freight quote behind it.
+# Deliberately claims nothing about tracking, service or transit — nothing
+# verified any of them, and inventing them is the defect this field exists to
+# close. An operator who wants their own storefront policy wording can edit
+# the copy after export.
+_UNQUOTED_SHIPPING_NOTICE = "Ships to Australia from the supplier."
 
 
 def _derive_shipping_notice(raw: RawSupplierProduct) -> str:
@@ -278,22 +294,25 @@ def _derive_shipping_notice(raw: RawSupplierProduct) -> str:
     Derived rather than authored because it is a logistics claim, and the LLM
     never sees the freight quote: when it was allowed to write this field it
     invented "Free standard shipping on this item" on a listing whose real
-    freight cost was AUD 14.52. The line therefore states only what the
-    supplier's own quote supports — that the item ships tracked to Australia,
-    by which service and within which window — and makes no claim at all about
-    what the customer pays, which is a commercial decision this pipeline is
-    not party to.
+    freight cost was AUD 14.52.
+
+    A quoted product states the service and window the quote reports. An
+    unquoted one (AliExpress, Etsy) states only that it ships to Australia,
+    because a transit window asserted without a quote is the same class of
+    unsupported claim. Neither version says anything about what the customer
+    pays, which is a commercial decision this pipeline is not party to.
     """
+    if not raw.shipping_quoted:
+        return _UNQUOTED_SHIPPING_NOTICE
+    service = f" via {raw.shipping_method}" if raw.shipping_method else ""
     if not raw.shipping_transit_days:
         return (
-            "Standard tracked international shipping to Australia: "
-            f"{_DEFAULT_TRANSIT_NOTICE}."
+            f"Standard tracked international shipping to Australia{service}."
         )
     transit = raw.shipping_transit_days.strip()
     # A quote that already carries its own unit ("6-10 days") must not be
     # given a second one.
     unit = "" if any(char.isalpha() for char in transit) else " business days"
-    service = f" via {raw.shipping_method}" if raw.shipping_method else ""
     return (
         f"Standard tracked international shipping to Australia{service}: "
         f"{transit}{unit}."
