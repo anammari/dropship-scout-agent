@@ -10,6 +10,7 @@ extractor taxonomy. Zero network.
 
 import pytest
 
+from src.config import settings
 from src.extractors.base import (
     ExtractorBlockedException,
     ExtractorNotConfiguredError,
@@ -32,9 +33,14 @@ _GALLERY = [
 ]
 
 
-def _search_hit(pid=_PID, title="Kitchen Sink Caddy Organiser"):
-    """A search hit shaped like CJ's real search_products record."""
-    return {
+def _search_hit(pid=_PID, title="Kitchen Sink Caddy Organiser", listed=500):
+    """A search hit shaped like CJ's real search_products record.
+
+    `listedNum` is carried because it is the CJ commercial gate's only
+    metric — the same record the live catalogue returns. `listed=None`
+    models a payload that reports no listing count at all.
+    """
+    hit = {
         "id": pid,
         "nameEn": title,
         "sku": "CJCF292182201AZ",
@@ -43,6 +49,9 @@ def _search_hit(pid=_PID, title="Kitchen Sink Caddy Organiser"):
         "warehouseInventoryNum": 14092,
         "bigImage": _GALLERY[0],
     }
+    if listed is not None:
+        hit["listedNum"] = listed
+    return hit
 
 
 def _detail_payload(pid=_PID, **overrides):
@@ -68,6 +77,17 @@ def _detail_payload(pid=_PID, **overrides):
     return payload
 
 
+_FREIGHT_QUOTES = [
+    {"method": "CJPacket Eub", "price_usd": 9.37, "transit_days": "6-10"},
+    {"method": "CJPacket Ordinary", "price_usd": 12.23, "transit_days": "4-8"},
+    {"method": "DHL Official", "price_usd": 33.54, "transit_days": "4-6"},
+]
+
+_FREIGHT_TIP_QUOTES = [
+    {"method": "CJPacket Eub", "price_usd": 9.37, "transit_days": "6-10"},
+]
+
+
 class FakeMcpClient:
     """Scriptable stand-in for `CjMcpClient` (an async context manager)."""
 
@@ -78,14 +98,29 @@ class FakeMcpClient:
         search_error=None,
         connect_error=None,
         configured=True,
+        freight=None,
+        freight_error=None,
+        freight_tip=None,
+        freight_tip_error=None,
     ):
         self.configured = configured
         self._hits = list(hits or [])
         self._details = dict(details or {})
         self._search_error = search_error
         self._connect_error = connect_error
+        # A freight quote is mandatory for every emitted product, so the
+        # default is a real quote; `freight=None` is how a test asks for the
+        # "CJ quoted nothing" case.
+        self._freight = _FREIGHT_QUOTES if freight is None else freight
+        self._freight_error = freight_error
+        self._freight_tip = (
+            _FREIGHT_TIP_QUOTES if freight_tip is None else freight_tip
+        )
+        self._freight_tip_error = freight_tip_error
         self.search_calls = []
         self.detail_calls = []
+        self.freight_calls = []
+        self.freight_tip_calls = []
         self.entered = 0
         self.exited = 0
 
@@ -112,6 +147,18 @@ class FakeMcpClient:
             raise entry
         return dict(entry) if entry is not None else {}
 
+    async def calculate_freight(self, vid, country, **kwargs):
+        self.freight_calls.append((vid, country))
+        if self._freight_error is not None:
+            raise self._freight_error
+        return [dict(quote) for quote in self._freight]
+
+    async def calculate_freight_tip(self, weight_grams, product_props, country, **kwargs):
+        self.freight_tip_calls.append((weight_grams, list(product_props), country))
+        if self._freight_tip_error is not None:
+            raise self._freight_tip_error
+        return [dict(quote) for quote in self._freight_tip]
+
 
 # ----------------------------------------------------------------------
 # Happy path: mapping into RawSupplierProduct
@@ -130,7 +177,11 @@ async def test_clean_hit_becomes_a_raw_supplier_product():
     assert product.supplier_retail_url == _PDP
     assert product.product_title == "Kitchen Sink Caddy Organiser"
     assert len(product.image_urls) == 3
-    assert product.shipping_cost_aud == 0.0
+    # Freight is quoted, never assumed: the cheapest offered method (USD
+    # 9.37) converted by the same static rate as the listed price.
+    assert product.shipping_cost_aud == round(9.37 * 1.55, 2)
+    assert product.shipping_method == "CJPacket Eub"
+    assert product.shipping_transit_days == "6-10"
 
 
 async def test_listed_usd_price_is_converted_to_aud():
@@ -372,6 +423,122 @@ async def test_mixed_hits_keep_only_the_alive_ones():
 
 
 # ----------------------------------------------------------------------
+# CJ commercial "winning product" gate (plan §6.2)
+# ----------------------------------------------------------------------
+
+
+def _gate_extractor(client):
+    return CjMcpExtractor(client=client)
+
+
+def test_a_proven_listing_passes_the_commercial_gate():
+    extractor = _gate_extractor(FakeMcpClient())
+    assert extractor._passes_winner_gate(_PID, _search_hit(listed=150)) is True
+    assert extractor._passes_winner_gate(_PID, _search_hit(listed=4175)) is True
+
+
+def test_low_list_count_is_dropped_with_the_documented_log(caplog):
+    extractor = _gate_extractor(FakeMcpClient())
+    with caplog.at_level("WARNING"):
+        passed = extractor._passes_winner_gate(_PID, _search_hit(listed=120))
+    assert passed is False
+    assert f"Skipping {_PID}: Insufficient CJ list count (120)" in caplog.text
+
+
+def test_unreported_list_count_is_dropped_as_unproven(caplog):
+    # Inverted tolerance: a hit that reports no listing count is unproven,
+    # not "unverifiable but probably fine".
+    extractor = _gate_extractor(FakeMcpClient())
+    with caplog.at_level("WARNING"):
+        passed = extractor._passes_winner_gate(_PID, _search_hit(listed=None))
+    assert passed is False
+    assert (
+        f"Skipping {_PID}: Insufficient CJ list count (unavailable)"
+        in caplog.text
+    )
+
+
+def test_the_gate_reads_the_configured_floor(monkeypatch):
+    extractor = _gate_extractor(FakeMcpClient())
+    monkeypatch.setattr(settings, "MIN_CJ_LISTED_COUNT", 2000)
+    assert extractor._passes_winner_gate(_PID, _search_hit(listed=1500)) is False
+    monkeypatch.setattr(settings, "MIN_CJ_LISTED_COUNT", 10)
+    assert extractor._passes_winner_gate(_PID, _search_hit(listed=15)) is True
+
+
+async def test_commercial_gate_runs_before_the_detail_call():
+    # A commercially unproven hit must cost nothing — no detail round-trip
+    # is spent on a listing the gate already rejected.
+    weak_pid, good_pid = "333", "444"
+    client = FakeMcpClient(
+        hits=[
+            _search_hit(pid=weak_pid, title="Weak", listed=20),
+            _search_hit(pid=good_pid, title="Strong", listed=900),
+        ],
+        details={good_pid: _detail_payload(pid=good_pid, productNameEn="Strong")},
+    )
+    products = await _gate_extractor(client).fetch_products(["k"])
+
+    assert [p.product_title for p in products] == ["Strong"]
+    assert client.detail_calls == [good_pid]
+
+
+async def test_the_keep_side_of_the_gate_is_logged_in_ranked_order(caplog):
+    # The drop lines alone cannot show that the ranking happened, so the
+    # survivors' counts are logged strongest-first.
+    ranked = [("111", 200), ("222", 4175), ("333", 900)]
+    client = FakeMcpClient(
+        hits=[
+            _search_hit(pid=pid, title=f"T{pid}", listed=listed)
+            for pid, listed in ranked
+        ],
+        details={
+            pid: _detail_payload(pid=pid, productNameEn=f"T{pid}")
+            for pid, _ in ranked
+        },
+    )
+    with caplog.at_level("INFO"):
+        await _gate_extractor(client).fetch_products(["kitchen gadgets"])
+
+    assert (
+        "CJ commercial gate passed 3/3 hit(s) for 'kitchen gadgets' "
+        "(listed counts, strongest first: [4175, 900, 200])"
+    ) in caplog.text
+
+
+async def test_hits_are_ranked_by_list_count_descending():
+    # Survivors are expanded strongest-first, so the LLM meets the most
+    # widely listed products before the target count fills.
+    ranked = [("111", 200), ("222", 4175), ("333", 900)]
+    client = FakeMcpClient(
+        hits=[
+            _search_hit(pid=pid, title=f"T{pid}", listed=listed)
+            for pid, listed in ranked
+        ],
+        details={
+            pid: _detail_payload(pid=pid, productNameEn=f"T{pid}")
+            for pid, _ in ranked
+        },
+    )
+    products = await _gate_extractor(client).fetch_products(["k"])
+
+    assert [p.product_title for p in products] == ["T222", "T333", "T111"]
+    assert client.detail_calls == ["222", "333", "111"]
+
+
+async def test_the_gate_applies_to_every_keyword():
+    # Each keyword's page is gated and ranked independently, so a run over
+    # two keywords still yields a candidate per keyword.
+    client = FakeMcpClient(
+        hits=[_search_hit()], details={_PID: _detail_payload()}
+    )
+    products = await _gate_extractor(client).fetch_products(["alpha", "beta"])
+
+    assert [call[0] for call in client.search_calls] == ["alpha", "beta"]
+    assert len(products) == 2
+
+
+# ----------------------------------------------------------------------
 # Skip-don't-fabricate rules
 # ----------------------------------------------------------------------
 
@@ -518,6 +685,29 @@ async def test_end_to_end_through_the_real_mcp_client():
                 "get_product_detail",
                 {"type": "object", "properties": {"pid": {"type": "string"}}},
             ),
+            _FakeTool(
+                "calculate_freight",
+                {
+                    "type": "object",
+                    "properties": {
+                        "endCountryCode": {"type": "string"},
+                        "startCountryCode": {"type": "string"},
+                        "products": {"type": "array"},
+                    },
+                },
+            ),
+            _FakeTool(
+                "calculate_freight_tip",
+                {
+                    "type": "object",
+                    "properties": {
+                        "srcAreaCode": {"type": "string"},
+                        "destAreaCode": {"type": "string"},
+                        "productProp": {"type": "array"},
+                        "weight": {"type": "number"},
+                    },
+                },
+            ),
         ],
         responses={
             "search_products": {
@@ -525,6 +715,23 @@ async def test_end_to_end_through_the_real_mcp_client():
                 "content": [{"productList": [_search_hit()]}],
             },
             "get_product_detail": _detail_payload(),
+            # CJ's real freight shape: a flat list of methods with the name,
+            # the USD price and the transit window.
+            "calculate_freight": [
+                {
+                    "logisticName": "CJPacket Eub",
+                    "logisticPrice": 9.37,
+                    "logisticPriceCn": 57.99,
+                    "logisticAging": "6-10",
+                    "totalPostageFee": 9.37,
+                },
+                {
+                    "logisticName": "DHL Official",
+                    "logisticPrice": 33.54,
+                    "logisticAging": "4-6",
+                    "totalPostageFee": 33.54,
+                },
+            ],
         },
     )
     factory = _FakeFactory(session)
@@ -541,6 +748,8 @@ async def test_end_to_end_through_the_real_mcp_client():
     assert product.supplier_retail_url == _PDP
     assert product.price_aud == round(13.00 * 1.55, 2)
     assert len(product.image_urls) == 3
+    assert product.shipping_cost_aud == round(9.37 * 1.55, 2)
+    assert product.shipping_method == "CJPacket Eub"
     assert factory.endpoints == ["https://mcp.example/mcp/tok"]
 
     # The wire arguments are exactly what the discovered schema declares.
@@ -551,6 +760,11 @@ async def test_end_to_end_through_the_real_mcp_client():
     assert search_arguments["countryCode"] == "CN"
     assert search_arguments["startWarehouseInventory"] == 1
     assert session.calls[1] == ("get_product_detail", {"pid": _PID})
+    # Freight is quoted for the listing's variant, to the target country.
+    freight_name, freight_arguments = session.calls[2]
+    assert freight_name == "calculate_freight"
+    assert freight_arguments["endCountryCode"] == "AU"
+    assert freight_arguments["products"] == [{"vid": "456", "quantity": 1}]
 
 
 async def test_end_to_end_drops_a_delisted_product():
@@ -564,6 +778,20 @@ async def test_end_to_end_drops_a_delisted_product():
                 "get_product_detail",
                 {"type": "object", "properties": {"pid": {"type": "string"}}},
             ),
+            _FakeTool(
+                "calculate_freight",
+                {"type": "object", "properties": {"products": {"type": "array"}}},
+            ),
+            _FakeTool(
+                "calculate_freight_tip",
+                {
+                    "type": "object",
+                    "properties": {
+                        "productProp": {"type": "array"},
+                        "weight": {"type": "number"},
+                    },
+                },
+            ),
         ],
         responses={
             "search_products": {"content": [{"productList": [_search_hit()]}]},
@@ -576,3 +804,120 @@ async def test_end_to_end_drops_a_delisted_product():
         session_factory=_FakeFactory(session),
     )
     assert await CjMcpExtractor(client=client).fetch_products(["k"]) == []
+
+
+# ----------------------------------------------------------------------
+# Freight quoting (plan §6)
+# ----------------------------------------------------------------------
+
+
+async def test_the_cheapest_method_is_costed_by_default():
+    client = FakeMcpClient(hits=[_search_hit()], details={_PID: _detail_payload()})
+    products = await CjMcpExtractor(client=client).fetch_products(["k"])
+
+    assert len(products) == 1
+    # 9.37 beats CJPacket Ordinary (12.23) and DHL Official (33.54).
+    assert products[0].shipping_method == "CJPacket Eub"
+    assert products[0].shipping_cost_aud == round(9.37 * 1.55, 2)
+
+
+async def test_freight_is_quoted_for_the_cheapest_variant_and_target_country():
+    detail = _detail_payload(
+        variants=[
+            {"vid": "expensive", "variantSellPrice": 11.29},
+            {"vid": "cheapest", "variantSellPrice": 4.89},
+            {"vid": "middle", "variantSellPrice": 7.53},
+        ]
+    )
+    client = FakeMcpClient(hits=[_search_hit()], details={_PID: detail})
+    await CjMcpExtractor(client=client).fetch_products(["k"], country="AU")
+
+    # CJ quotes per variant and weight differs between them, so the quote
+    # must name the variant being costed.
+    assert client.freight_calls == [("cheapest", "AU")]
+
+
+async def test_a_pinned_freight_method_is_honoured(monkeypatch):
+    monkeypatch.setattr(settings, "CJ_FREIGHT_METHOD", "DHL Official")
+    client = FakeMcpClient(hits=[_search_hit()], details={_PID: _detail_payload()})
+    products = await CjMcpExtractor(client=client).fetch_products(["k"])
+
+    assert products[0].shipping_method == "DHL Official"
+    assert products[0].shipping_cost_aud == round(33.54 * 1.55, 2)
+
+
+async def test_an_unoffered_pin_falls_back_to_the_cheapest(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "CJ_FREIGHT_METHOD", "Pigeon Post")
+    client = FakeMcpClient(hits=[_search_hit()], details={_PID: _detail_payload()})
+    with caplog.at_level("WARNING"):
+        products = await CjMcpExtractor(client=client).fetch_products(["k"])
+
+    assert products[0].shipping_method == "CJPacket Eub"
+    assert "Pigeon Post" in caplog.text
+
+
+async def test_the_weight_trial_quotes_when_no_variant_id_exists():
+    # Some listings expose no usable variant; the weight-based trial quotes
+    # the same catalogue from weight + logistics attributes instead of
+    # dropping the product.
+    detail = _detail_payload(
+        variants=[],
+        productWeight="402.00-1194.00",
+        productProEnSet='["COMMON"]',
+    )
+    client = FakeMcpClient(hits=[_search_hit()], details={_PID: detail})
+    products = await CjMcpExtractor(client=client).fetch_products(["k"])
+
+    assert client.freight_calls == []
+    assert client.freight_tip_calls == [(402.0, ["COMMON"], "AU")]
+    assert products[0].shipping_cost_aud == round(9.37 * 1.55, 2)
+
+
+async def test_a_listing_with_no_quote_at_all_is_dropped():
+    # Costing freight at zero is the understatement this step exists to
+    # remove, so "no quote" is a drop, not a free pass.
+    client = FakeMcpClient(
+        hits=[_search_hit()],
+        details={_PID: _detail_payload()},
+        freight=[],
+        freight_tip=[],
+    )
+    assert await CjMcpExtractor(client=client).fetch_products(["k"]) == []
+
+
+async def test_a_failed_variant_quote_falls_through_to_the_weight_trial():
+    detail = _detail_payload(productWeight="410")
+    client = FakeMcpClient(
+        hits=[_search_hit()],
+        details={_PID: detail},
+        freight_error=CjMcpToolError("freight tool unavailable"),
+    )
+    products = await CjMcpExtractor(client=client).fetch_products(["k"])
+
+    assert client.freight_tip_calls == [(410.0, [], "AU")]
+    assert len(products) == 1
+
+
+async def test_a_freight_failure_drops_the_candidate_without_killing_the_run():
+    # A freight tool error must not become ExtractorBlockedException: that
+    # would hand the whole keyword to the next engine over one unquotable
+    # listing. The candidate drops on its own and the run completes.
+    client = FakeMcpClient(
+        hits=[_search_hit()],
+        details={_PID: _detail_payload()},
+        freight_error=CjMcpToolError("freight exploded"),
+        freight_tip_error=CjMcpToolError("trial exploded"),
+    )
+    assert await CjMcpExtractor(client=client).fetch_products(["k"]) == []
+
+
+async def test_a_pin_with_no_quote_still_drops_rather_than_assuming():
+    client = FakeMcpClient(
+        hits=[_search_hit()],
+        details={_PID: _detail_payload()},
+        freight=[],
+        freight_tip=[],
+    )
+    assert await CjMcpExtractor(client=client, max_products=1).fetch_products(
+        ["k"]
+    ) == []

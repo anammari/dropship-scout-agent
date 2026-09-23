@@ -53,7 +53,6 @@ def _provisional(**overrides) -> ProvisionalProductEvaluation:
         marketing_ad_copy="Tame the cable snake.",
         saturation_risk="LOW",
         target_tags=["dropship"],
-        shipping_notice_au="7-12 business days",
         key_features=["Modular", "Steel base", "Under-desk"],
     )
     base.update(overrides)
@@ -118,8 +117,26 @@ def test_system_prompt_prices_realistically_instead_of_by_multiplier():
     system = build_messages(_raw_product())[0]["content"]
     assert "fixed 3x-4x multiplier" in system
     assert "Modern Arab-Aussie Lifestyle & Cultural Nostalgia" in system
-    # The cost is authoritative: no cheaper basis may be invented.
-    assert "STRICT, landed dropshipping cost" in system
+    # The cost is authoritative when a quote backs it: no cheaper basis may
+    # be invented.
+    assert "VERIFIED" in system
+    assert "do not invent a cheaper basis" in system
+
+
+def test_system_prompt_distinguishes_an_unquoted_cost_from_a_verified_one():
+    # AliExpress quotes no freight, so its landed cost is a floor.
+    # Describing it as verified is how margin gets overstated, so the prompt
+    # must tell the model which kind of number it is judging.
+    system = build_messages(_raw_product())[0]["content"]
+    assert "shipping_quoted" in system
+    assert "FLOOR rather than a verified cost" in system
+
+
+def test_payload_carries_the_shipping_quote_state():
+    quoted = _raw_product()  # supplier-quoted shipping
+    unquoted = _raw_product(shipping_cost_aud=0.0)  # no quote, as AliExpress
+    assert '"shipping_quoted": true' in build_messages(quoted)[1]["content"]
+    assert '"shipping_quoted": false' in build_messages(unquoted)[1]["content"]
 
 
 # ----------------------------------------------------------------------

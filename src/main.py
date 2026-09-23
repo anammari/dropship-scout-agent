@@ -1,7 +1,7 @@
 """End-to-end CLI orchestrator (Phase 6, rewritten per plan F.5).
 
 Supplier-First pipeline: supplier extractors (CJdropshipping MCP server,
-AliExpress Dropshipping Center, Etsy Open API) fetch verified
+AliExpress Dropshipping Center) fetch verified
 `RawSupplierProduct`s -> LLM viability evaluation (the LLM authors only
 marketing/viability fields) -> deterministic CDN image download with the
 3-image gate -> workspace export -> printed summary with per-run drop
@@ -42,7 +42,6 @@ from src.extractors.base import (
     ExtractorTimeoutException,
 )
 from src.extractors.cj_mcp_extractor import CjMcpExtractor
-from src.extractors.etsy_api import EtsyApiExtractor
 from src.models import ProductCandidateEvaluation, RawSupplierProduct
 
 logger = logging.getLogger(__name__)
@@ -52,7 +51,6 @@ logger = logging.getLogger(__name__)
 _EXTRACTOR_REGISTRY = {
     "cjdropshipping": CjMcpExtractor,
     "aliexpress": AliExpressDsCenterExtractor,
-    "etsy": EtsyApiExtractor,
 }
 
 
@@ -263,7 +261,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         prog="python -m src.main",
         description=(
             "Dropship Scout Agent: ingest live supplier listings "
-            "(CJdropshipping / AliExpress / Etsy), filter winners through "
+            "(CJdropshipping / AliExpress), filter winners through "
             "the LLM viability gate, and export them to the Shopify "
             "workspace."
         ),
@@ -373,10 +371,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 reason=str(exc),
                 instructions=[
                     "Check that at least one supplier extractor is "
-                    "configured: CJ_MCP_TOKEN (CJdropshipping MCP server) or "
-                    "ETSY_API_KEY (Etsy Open API v3) in .env — the "
-                    "AliExpress Dropshipping Center engine needs no "
-                    "credential of its own",
+                    "configured: CJ_MCP_TOKEN (CJdropshipping MCP server) in "
+                    ".env — the AliExpress Dropshipping Center engine needs "
+                    "no credential of its own",
                     "Verify each configured credential manually against its "
                     "API (auth endpoint ping) before re-running",
                     "Re-run the pipeline after any manual fix: python -m "

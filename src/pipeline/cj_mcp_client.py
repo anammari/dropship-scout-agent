@@ -93,6 +93,15 @@ _SKU_DETAIL_TOOL_ALIASES: Tuple[str, ...] = (
     "sku_detail",
 )
 
+# Freight quoting (`plan §6`). Two tools, deliberately bound separately and
+# resolved by EXACT name: `calculate_freight` is a substring of
+# `calculate_freight_tip`, so fuzzy matching between them would be unsafe.
+# `calculate_freight` quotes per VARIANT and is the primary path;
+# `calculate_freight_tip` quotes by weight + logistics attributes and is the
+# fallback for a listing with no usable variant id.
+FREIGHT_TOOL_NAME = "calculate_freight"
+FREIGHT_TIP_TOOL_NAME = "calculate_freight_tip"
+
 # Logical parameter -> the field names a discovered tool schema might declare
 # it under, most specific first. Only names the schema actually declares are
 # sent, so an unknown tool shape degrades to "fewer filters", never to an
@@ -146,6 +155,23 @@ _PARAM_ALIASES: Dict[str, Tuple[str, ...]] = {
         "skuId", "sku_id", "productSku", "product_sku", "cjSku", "cj_sku",
         "variantSku", "variant_sku",
     ),
+    # Freight quoting. `calculate_freight` names its destination
+    # `endCountryCode` with a `products` array of variant ids, while
+    # `calculate_freight_tip` names the same idea `destAreaCode` and quotes
+    # from `weight` + `productProp` — one logical name per concept, so each
+    # tool receives whichever spelling it actually declares.
+    "freight_products": ("products", "productList", "product_list"),
+    "end_country": (
+        "endCountryCode", "end_country_code", "destAreaCode", "dest_area_code",
+        "destinationCountry", "destination_country", "toCountryCode",
+    ),
+    "start_country": (
+        "startCountryCode", "start_country_code", "srcAreaCode", "src_area_code",
+        "originCountry", "origin_country", "fromCountryCode",
+    ),
+    "weight": ("weight", "totalWeight", "total_weight", "weightGrams"),
+    "product_prop": ("productProp", "product_prop", "productPropEn"),
+    "goods_amount": ("totalGoodsAmount", "total_goods_amount", "goodsAmount"),
 }
 
 # The warehouse filter CJ's own docs describe for the remote MCP server:
@@ -203,6 +229,64 @@ _PRICE_KEYS: Tuple[str, ...] = (
     "sellPrice", "sell_price", "price", "productPrice", "product_price",
     "priceUsd", "price_usd", "variantSellPrice", "variant_sell_price",
     "wholesalePrice", "wholesale_price", "minPrice", "min_price",
+)
+# Commercial demand vocabulary (plan §6.2). `listedNum` is how many
+# dropshippers have imported the listing, and it is the *only* demand metric
+# CJ's MCP surface reports: probed live across `search_products` and
+# `get_product_detail`, no historical-sales field exists under any name
+# (`sellNum`, `sales`, `soldNum`, `orderNum`, `importNum`, …), and none of the
+# 62 advertised tools carries one. Both records do carry `listedNum`. Note
+# `variantVolume` is NOT sales — it is the variant's volumetric freight
+# dimension in mm³.
+#
+# Only spellings of the SAME verified concept are acceptable here. This lookup
+# is fail-OPEN — a hit it reads is admitted as proven demand — so an alias for
+# a *different* field would let an unverified metric satisfy the gate. That is
+# why `importNum`, which the spike probed and found absent, is deliberately not
+# listed even though its name reads like a listing count.
+_LISTED_COUNT_KEYS: Tuple[str, ...] = (
+    "listedNum", "listed_num", "listNum", "list_num", "listedCount",
+    "listed_count",
+)
+# Freight-quote vocabulary. The two freight tools report the same facts under
+# different names, and `calculate_freight_tip` nests the method inside an
+# `option` object, so the name lookup checks the entry and its `option`.
+# Price order matters: `totalPostageFee` and `discountFee` are the all-in USD
+# figure on their respective tools and agree on a sampled listing (9.37 both),
+# whereas the pre-discount `postage` is lower (8.14) — so it is last, never
+# first.
+_FREIGHT_NAME_KEYS: Tuple[str, ...] = (
+    "logisticName", "logistic_name", "optionName", "option_name", "enName",
+    "en_name", "channelName", "channel_name",
+)
+_FREIGHT_PRICE_KEYS: Tuple[str, ...] = (
+    "totalPostageFee", "total_postage_fee", "discountFee", "discount_fee",
+    "logisticPrice", "logistic_price", "postage",
+)
+_FREIGHT_TRANSIT_KEYS: Tuple[str, ...] = (
+    "logisticAging", "logistic_aging", "arrivalTime", "arrival_time",
+    "transitTime", "transit_time", "aging",
+)
+# Variant vocabulary, for picking the variant a freight quote must name.
+_VARIANT_KEYS: Tuple[str, ...] = (
+    "variants", "variantList", "variant_list", "skus", "skuList",
+)
+_VARIANT_ID_KEYS: Tuple[str, ...] = ("vid", "variantId", "variant_id", "id")
+_VARIANT_SKU_KEYS: Tuple[str, ...] = (
+    "variantSku", "variant_sku", "sku", "skuCode",
+)
+_VARIANT_PRICE_KEYS: Tuple[str, ...] = (
+    "variantSellPrice", "variant_sell_price", "sellPrice", "price",
+)
+# Weight-based freight fallback inputs. The detail record carries product and
+# packing weight as ranges and the logistics attributes the tool requires.
+_WEIGHT_KEYS: Tuple[str, ...] = (
+    "productWeight", "product_weight", "packingWeight", "packing_weight",
+    "weight",
+)
+_LOGISTICS_PROP_KEYS: Tuple[str, ...] = (
+    "productProEnSet", "product_pro_en_set", "productProEn", "product_pro_en",
+    "productPropEn", "product_prop_en", "productProp",
 )
 
 # ---------------------------------------------------------------------------
@@ -940,6 +1024,8 @@ class CjMcpClient:
         self._tools: Dict[str, Any] = {}
         self._search_tool: Optional[Any] = None
         self._sku_detail_tool: Optional[Any] = None
+        self._freight_tool: Optional[Any] = None
+        self._freight_tip_tool: Optional[Any] = None
 
     # -- introspection --------------------------------------------------
 
@@ -1028,6 +1114,8 @@ class CjMcpClient:
         self._tools = {}
         self._search_tool = None
         self._sku_detail_tool = None
+        self._freight_tool = None
+        self._freight_tip_tool = None
         if stack is not None:
             try:
                 await stack.aclose()
@@ -1059,16 +1147,41 @@ class CjMcpClient:
         self._sku_detail_tool = self._resolve_tool(
             catalog, _SKU_DETAIL_TOOL_ALIASES, DETAIL_TOOL_NAME
         )
+        # Freight is mandatory, not optional: shipping is half a landed cost,
+        # and a supplier path that cannot quote it would price every candidate
+        # against an understated cost. An unresolvable freight tool therefore
+        # fails the connection (the extractor maps it to
+        # `ExtractorBlockedException`, so the chain falls through) rather than
+        # quietly costing freight at zero.
+        self._freight_tool = self._resolve_tool(
+            catalog, (FREIGHT_TOOL_NAME,), FREIGHT_TOOL_NAME, exact_only=True
+        )
+        self._freight_tip_tool = self._resolve_tool(
+            catalog,
+            (FREIGHT_TIP_TOOL_NAME,),
+            FREIGHT_TIP_TOOL_NAME,
+            exact_only=True,
+        )
 
     @staticmethod
     def _resolve_tool(
-        catalog: Dict[str, Any], aliases: Tuple[str, ...], canonical: str
+        catalog: Dict[str, Any],
+        aliases: Tuple[str, ...],
+        canonical: str,
+        exact_only: bool = False,
     ) -> Any:
         """Bind a catalog entry to a canonical tool name, deterministically.
 
         Exact name, then case-insensitive name, then normalised name, then
         normalised substring — shortest match wins so the choice never
         depends on catalog ordering. Nothing found is an error, not a guess.
+
+        `exact_only` stops before the normalised and substring passes, for the
+        tools whose names nest inside each other: `calculate_freight` is a
+        substring of `calculate_freight_tip`, so the fuzzy passes would happily
+        bind either one to the other's slot. Those tools are hard requirements
+        (plan §6), so an absent one must fail the connection and let the chain
+        fall through, not silently bind the wrong tool.
         """
         if not catalog:
             raise CjMcpToolError(
@@ -1082,6 +1195,13 @@ class CjMcpClient:
             match = lowered.get(alias.lower())
             if match is not None:
                 return catalog[match]
+
+        if exact_only:
+            raise CjMcpToolError(
+                f"CJ MCP tool {canonical!r} is not in the discovered catalog "
+                f"({sorted(catalog)}); it is required and is bound by exact "
+                "name only, so no substitute is accepted"
+            )
 
         normalised = {_normalise_tool_name(name): name for name in catalog}
         for alias in aliases:
@@ -1199,6 +1319,86 @@ class CjMcpClient:
         result = await self._call_tool(tool, arguments)
         return iter_product_dicts(extract_payload(result))
 
+    async def calculate_freight(
+        self,
+        vid: str,
+        dest_country: str,
+        origin_country: str = DEFAULT_WAREHOUSE_COUNTRY,
+    ) -> List[dict]:
+        """Live shipping quotes for ONE variant to a destination country.
+
+        The primary freight path (plan §6): CJ quotes per variant, so the
+        caller passes the variant whose price it is costing. Returns the
+        normalised method list from `extract_freight_quotes` — an empty list
+        means CJ offered nothing quotable, which the caller must treat as no
+        quote rather than as free shipping.
+        """
+        self._require_session()
+        tool = self._freight_tool
+        if tool is None:
+            raise CjMcpToolError(
+                "CJ MCP freight tool was never resolved — the client is not "
+                "connected"
+            )
+        arguments = build_tool_arguments(
+            getattr(tool, "input_schema", None),
+            {
+                "freight_products": [{"vid": vid, "quantity": 1}],
+                "end_country": dest_country,
+                "start_country": origin_country,
+            },
+        )
+        if not arguments.get("products") and not arguments.get("productList"):
+            raise CjMcpToolError(
+                f"CJ MCP freight tool {getattr(tool, 'name', '?')!r} declares "
+                "no product-list parameter this client can map — refusing to "
+                "call it blind"
+            )
+        logger.debug("CJ MCP freight arguments: %s", arguments)
+        result = await self._call_tool(tool, arguments)
+        return extract_freight_quotes(extract_payload(result))
+
+    async def calculate_freight_tip(
+        self,
+        weight_grams: float,
+        product_props: Sequence[str],
+        dest_country: str,
+        origin_country: str = DEFAULT_WAREHOUSE_COUNTRY,
+    ) -> List[dict]:
+        """Weight-based shipping quotes — the fallback freight path.
+
+        For a listing with no usable variant id, CJ's freight trial quotes by
+        weight plus the product's logistics attributes (the `productProEnSet`
+        values from the detail record, e.g. `["COMMON"]`), which is the same
+        basis its own site uses. Same return contract as `calculate_freight`.
+        """
+        self._require_session()
+        tool = self._freight_tip_tool
+        if tool is None:
+            raise CjMcpToolError(
+                "CJ MCP freight-trial tool was never resolved — the client is "
+                "not connected"
+            )
+        arguments = build_tool_arguments(
+            getattr(tool, "input_schema", None),
+            {
+                "start_country": origin_country,
+                "end_country": dest_country,
+                "product_prop": list(product_props) or ["COMMON"],
+                "weight": weight_grams,
+            },
+        )
+        for required in ("productProp", "weight"):
+            if required not in arguments:
+                raise CjMcpToolError(
+                    f"CJ MCP freight-trial tool "
+                    f"{getattr(tool, 'name', '?')!r} declares no {required!r} "
+                    "parameter this client can map — refusing to call it blind"
+                )
+        logger.debug("CJ MCP freight-trial arguments: %s", arguments)
+        result = await self._call_tool(tool, arguments)
+        return extract_freight_quotes(extract_payload(result))
+
     async def query_sku_details(self, pid: str) -> dict:
         """Fetch pricing/variant/gallery detail for one product id.
 
@@ -1260,6 +1460,155 @@ def extract_description(payload: Mapping) -> str:
 def extract_price_usd(payload: Mapping) -> Optional[float]:
     """The listed USD unit price (low end of a quoted range)."""
     return _coerce_price(_first_present(payload, _PRICE_KEYS))
+
+
+def extract_listed_count(payload: Mapping) -> Optional[int]:
+    """How many dropshippers have imported this listing, or None.
+
+    The CJ commercial gate's only metric (plan §6.2): CJ's MCP surface
+    reports no historical-sales figure under any name, so the dropshipper
+    listing count stands in as proof that the item is already being sold
+    elsewhere. None means the payload did not report one — unproven, which
+    the gate drops rather than treats as a pass.
+    """
+    number = _as_number(_first_present(payload, _LISTED_COUNT_KEYS))
+    if number is None:
+        return None
+    return int(number)
+
+
+def extract_cheapest_variant(payload: Mapping) -> Optional[dict]:
+    """The variant to quote freight for: {vid, sku, price_usd} or None.
+
+    The cheapest variant with a usable price is the listing's entry
+    configuration, and CJ quotes shipping per variant (weight differs between
+    them), so the quote must name a specific one. Returns None when the
+    payload lists no variant carrying both an id and a positive price — the
+    caller then quotes by weight instead of dropping the listing.
+
+    The variant's price is used to CHOOSE the cheapest variant; it is not the
+    cost basis, which stays the listing's own quoted price.
+    """
+    raw = _first_present(payload, _VARIANT_KEYS)
+    if not isinstance(raw, list):
+        return None
+    best: Optional[dict] = None
+    for variant in raw:
+        if not isinstance(variant, Mapping):
+            continue
+        price = _coerce_price(
+            _first_present(variant, _VARIANT_PRICE_KEYS)
+        )
+        if price is None or price <= 0:
+            continue
+        vid = _first_present(variant, _VARIANT_ID_KEYS)
+        sku = _first_present(variant, _VARIANT_SKU_KEYS)
+        if vid is None and sku is None:
+            continue
+        if best is None or price < best["price_usd"]:
+            best = {
+                "vid": str(vid).strip() if vid is not None else "",
+                "sku": str(sku).strip() if sku is not None else "",
+                "price_usd": price,
+            }
+    return best
+
+
+def extract_weight_grams(payload: Mapping) -> Optional[float]:
+    """The listing's shipping weight in grams, or None.
+
+    CJ reports weight as a range across variants ("402.00-1194.00"), so the
+    low end is read — the same variant the cheapest-variant quote names. Used
+    only by the weight-based freight fallback.
+    """
+    raw = _first_present(payload, _WEIGHT_KEYS)
+    if raw is None:
+        return None
+    numbers = re.findall(r"\d+(?:\.\d+)?", str(raw))
+    if not numbers:
+        return None
+    value = min(float(number) for number in numbers)
+    return value if value > 0 else None
+
+
+def extract_logistics_props(payload: Mapping) -> List[str]:
+    """The listing's logistics attributes, e.g. ["COMMON"] or ["COMMON","THIN"].
+
+    CJ requires these for a weight-based freight quote and reports them as
+    `productProEnSet`, sometimes as a real list and sometimes as a
+    JSON-encoded string. An empty list is valid — the caller substitutes the
+    generic "COMMON" attribute.
+    """
+    raw = _first_present(payload, _LOGISTICS_PROP_KEYS)
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    text = str(raw).strip()
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    return [text] if text else []
+
+
+def _freight_method_name(entry: Mapping) -> str:
+    """A freight quote's method name, checking the nested `option` too."""
+    value = _first_present(entry, _FREIGHT_NAME_KEYS)
+    if value is None:
+        option = entry.get("option")
+        if isinstance(option, Mapping):
+            value = _first_present(option, _FREIGHT_NAME_KEYS)
+    return str(value).strip() if value is not None else ""
+
+
+def _iter_freight_entries(payload: Any) -> List[Mapping]:
+    """The method records inside a freight payload, whatever it is wrapped in."""
+    if isinstance(payload, list):
+        return [entry for entry in payload if isinstance(entry, Mapping)]
+    if isinstance(payload, Mapping):
+        for key in _LIST_KEYS:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [e for e in value if isinstance(e, Mapping)]
+        unwrapped = unwrap_envelope(payload)
+        if isinstance(unwrapped, list):
+            return [e for e in unwrapped if isinstance(e, Mapping)]
+        if isinstance(unwrapped, Mapping):
+            return [unwrapped]
+    return []
+
+
+def extract_freight_quotes(payload: Any) -> List[dict]:
+    """Normalised shipping quotes from either CJ freight tool.
+
+    Returns one {"method", "price_usd", "transit_days"} record per offered
+    shipping method, skipping any entry whose price is missing or
+    non-positive — a method we cannot price is never guessed at, and an empty
+    list is a legitimate answer the caller must treat as "no quote".
+
+    Prices are taken as USD: both tools quote a USD figure beside a CNY one
+    (`logisticPrice`/`logisticPriceCn`, `discountFee`/`discountFeeCNY`), and
+    the USD figure is the one that reconciles with the catalogue prices this
+    pipeline already converts by `USD_TO_AUD`.
+    """
+    quotes: List[dict] = []
+    for entry in _iter_freight_entries(payload):
+        price = _as_number(_first_present(entry, _FREIGHT_PRICE_KEYS))
+        if price is None or price <= 0:
+            continue
+        transit = _first_present(entry, _FREIGHT_TRANSIT_KEYS)
+        quotes.append(
+            {
+                "method": _freight_method_name(entry) or "unknown",
+                "price_usd": price,
+                "transit_days": str(transit).strip() if transit else "",
+            }
+        )
+    return quotes
 
 
 def _image_url_from_entry(entry: Any) -> Optional[str]:

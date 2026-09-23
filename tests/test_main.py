@@ -59,7 +59,6 @@ def _final(title="Ergonomic Desk Cable Organiser") -> ProductCandidateEvaluation
         marketing_ad_copy="Buy it.",
         saturation_risk="LOW",
         target_tags=["dropship"],
-        shipping_notice_au="7-12 business days",
         key_features=["A", "B", "C"],
     )
     raw = _raw_product(title)
@@ -128,11 +127,11 @@ def test_extractor_chain_builds_from_configured_priority_order(monkeypatch):
 
     monkeypatch.setattr(
         settings, "SUPPLIER_PRIORITY_ORDER",
-        ["cjdropshipping", "aliexpress", "etsy"],
+        ["cjdropshipping", "aliexpress"],
     )
     chain = _build_extractor_chain()
     assert [e.engine_name for e in chain] == [
-        "cjdropshipping", "aliexpress_ds_center", "etsy_api",
+        "cjdropshipping", "aliexpress_ds_center",
     ]
 
 

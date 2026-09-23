@@ -17,7 +17,6 @@ from src.models import (
 )
 
 _ALI_URL = "https://www.aliexpress.com/item/1005006112233445.html"
-_ETSY_URL = "https://www.etsy.com/listing/123456789/wooden-desk-organiser"
 _CJ_URL = "https://developers.cjdropshipping.com/product/12345678.html"
 _IMG1 = "https://ae01.alicdn.com/kf/S123.jpg"
 _IMG2 = "https://ae01.alicdn.com/kf/S456.jpg"
@@ -47,7 +46,6 @@ def _provisional(**overrides) -> ProvisionalProductEvaluation:
         marketing_ad_copy="Tame the cable snake under your desk.",
         saturation_risk="LOW",
         target_tags=["dropship", "workspace"],
-        shipping_notice_au="Standard tracked international shipping: 7-12 business days",
         key_features=["Modular segments", "Steel base", "Under-desk mount"],
     )
     base.update(overrides)
@@ -78,14 +76,23 @@ def test_valid_raw_product_round_trips():
     assert raw.image_urls == [_IMG1, _IMG2, _IMG3]
 
 
-def test_all_three_suppliers_are_known():
-    assert KNOWN_SUPPLIERS == {"AliExpress", "Etsy", "CJdropshipping"}
+def test_every_registered_supplier_is_known():
+    assert KNOWN_SUPPLIERS == {"AliExpress", "CJdropshipping"}
     for supplier, url in [
         ("AliExpress", _ALI_URL),
-        ("Etsy", _ETSY_URL),
         ("CJdropshipping", _CJ_URL),
     ]:
         assert _raw_product(supplier_name=supplier, supplier_retail_url=url)
+
+
+def test_a_retired_supplier_is_no_longer_acceptable():
+    # Etsy was retired as a source (no dropshipping support), so naming it is
+    # now a schema violation rather than a valid supplier.
+    with pytest.raises(ValidationError, match="supplier_name"):
+        _raw_product(
+            supplier_name="Etsy",
+            supplier_retail_url="https://www.etsy.com/listing/123456789/x",
+        )
 
 
 def test_unknown_supplier_name_is_rejected():
@@ -99,9 +106,9 @@ def test_supplier_url_must_be_absolute():
 
 
 def test_supplier_url_must_match_the_supplier_pdp_shape():
-    # An AliExpress-named product whose URL is an Etsy listing shape.
+    # An AliExpress-named product whose URL is an eBay listing shape.
     with pytest.raises(ValidationError, match="product-page shape"):
-        _raw_product(supplier_retail_url=_ETSY_URL)
+        _raw_product(supplier_retail_url="https://www.ebay.com.au/itm/123456")
     # A CJ-named product pointing at an AliExpress item page.
     with pytest.raises(ValidationError, match="product-page shape"):
         _raw_product(
@@ -239,6 +246,101 @@ def test_from_raw_basis_notes_unquoted_shipping():
     final = _final(raw=_raw_product(shipping_cost_aud=0.0))
     assert final.estimated_cogs_aud == 12.50
     assert "does not quote shipping" in final.cogs_estimation_basis
+
+
+# ----------------------------------------------------------------------
+# The derived shipping notice (plan §7)
+# ----------------------------------------------------------------------
+
+
+def test_shipping_notice_is_derived_from_the_quote():
+    final = _final(
+        raw=_raw_product(
+            shipping_cost_aud=6.67,
+            shipping_method="CJPacket Eub",
+            shipping_transit_days="6-10",
+        )
+    )
+    assert final.shipping_notice_au == (
+        "Standard tracked international shipping to Australia via "
+        "CJPacket Eub: 6-10 business days."
+    )
+
+
+def test_shipping_notice_never_claims_free_shipping():
+    # The hole this closes: the LLM shipped "Free standard shipping on this
+    # item" against a real quoted freight cost.
+    final = _final(
+        raw=_raw_product(
+            shipping_cost_aud=14.52,
+            shipping_method="CJPacket Eub",
+            shipping_transit_days="6-10",
+        )
+    )
+    assert "free" not in final.shipping_notice_au.lower()
+
+
+def test_shipping_notice_tolerates_a_transit_that_carries_its_own_unit():
+    final = _final(
+        raw=_raw_product(shipping_transit_days="6-10 days", shipping_method="PostNL")
+    )
+    assert final.shipping_notice_au.endswith("6-10 days.")
+
+
+def test_shipping_notice_omits_the_window_when_the_quote_reports_none():
+    # A quote can carry a price without a transit estimate. The service is
+    # still quoted, so it is named — but no window is invented for it.
+    final = _final(
+        raw=_raw_product(
+            shipping_method="CJPacket Eub", shipping_transit_days=None
+        )
+    )
+    assert final.shipping_notice_au == (
+        "Standard tracked international shipping to Australia via "
+        "CJPacket Eub."
+    )
+
+
+def test_unquoted_shipping_notice_claims_no_service_or_transit():
+    # AliExpress quotes no freight, so there is nothing to assert
+    # about tracking or a delivery window — asserting one anyway is the same
+    # class of unsupported claim as the "free shipping" line this field
+    # replaced.
+    final = _final(raw=_low_cogs())
+    assert final.shipping_notice_au == "Ships to Australia from the supplier."
+    lowered = final.shipping_notice_au.lower()
+    for unsupported in ("business days", "tracked", "free", "7-12"):
+        assert unsupported not in lowered
+
+
+def test_shipping_quoted_reflects_whether_a_quote_backs_the_figure():
+    assert _raw_product().shipping_quoted is True
+    assert _low_cogs().shipping_quoted is False
+
+
+def test_basis_credits_the_quoted_shipping_service():
+    final = _final(
+        raw=_raw_product(shipping_cost_aud=6.67, shipping_method="CJPacket Eub")
+    )
+    assert "AUD $6.67" in final.cogs_estimation_basis
+    assert "via CJPacket Eub" in final.cogs_estimation_basis
+
+
+def test_the_llm_may_not_author_the_shipping_notice():
+    # A forbidden field must fail loudly rather than be silently dropped —
+    # silently ignoring it is how an invented claim survives to production.
+    with pytest.raises(ValidationError):
+        ProvisionalProductEvaluation(
+            verdict="ACCEPT",
+            niche_category="Home Office",
+            problem_solved="Cable clutter",
+            suggested_retail_aud=49.99,
+            marketing_ad_copy="Tame the cable snake.",
+            saturation_risk="LOW",
+            target_tags=["dropship"],
+            key_features=["Modular", "Steel base", "Under-desk"],
+            shipping_notice_au="Free standard shipping on this item.",
+        )
 
 
 def test_from_raw_recomputes_margin_math_from_real_cogs():

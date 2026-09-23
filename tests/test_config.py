@@ -37,7 +37,6 @@ def test_missing_credentials_resolve_to_empty_strings(monkeypatch):
     for name in (
         "LLM_BASE_URL",
         "LLM_API_KEY",
-        "ETSY_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
     fresh = load_settings()
@@ -46,7 +45,6 @@ def test_missing_credentials_resolve_to_empty_strings(monkeypatch):
     for name in (
         "LLM_BASE_URL",
         "LLM_API_KEY",
-        "ETSY_API_KEY",
     ):
         assert getattr(fresh, name) == ""
 
@@ -106,13 +104,15 @@ def test_supplier_priority_order_defaults_to_cjdropshipping_first(monkeypatch):
     assert load_settings().SUPPLIER_PRIORITY_ORDER == [
         "cjdropshipping",
         "aliexpress",
-        "etsy",
     ]
 
 
 def test_supplier_priority_order_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "etsy,aliexpress")
-    assert load_settings().SUPPLIER_PRIORITY_ORDER == ["etsy", "aliexpress"]
+    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "aliexpress,cjdropshipping")
+    assert load_settings().SUPPLIER_PRIORITY_ORDER == [
+        "aliexpress",
+        "cjdropshipping",
+    ]
 
 
 def test_supplier_priority_order_is_normalised(monkeypatch):
@@ -127,13 +127,15 @@ def test_supplier_priority_order_empty_string_falls_back_to_default(monkeypatch)
     assert load_settings().SUPPLIER_PRIORITY_ORDER == [
         "cjdropshipping",
         "aliexpress",
-        "etsy",
     ]
 
 
 def test_supplier_priority_order_drops_blank_segments(monkeypatch):
-    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "aliexpress,,,etsy")
-    assert load_settings().SUPPLIER_PRIORITY_ORDER == ["aliexpress", "etsy"]
+    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "aliexpress,,,cjdropshipping")
+    assert load_settings().SUPPLIER_PRIORITY_ORDER == [
+        "aliexpress",
+        "cjdropshipping",
+    ]
 
 
 def test_usd_to_aud_defaults_to_one_point_five_five(monkeypatch):
@@ -210,6 +212,33 @@ def test_min_ds_rating_defaults_to_four_point_five(monkeypatch):
 def test_min_ds_rating_env_override_is_respected(monkeypatch):
     monkeypatch.setenv("MIN_DS_RATING", "4.8")
     assert load_settings().MIN_DS_RATING == 4.8
+
+
+def test_min_cj_listed_count_defaults_to_one_hundred_and_fifty(monkeypatch):
+    # Raised from the original 20 after the live payload spike: on real AU
+    # catalogue pages a floor of 20 passed every hit, so it filtered nothing.
+    monkeypatch.delenv("MIN_CJ_LISTED_COUNT", raising=False)
+    assert load_settings().MIN_CJ_LISTED_COUNT == 150
+
+
+def test_min_cj_listed_count_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("MIN_CJ_LISTED_COUNT", "400")
+    assert load_settings().MIN_CJ_LISTED_COUNT == 400
+
+
+def test_cj_freight_method_defaults_to_blank_meaning_cheapest(monkeypatch):
+    monkeypatch.delenv("CJ_FREIGHT_METHOD", raising=False)
+    assert load_settings().CJ_FREIGHT_METHOD == ""
+
+
+def test_cj_freight_method_blank_pin_normalises_to_cheapest(monkeypatch):
+    monkeypatch.setenv("CJ_FREIGHT_METHOD", "   ")
+    assert load_settings().CJ_FREIGHT_METHOD == ""
+
+
+def test_cj_freight_method_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("CJ_FREIGHT_METHOD", "CJPacket Eub")
+    assert load_settings().CJ_FREIGHT_METHOD == "CJPacket Eub"
 
 
 def test_min_markup_multiplier_defaults_to_the_relaxed_floor(monkeypatch):

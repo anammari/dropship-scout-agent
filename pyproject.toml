@@ -1,10 +1,9 @@
 [project]
 name = "dropship-scout-agent"
 version = "0.1.0"
-description = "Supplier-first dropshipping product scout: live supplier extraction (CJdropshipping MCP, AliExpress Dropshipping Center, Etsy API), LLM filtering, and Shopify workspace export."
+description = "Supplier-first dropshipping product scout: live supplier extraction (CJdropshipping MCP, AliExpress Dropshipping Center), LLM filtering, and Shopify workspace export."
 requires-python = ">=3.11"
-# Pinned to the versions verified working in .venv (see _docs/plan.md,
-# "Environment Setup").
+# Pinned to the versions verified working in .venv.
 # playwright-stealth MUST stay >=2.0: v2 exposes the `Stealth` class API;
 # the v1 `stealth_async()` free function no longer exists.
 dependencies = [

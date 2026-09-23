@@ -6,8 +6,7 @@ no guessed links. The LLM's entire job is:
 
 - the ACCEPT/REJECT viability verdict for the Australian market,
 - niche/problem/saturation classification,
-- marketing payload: `marketing_ad_copy`, `key_features`,
-  `shipping_notice_au`, `target_tags`,
+- marketing payload: `marketing_ad_copy`, `key_features`, `target_tags`,
 - a `suggested_retail_aud` that clears the margin floor against the
   supplier's REAL listed cost.
 
@@ -16,6 +15,10 @@ Anti-hallucination contract (carried from CLAUDE.md §3.5):
   `cogs_estimation_basis` are never in the response model — the final
   `ProductCandidateEvaluation` is built by `ProductCandidateEvaluation.from_raw`
   in code, immediately after the call.
+- `shipping_notice_au` is excluded on the same principle: it is a logistics
+  claim the model cannot substantiate, having never seen the freight quote,
+  and it once shipped "Free standard shipping on this item" against a real
+  quoted freight cost. It is derived in code from the quote instead.
 - The prompt never includes image URLs and never asks the model to
   produce one; all imagery flows from `RawSupplierProduct.image_urls`
   through `image_sourcing.py` deterministically.
@@ -62,11 +65,16 @@ details (title, description, and the supplier's REAL dropshipping cost in \
 AUD) and determine whether the product is viable. Reply with a structured \
 verdict.
 
-The cost you are given (`price_aud` + `shipping_cost_aud`) is the STRICT, \
-landed dropshipping cost read from the AliExpress Dropshipping Center for \
-the Australian market. Treat it as accurate and final: do not invent a \
-cheaper basis, do not discount it, and do not assume a promotional or \
-new-customer price underlies it.
+The cost you are given is the landed dropshipping cost in AUD: the \
+supplier's live listed price plus its shipping figure. Read `shipping_quoted` \
+to know which kind of number you are judging. When it is TRUE the shipping is \
+the supplier's own quote to Australia, so the total is VERIFIED — treat it as \
+accurate and final: do not invent a cheaper basis, do not discount it, and do \
+not assume a promotional or new-customer price underlies it. When it is FALSE \
+the supplier quoted no shipping, so `shipping_cost_aud` is 0.00 and the total \
+is a FLOOR rather than a verified cost: judge margin against it as the best \
+case, price conservatively, and if the realistic Australian retail price only \
+clears the floor on that best case then REJECT the product.
 
 Viability gates (adapted to real supplier data):
 1. PROBLEM SOLVER OR EMOTIONAL TRIGGER: the product solves an active \
@@ -102,8 +110,6 @@ If ACCEPT, write the marketing payload:
 market in this niche, grounded ONLY in the supplied product data.
 - `key_features`: 3-5 concrete marketing bullets derived ONLY from the \
 title/description — never invent specifications.
-- `shipping_notice_au`: a realistic customer-facing shipping line for \
-standard tracked international shipping to Australia (7-12 business days).
 - `suggested_retail_aud`: the realistic Australian retail price described \
 in gate 2, not a multiplier-derived figure.
 - `target_tags`: shopper/shopify tags, and ALWAYS include "dropship".
@@ -129,6 +135,9 @@ def _build_user_message(raw: RawSupplierProduct) -> str:
         "product_description": raw.product_description[:4000],
         "price_aud": raw.price_aud,
         "shipping_cost_aud": raw.shipping_cost_aud,
+        # Tells the model whether the shipping figure is a quote or a blank,
+        # so it never has to infer that from a zero.
+        "shipping_quoted": raw.shipping_quoted,
         "supplier_retail_url": raw.supplier_retail_url,
         "target_country": "AU",
     }

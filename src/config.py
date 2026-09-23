@@ -7,7 +7,7 @@ environment always win; a missing `.env` is not an error.
 Security: this module never logs or prints the values it holds — `Settings`
 deliberately stays a plain class (its default `object.__repr__` shows no
 field values, so an accidental `repr(settings)` can never leak
-`LLM_API_KEY` / `CJ_MCP_TOKEN` / `ETSY_API_KEY`).
+`LLM_API_KEY` / `CJ_MCP_TOKEN`).
 """
 
 import os
@@ -81,9 +81,6 @@ class Settings:
         self.CJ_MCP_BASE_URL: str = (
             os.getenv("CJ_MCP_BASE_URL") or DEFAULT_CJ_MCP_BASE_URL
         )
-        # Etsy Open API v3 key (src/extractors/etsy_api.py).
-        self.ETSY_API_KEY: str = os.getenv("ETSY_API_KEY") or ""
-
         # --- AliExpress Dropshipping Center ingestion ---
         # Playwright `storage_state` JSON holding the operator's AliExpress
         # login; injected into the extractor's browser context when the file
@@ -111,7 +108,7 @@ class Settings:
         # narrows the chain. Defaults to CJ's MCP server first (no bot
         # walls, no scraping surface).
         self.SUPPLIER_PRIORITY_ORDER: List[str] = self._parse_supplier_order()
-        # Supplier list prices are quoted in USD on AliExpress/CJ/Etsy by
+        # Supplier list prices are quoted in USD on AliExpress/CJ by
         # default; extractors convert to AUD with this rate so every
         # price_aud / margin figure is a like-for-like AUD number.
         self.USD_TO_AUD: float = _parse_float(os.getenv("USD_TO_AUD"), default=1.55)
@@ -119,6 +116,27 @@ class Settings:
         self.TARGET_COUNTRY: str = os.getenv("TARGET_COUNTRY", "AU")
         self.EXPORT_DIR: str = os.getenv("EXPORT_DIR", DEFAULT_EXPORT_DIR)
         self.USER_AGENT: str = os.getenv("USER_AGENT", DEFAULT_USER_AGENT)
+
+        # CJ commercial gate (plan §6.2). CJ reports no historical-sales
+        # figure on any of its MCP tools, so `listedNum` — how many
+        # dropshippers have imported the listing — is the only demand proof
+        # the gate can read; it is applied to the raw search hits, before any
+        # detail round-trip. 150 is set from the live spike: on real AU
+        # catalogue pages a floor of 20 passed every hit, while 150 keeps the
+        # widely-listed products and drops the unproven tail.
+        self.MIN_CJ_LISTED_COUNT: int = _parse_int(
+            os.getenv("MIN_CJ_LISTED_COUNT"), default=150
+        )
+
+        # Which CJ shipping method to cost against, by its own name (e.g.
+        # "CJPacket Eub"). Blank selects the cheapest method the freight quote
+        # offers, which is the usual intent; a pin is for when the operator
+        # wants the cost basis tied to a specific service. A pin the quote
+        # does not offer logs and falls back to the cheapest rather than
+        # dropping the product.
+        self.CJ_FREIGHT_METHOD: str = (
+            os.getenv("CJ_FREIGHT_METHOD") or ""
+        ).strip()
 
         # The CJ MCP extractor fetches full galleries per product via the
         # sku-detail tool; this caps how many products one keyword expands to.
@@ -146,8 +164,10 @@ class Settings:
         raw = os.getenv("SUPPLIER_PRIORITY_ORDER")
         if not raw or not raw.strip():
             # CJ's official MCP server first (no anti-bot surface), then the
-            # AliExpress Dropshipping Center, then Etsy (needs a key).
-            return ["cjdropshipping", "aliexpress", "etsy"]
+            # AliExpress Dropshipping Center. A stale key that names no
+            # registered extractor is skipped with a warning by the chain
+            # builder rather than failing the run.
+            return ["cjdropshipping", "aliexpress"]
         return [key.strip().lower() for key in raw.split(",") if key.strip()]
 
 

@@ -86,7 +86,6 @@ def _final() -> ProductCandidateEvaluation:
         marketing_ad_copy="Tame the cable snake.",
         saturation_risk="LOW",
         target_tags=["dropship", "workspace"],
-        shipping_notice_au="7-12 business days",
         key_features=["Modular segments", "Steel base", "Under-desk mount"],
     )
     return ProductCandidateEvaluation.from_raw(provisional, _raw_product())
@@ -165,7 +164,6 @@ async def test_non_accept_candidates_are_skipped_without_downloads(tmp_path):
         marketing_ad_copy="",
         saturation_risk="HIGH",
         target_tags=["ignored"],
-        shipping_notice_au="z",
         key_features=[],
     )
     rejected = ProductCandidateEvaluation.from_raw(provisional, _raw_product())
@@ -241,7 +239,6 @@ async def test_fresh_url_still_exports_next_to_a_duplicate(tmp_path):
         marketing_ad_copy="Buy it.",
         saturation_risk="LOW",
         target_tags=["dropship"],
-        shipping_notice_au="7-12 business days",
         key_features=["A", "B", "C"],
     )
     fresh_final = ProductCandidateEvaluation.from_raw(provisional, fresh_raw)
@@ -372,7 +369,6 @@ async def test_one_broken_candidate_does_not_abort_the_batch(tmp_path):
         marketing_ad_copy="Buy it.",
         saturation_risk="MEDIUM",
         target_tags=["dropship"],
-        shipping_notice_au="7-12 business days",
         key_features=["A", "B", "C"],
     )
     second_final = ProductCandidateEvaluation.from_raw(provisional, second_raw)
