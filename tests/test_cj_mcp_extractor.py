@@ -10,6 +10,7 @@ extractor taxonomy. Zero network.
 
 import pytest
 
+from src.config import settings
 from src.extractors.base import (
     ExtractorBlockedException,
     ExtractorNotConfiguredError,
@@ -32,9 +33,14 @@ _GALLERY = [
 ]
 
 
-def _search_hit(pid=_PID, title="Kitchen Sink Caddy Organiser"):
-    """A search hit shaped like CJ's real search_products record."""
-    return {
+def _search_hit(pid=_PID, title="Kitchen Sink Caddy Organiser", listed=500):
+    """A search hit shaped like CJ's real search_products record.
+
+    `listedNum` is carried because it is the CJ commercial gate's only
+    metric — the same record the live catalogue returns. `listed=None`
+    models a payload that reports no listing count at all.
+    """
+    hit = {
         "id": pid,
         "nameEn": title,
         "sku": "CJCF292182201AZ",
@@ -43,6 +49,9 @@ def _search_hit(pid=_PID, title="Kitchen Sink Caddy Organiser"):
         "warehouseInventoryNum": 14092,
         "bigImage": _GALLERY[0],
     }
+    if listed is not None:
+        hit["listedNum"] = listed
+    return hit
 
 
 def _detail_payload(pid=_PID, **overrides):
@@ -369,6 +378,99 @@ async def test_mixed_hits_keep_only_the_alive_ones():
     )
     products = await CjMcpExtractor(client=client).fetch_products(["k"])
     assert [p.product_title for p in products] == ["Kitchen Sink Caddy Organiser"]
+
+
+# ----------------------------------------------------------------------
+# CJ commercial "winning product" gate (plan §6.2)
+# ----------------------------------------------------------------------
+
+
+def _gate_extractor(client):
+    return CjMcpExtractor(client=client)
+
+
+def test_a_proven_listing_passes_the_commercial_gate():
+    extractor = _gate_extractor(FakeMcpClient())
+    assert extractor._passes_winner_gate(_PID, _search_hit(listed=150)) is True
+    assert extractor._passes_winner_gate(_PID, _search_hit(listed=4175)) is True
+
+
+def test_low_list_count_is_dropped_with_the_documented_log(caplog):
+    extractor = _gate_extractor(FakeMcpClient())
+    with caplog.at_level("WARNING"):
+        passed = extractor._passes_winner_gate(_PID, _search_hit(listed=120))
+    assert passed is False
+    assert f"Skipping {_PID}: Insufficient CJ list count (120)" in caplog.text
+
+
+def test_unreported_list_count_is_dropped_as_unproven(caplog):
+    # Inverted tolerance: a hit that reports no listing count is unproven,
+    # not "unverifiable but probably fine".
+    extractor = _gate_extractor(FakeMcpClient())
+    with caplog.at_level("WARNING"):
+        passed = extractor._passes_winner_gate(_PID, _search_hit(listed=None))
+    assert passed is False
+    assert (
+        f"Skipping {_PID}: Insufficient CJ list count (unavailable)"
+        in caplog.text
+    )
+
+
+def test_the_gate_reads_the_configured_floor(monkeypatch):
+    extractor = _gate_extractor(FakeMcpClient())
+    monkeypatch.setattr(settings, "MIN_CJ_LISTED_COUNT", 2000)
+    assert extractor._passes_winner_gate(_PID, _search_hit(listed=1500)) is False
+    monkeypatch.setattr(settings, "MIN_CJ_LISTED_COUNT", 10)
+    assert extractor._passes_winner_gate(_PID, _search_hit(listed=15)) is True
+
+
+async def test_commercial_gate_runs_before_the_detail_call():
+    # A commercially unproven hit must cost nothing — no detail round-trip
+    # is spent on a listing the gate already rejected.
+    weak_pid, good_pid = "333", "444"
+    client = FakeMcpClient(
+        hits=[
+            _search_hit(pid=weak_pid, title="Weak", listed=20),
+            _search_hit(pid=good_pid, title="Strong", listed=900),
+        ],
+        details={good_pid: _detail_payload(pid=good_pid, productNameEn="Strong")},
+    )
+    products = await _gate_extractor(client).fetch_products(["k"])
+
+    assert [p.product_title for p in products] == ["Strong"]
+    assert client.detail_calls == [good_pid]
+
+
+async def test_hits_are_ranked_by_list_count_descending():
+    # Survivors are expanded strongest-first, so the LLM meets the most
+    # widely listed products before the target count fills.
+    ranked = [("111", 200), ("222", 4175), ("333", 900)]
+    client = FakeMcpClient(
+        hits=[
+            _search_hit(pid=pid, title=f"T{pid}", listed=listed)
+            for pid, listed in ranked
+        ],
+        details={
+            pid: _detail_payload(pid=pid, productNameEn=f"T{pid}")
+            for pid, _ in ranked
+        },
+    )
+    products = await _gate_extractor(client).fetch_products(["k"])
+
+    assert [p.product_title for p in products] == ["T222", "T333", "T111"]
+    assert client.detail_calls == ["222", "333", "111"]
+
+
+async def test_the_gate_applies_to_every_keyword():
+    # Each keyword's page is gated and ranked independently, so a run over
+    # two keywords still yields a candidate per keyword.
+    client = FakeMcpClient(
+        hits=[_search_hit()], details={_PID: _detail_payload()}
+    )
+    products = await _gate_extractor(client).fetch_products(["alpha", "beta"])
+
+    assert [call[0] for call in client.search_calls] == ["alpha", "beta"]
+    assert len(products) == 2
 
 
 # ----------------------------------------------------------------------

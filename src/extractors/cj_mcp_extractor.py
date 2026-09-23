@@ -11,13 +11,19 @@ Per keyword the extractor:
 1. runs the discovered product-search tool with the target keyword, the
    China warehouse filter, and an inventory-available filter (result cap:
    `settings.CJ_MAX_PRODUCTS_PER_KEYWORD`);
-2. expands each shortlisted hit through the product-detail tool to obtain
+2. puts the returned hits through the **CJ commercial gate**
+   (`_passes_winner_gate`) — the dropshipper listing count is the only
+   demand metric CJ reports, so a hit below `MIN_CJ_LISTED_COUNT`, or one
+   that does not report a count at all, is dropped here, before it can cost
+   a detail round-trip; survivors are ranked by list count descending
+   (§6.2);
+3. expands each shortlisted hit through the product-detail tool to obtain
    pricing, variants, the full `productImageSet` gallery, and the
    description;
-3. puts the merged payload through the **MCP Payload Liveness Gate**
+4. puts the merged payload through the **MCP Payload Liveness Gate**
    (`is_mcp_payload_live`) — a delisted, out-of-stock, or
    ambiguous-liveness payload is dropped immediately and logged at INFO;
-4. maps the survivors to `RawSupplierProduct` with the canonical
+5. maps the survivors to `RawSupplierProduct` with the canonical
    `https://cjdropshipping.com/product/{pid}.html` PDP URL, the listed USD
    price converted by `settings.USD_TO_AUD`, an HTML-stripped description,
    and >= 3 distinct CDN gallery URLs.
@@ -55,6 +61,7 @@ from src.pipeline.cj_mcp_client import (
     CjMcpToolError,
     extract_description,
     extract_gallery,
+    extract_listed_count,
     extract_pid,
     extract_price_usd,
     extract_product_url,
@@ -118,7 +125,7 @@ class CjMcpExtractor(BaseSupplierExtractor):
             async with client:
                 for keyword in keywords:
                     hits = await self._search(client, keyword, country)
-                    for hit in hits:
+                    for hit in self._gate_hits(hits):
                         try:
                             products.append(
                                 await self._build_product(hit, client, country)
@@ -162,6 +169,58 @@ class CjMcpExtractor(BaseSupplierExtractor):
             global_warehouse=True,
             inventory_available=True,
         )
+
+    def _gate_hits(self, hits: List[dict]) -> List[dict]:
+        """Apply the commercial gate to a keyword's hits and rank survivors.
+
+        Runs on the raw search hits, before any detail round-trip, so an
+        unproven seller costs nothing. Survivors are sorted by listing count
+        descending so the detail expansion and the LLM see the most widely
+        validated products first.
+
+        The pool is the search page the tool already returned (capped at
+        `CJ_MAX_PRODUCTS_PER_KEYWORD`) ranked by CJ's own undocumented
+        ordering, so this re-ranks *that page* — it does not re-rank CJ's
+        catalogue.
+        """
+        survivors = [
+            hit
+            for hit in hits
+            if isinstance(hit, dict)
+            and self._passes_winner_gate(extract_pid(hit) or "<unknown>", hit)
+        ]
+        # Every survivor carries a count (the gate rejects unreported ones),
+        # so the sort key is total even though it is written defensively.
+        survivors.sort(key=lambda hit: extract_listed_count(hit) or 0, reverse=True)
+        return survivors
+
+    def _passes_winner_gate(self, item_id: str, hit: dict) -> bool:
+        """The CJ quantitative "winning product" gate (plan §6.2).
+
+        Mirrors the AliExpress extractor's gate of the same name, but is
+        single-metric by necessity: CJ's MCP surface reports no
+        historical-sales figure under any name, so the dropshipper listing
+        count is the only commercial proof available. A hit that does not
+        report one is unproven and dropped — the same inverted tolerance
+        `is_mcp_payload_live` applies to stock, and a verdict that is
+        deliberately separate from liveness (see §5.0: `listedNum` cannot
+        settle whether a listing is still live).
+        """
+        listed = extract_listed_count(hit)
+        if listed is None:
+            logger.warning(
+                "Skipping %s: Insufficient CJ list count (unavailable)",
+                item_id,
+            )
+            return False
+        if listed < settings.MIN_CJ_LISTED_COUNT:
+            logger.warning(
+                "Skipping %s: Insufficient CJ list count (%d)",
+                item_id,
+                listed,
+            )
+            return False
+        return True
 
     async def _build_product(
         self, hit: dict, client: Any, country: str

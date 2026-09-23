@@ -212,6 +212,18 @@ def test_min_ds_rating_env_override_is_respected(monkeypatch):
     assert load_settings().MIN_DS_RATING == 4.8
 
 
+def test_min_cj_listed_count_defaults_to_one_hundred_and_fifty(monkeypatch):
+    # Raised from the original 20 after the live payload spike: on real AU
+    # catalogue pages a floor of 20 passed every hit, so it filtered nothing.
+    monkeypatch.delenv("MIN_CJ_LISTED_COUNT", raising=False)
+    assert load_settings().MIN_CJ_LISTED_COUNT == 150
+
+
+def test_min_cj_listed_count_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("MIN_CJ_LISTED_COUNT", "400")
+    assert load_settings().MIN_CJ_LISTED_COUNT == 400
+
+
 def test_min_markup_multiplier_defaults_to_the_relaxed_floor(monkeypatch):
     # Relaxed from the original 3.0x so realistic AU pricing against a real
     # DS Center cost is not auto-rejected downstream.

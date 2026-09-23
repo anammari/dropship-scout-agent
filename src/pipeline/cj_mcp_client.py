@@ -204,6 +204,18 @@ _PRICE_KEYS: Tuple[str, ...] = (
     "priceUsd", "price_usd", "variantSellPrice", "variant_sell_price",
     "wholesalePrice", "wholesale_price", "minPrice", "min_price",
 )
+# Commercial demand vocabulary (plan §6.2). `listedNum` is how many
+# dropshippers have imported the listing, and it is the *only* demand metric
+# CJ's MCP surface reports: probed live across `search_products` and
+# `get_product_detail`, no historical-sales field exists under any name
+# (`sellNum`, `sales`, `soldNum`, `orderNum`, …), and none of the 62
+# advertised tools carries one. Both records do carry `listedNum`. Note
+# `variantVolume` is NOT sales — it is the variant's volumetric freight
+# dimension in mm³.
+_LISTED_COUNT_KEYS: Tuple[str, ...] = (
+    "listedNum", "listed_num", "listNum", "list_num", "listedCount",
+    "listed_count", "importNum", "import_num",
+)
 
 # ---------------------------------------------------------------------------
 # MCP Payload Liveness Gate field vocabulary (plan §5.2)
@@ -1260,6 +1272,21 @@ def extract_description(payload: Mapping) -> str:
 def extract_price_usd(payload: Mapping) -> Optional[float]:
     """The listed USD unit price (low end of a quoted range)."""
     return _coerce_price(_first_present(payload, _PRICE_KEYS))
+
+
+def extract_listed_count(payload: Mapping) -> Optional[int]:
+    """How many dropshippers have imported this listing, or None.
+
+    The CJ commercial gate's only metric (plan §6.2): CJ's MCP surface
+    reports no historical-sales figure under any name, so the dropshipper
+    listing count stands in as proof that the item is already being sold
+    elsewhere. None means the payload did not report one — unproven, which
+    the gate drops rather than treats as a pass.
+    """
+    number = _as_number(_first_present(payload, _LISTED_COUNT_KEYS))
+    if number is None:
+        return None
+    return int(number)
 
 
 def _image_url_from_entry(entry: Any) -> Optional[str]:

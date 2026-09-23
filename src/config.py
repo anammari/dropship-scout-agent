@@ -120,6 +120,17 @@ class Settings:
         self.EXPORT_DIR: str = os.getenv("EXPORT_DIR", DEFAULT_EXPORT_DIR)
         self.USER_AGENT: str = os.getenv("USER_AGENT", DEFAULT_USER_AGENT)
 
+        # CJ commercial gate (plan §6.2). CJ reports no historical-sales
+        # figure on any of its MCP tools, so `listedNum` — how many
+        # dropshippers have imported the listing — is the only demand proof
+        # the gate can read; it is applied to the raw search hits, before any
+        # detail round-trip. 150 is set from the live spike: on real AU
+        # catalogue pages a floor of 20 passed every hit, while 150 keeps the
+        # widely-listed products and drops the unproven tail.
+        self.MIN_CJ_LISTED_COUNT: int = _parse_int(
+            os.getenv("MIN_CJ_LISTED_COUNT"), default=150
+        )
+
         # The CJ MCP extractor fetches full galleries per product via the
         # sku-detail tool; this caps how many products one keyword expands to.
         self.CJ_MAX_PRODUCTS_PER_KEYWORD: int = _parse_int(

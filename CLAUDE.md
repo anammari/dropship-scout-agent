@@ -111,7 +111,7 @@ dropship-scout-agent/
 │   └── main.py              # CLI orchestrator, funnel counters, exit codes
 ├── scripts/
 │   └── generate_ali_session.py  # optional saved DS Center login (§6)
-└── tests/                   # 308 hermetic tests, zero network (9 modules + conftest)
+└── tests/                   # 317 hermetic tests, zero network (9 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -186,7 +186,9 @@ usable price, ≥ 3 gallery URLs).
   tool catalog via `tools/list`, then per keyword runs the product-search
   tool with the China-warehouse mapping (`isWarehouse=true`,
   `countryCode=CN`) plus the inventory filter
-  (`startWarehouseInventory=1`). Each surviving hit is expanded through the
+  (`startWarehouseInventory=1`). The returned hits then pass the **CJ
+  commercial gate** (§6.2) before anything else, so an unproven seller never
+  costs a detail round-trip. Each surviving hit is expanded through the
   **product-detail** tool (`get_product_detail`), the liveness
   gate runs, the gallery comes from `productImageSet`, the description is
   HTML-stripped, and `price_aud = listed USD × USD_TO_AUD`. The PDP link
@@ -244,6 +246,38 @@ not report is treated as unproven and the item is dropped** (logged
 `…(unavailable)` / `…Rating unavailable`) — the same inverted tolerance §5
 applies to unverifiable CJ stock. Survivors are sorted by order volume
 descending, so the target count fills with the strongest sellers first.
+
+### 6.2 CJ COMMERCIAL GATE (CJdropshipping, MANDATORY)
+
+The CJ mirror of §6.1 — same shape (a quantitative pre-LLM gate with
+fail-closed semantics and a descending sort), but **single-metric by
+necessity.** CJ's MCP surface publishes no historical-sales figure at all:
+a live spike of `search_products` and `get_product_detail` found no
+`sellNum` / `sales` / `soldNum` / `orderNum` under any name, and none of the
+62 advertised tools carries one (the order tools report the *operator's own*
+orders, not market demand). `variantVolume` is a decoy — it is the variant's
+volumetric freight dimension in mm³, never a sales figure.
+
+The dropshipper listing count is therefore the only demand proof available:
+
+| Config | Default | Drop behaviour |
+|---|---|---|
+| `MIN_CJ_LISTED_COUNT` | `150` | logs `Skipping <ID>: Insufficient CJ list count (<count>)` |
+
+`listedNum` arrives as a plain integer on the search hit, so the gate runs on
+the raw hits **before** the `get_product_detail` expansion. A hit that does
+not report a count is unproven and dropped (logged `…(unavailable)`), per the
+same inverted tolerance §5 applies to stock. Survivors are sorted by listing
+count descending, so the detail expansion and the LLM meet the most widely
+listed products first. The pool is the search page CJ already returned
+(capped at `CJ_MAX_PRODUCTS`), so this re-ranks that page, not CJ's
+catalogue.
+
+**This is a commercial verdict, not a liveness one.** `listedNum` cannot
+settle whether a listing is still live — §5.0 records exactly that: dead and
+live REST payloads were indistinguishable on this and every other field. A
+hit that clears this gate must still pass the §5 liveness gate, which remains
+the sole arbiter of availability.
 
 ## 7. IMAGE SOURCING (`src/pipeline/image_sourcing.py`)
 
@@ -376,6 +410,7 @@ requiring a login for the MTOP calls in §6.
 | `LLM_MODEL` | `deepseek-v4-flash:cloud` | llm_filter |
 | `SUPPLIER_PRIORITY_ORDER` | `cjdropshipping,aliexpress,etsy` | extractor chain |
 | `USD_TO_AUD` | `1.55` | all USD→AUD price math |
+| `MIN_CJ_LISTED_COUNT` | `150` | CJ commercial gate (minimum `listedNum`; CJ reports no sales figure) |
 | `CJ_MAX_PRODUCTS` | `10` | products expanded per CJ keyword (MCP search cap) |
 | `MIN_MARKUP_MULTIPLIER` | `2.5` | margin floor (markup leg), llm_filter + models |
 | `MIN_MARGIN_AUD` | `20.0` | margin floor (gross-profit leg), llm_filter + models |
@@ -392,7 +427,7 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 308
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 317
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes).
 - `tests/test_aliexpress_ds.py` covers the payload decoding (plain and
@@ -407,6 +442,15 @@ only in `.env` / the real environment.
   pipeline run exported one package at a real DS cost of **AUD 3.86** and the
   other candidate was REJECTed by the LLM at 2.01x markup — the realistic-AU
   pricing rule of §3 doing its job.
+- **CJ payload spike (2026-09-23, read-only):** `garlic grater` → 10 search
+  hits and `kitchen gadgets` → 10 hits, the first expanded once through
+  `get_product_detail`, confirm `listedNum` is present and numeric on 10/10
+  hits on both records (observed 15–1071 and 440–4175 respectively), while
+  every candidate sales key (`sellNum`, `sellCount`, `sales`, `soldNum`,
+  `soldCount`, `orderNum`, `importNum`) is absent from both. At
+  `MIN_CJ_LISTED_COUNT=20` every hit on both keywords passed — the gate
+  filtered nothing, which is why the default is 150 (§6.2); at 150 the
+  weakest `garlic grater` hit (15) drops and the remaining nine survive.
 - Python 3.13 venv at `.venv/`; install with `pip install -e ".[dev]"`;
   Playwright Chromium: `python -m playwright install chromium` (used by the
   AliExpress DS Center calls and the PDP gallery harvest).
