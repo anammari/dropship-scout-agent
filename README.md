@@ -10,7 +10,7 @@ the Shopify store workspace.
 
 ```
 [Supplier extractors — SUPPLIER_PRIORITY_ORDER chain]
-  CJdropshipping MCP → AliExpress via Apify → Etsy Open API v3
+  CJdropshipping MCP → AliExpress Dropshipping Center → Etsy Open API v3
             │  (CJ hits must pass the MCP Payload Liveness Gate)
             ▼
 ┌──────────────────────────────────────┐
@@ -68,9 +68,10 @@ the Shopify store workspace.
 - **Python 3.13** via Homebrew (`brew install python@3.13`; the project requires
   ≥ 3.11, and 3.13 is the version the shipped `.venv` was built with)
 - A configured **Ollama Cloud** account (the LLM evaluation endpoint)
-- At least one supplier credential: `CJ_MCP_TOKEN` (primary), `APIFY_API_TOKEN`
-  (AliExpress), or `ETSY_API_KEY`
-- Internet access to `cjdropshipping.com`, `apify.com`, `openapi.etsy.com`,
+- At least one supplier credential: `CJ_MCP_TOKEN` (primary) or `ETSY_API_KEY`.
+  The AliExpress Dropshipping Center engine needs no credential — it reads the
+  DS Center's own APIs anonymously.
+- Internet access to `cjdropshipping.com`, `aliexpress.com`, `openapi.etsy.com`,
   `ollama.com`, and supplier CDN hosts (`cdn.alibabaimg.com`, etc.)
 
 ### 1.2 Create and activate the virtual environment
@@ -104,8 +105,8 @@ Dependencies are pinned to the versions verified working together (see
 python -m playwright install chromium
 ```
 
-Chromium is used only for the AliExpress PDP gallery harvest (upgrading thin
-actor results to full carousel galleries) — the CJ (MCP) and Etsy (Open API)
+Chromium is used only by the AliExpress Dropshipping Center engine (its MTOP
+calls and its per-item PDP gallery harvest) — the CJ (MCP) and Etsy (Open API)
 engines never open a browser.
 
 ### 1.5 Configure `.env`
@@ -129,10 +130,12 @@ LLM_BASE_URL="https://ollama.com/v1"
 LLM_API_KEY="your_ollama_cloud_api_token"
 LLM_MODEL="deepseek-v4-flash:cloud"
 
-# AliExpress extractor (optional; fallback engine in the chain).
-# The actor must be pay-per-result — free-tier credit cannot pay a rental.
-APIFY_API_TOKEN=your_api_token_here
-APIFY_ACTOR_ID=cryptosignals/aliexpress-scraper
+# AliExpress Dropshipping Center engine (optional; fallback in the chain).
+# No credential needed — the DS Center answers these calls anonymously.
+#ALI_DS_STATE_PATH="ali_ds_state.json"
+#ALI_DS_MAX_PRODUCTS="20"
+#MIN_DS_ORDER_COUNT="500"
+#MIN_DS_RATING="4.5"
 
 # Etsy extractor (optional; fallback engine in the chain)
 ETSY_API_KEY=""
@@ -140,6 +143,7 @@ ETSY_API_KEY=""
 # Optional tunables (defaults shown)
 TARGET_COUNTRY=AU
 USD_TO_AUD=1.55
+MIN_CJ_LISTED_COUNT=150
 CJ_MAX_PRODUCTS=10
 EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates
 ```
@@ -151,18 +155,20 @@ EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates
 | `LLM_BASE_URL` | ✅ | OpenAI-compatible chat-completions endpoint (Ollama Cloud: `https://ollama.com/v1`) |
 | `LLM_API_KEY` | ✅ | Ollama Cloud API token |
 | `LLM_MODEL` | — | Defaults to `deepseek-v4-flash:cloud` |
-| `APIFY_API_TOKEN` | for the AliExpress engine | Managed AliExpress scraper actor |
-| `APIFY_ACTOR_ID` | — | Defaults to `cryptosignals/aliexpress-scraper` (pay-per-result; never a rental actor) |
-| `APIFY_MAX_ITEMS` | — | Listings fetched per AliExpress keyword run (default `20`) |
-| `APIFY_MAX_ITEMS_PER_RUN` | — | Hard item cap per run — the budget guard (default `100`) |
-| `APIFY_PRICE_PER_RESULT_USD` | — | Per-result price for the cost estimate (default `0.005`) |
-| `APIFY_RUN_TIMEOUT_SECS` | — | Apify run wait bound (default `60`) |
+| `ALI_DS_STATE_PATH` | — | Optional saved AliExpress login (`storage_state`), injected only when the file exists; the DS Center answers anonymously, so it is never required. Refresh with `python scripts/generate_ali_session.py` |
+| `ALI_DS_MAX_PRODUCTS` | — | DS Center search page size / per-keyword expansion cap (default `20`) |
+| `MIN_DS_ORDER_COUNT` | — | AliExpress winning-product gate: minimum historical orders (default `500`) |
+| `MIN_DS_RATING` | — | AliExpress winning-product gate: minimum rating out of 5 (default `4.5`) |
 | `ETSY_API_KEY` | for the Etsy engine | Etsy Open API v3 key |
 | `SUPPLIER_PRIORITY_ORDER` | — | Comma-separated chain order (default `cjdropshipping,aliexpress,etsy`) |
 | `USD_TO_AUD` | — | USD→AUD rate for all price math (default `1.55`) |
+| `MIN_CJ_LISTED_COUNT` | — | CJ commercial gate: minimum dropshipper listing count (`listedNum`). CJ publishes no historical-sales figure on any tool, so this is the gate's only metric (default `150`) |
 | `CJ_MAX_PRODUCTS` | — | CJ products expanded (detail + gallery) per keyword (default `10`) |
-| `TARGET_COUNTRY` | — | Extraction/evaluation target (default `AU`); also the AliExpress actor's shipping-destination `country` input. CJ's MCP search `countryCode` is pinned to the China warehouse (`CN`) instead |
+| `MIN_MARKUP_MULTIPLIER` | — | Margin floor, markup leg: an ACCEPT must clear this **or** `MIN_MARGIN_AUD` against the real landed cost (default `2.5`) |
+| `MIN_MARGIN_AUD` | — | Margin floor, gross-profit leg, in AUD per unit (default `20.0`) |
+| `TARGET_COUNTRY` | — | Extraction/evaluation target (default `AU`); also the AliExpress DS Center's ship-to market, which decides both its catalogue and its quoted price. CJ's MCP search `countryCode` is pinned to the China warehouse (`CN`) instead |
 | `EXPORT_DIR` | — | Destination workspace (defaults to the Shopify path below) |
+| `USER_AGENT` | — | Desktop UA used by CDN downloads and the Playwright PDP gallery harvest |
 
 **Security:** secrets from `.env` are never printed or logged by the agent
 (`Settings` holds a no-leak repr). Keep `.env` out of version control (it is
@@ -310,7 +316,7 @@ dropped and counted, never exported.
 ### 4.1 Batch-sourcing across niches
 
 A single keyword yields a bounded supplier pool (CJ expands `CJ_MAX_PRODUCTS`
-products per keyword; AliExpress fetches `APIFY_MAX_ITEMS` listings), and
+products per keyword; the DS Center fetches `ALI_DS_MAX_PRODUCTS` listings), and
 after the funnel losses (5-point rejections, liveness drops, image
 hard-fails) one keyword realistically yields a handful of packages. Rotate
 **complementary niches** and let the incremental `product-NN` numbering
@@ -370,8 +376,7 @@ compliance.
 
 ### 4.2 Reading the funnel counters
 
-Every run prints a summary with these counters — your first diagnostic, before
-opening any log file:
+Every run prints a summary with these counters — your first diagnostic:
 
 | Counter | Rises when… | What to do |
 |---|---|---|
@@ -383,6 +388,31 @@ opening any log file:
 
 Zero exports prints a `Pipeline Funnel Exhausted` intervention block; fewer
 than target prints a `[PARTIAL]` note but still exits 0.
+
+**Where the log lines go.** No log file is written: `main()` calls
+`logging.basicConfig(level=INFO, format="%(asctime)s %(levelname)s %(name)s:
+%(message)s")` with no handler, so everything goes to **stderr**. Capture a run
+with:
+
+```bash
+python -m src.main --keyword "coffee accessories" --target-count 2 --extractor cjdropshipping 2>&1 | tee run.log
+```
+
+`*.log` is git-ignored, so `run.log` stays local.
+
+**The CJ commercial gate announces itself in that stream** (`CLAUDE.md` §6.2).
+Every gated-out hit logs from `src.extractors.cj_mcp_extractor` at WARNING:
+
+```
+WARNING src.extractors.cj_mcp_extractor: Skipping 2601230843431638300: Insufficient CJ list count (15)
+WARNING src.extractors.cj_mcp_extractor: Skipping <pid>: Insufficient CJ list count (unavailable)
+```
+
+Hits that clear `MIN_CJ_LISTED_COUNT` are the only ones that cost a
+`get_product_detail` call, and they are ranked strongest-first — so the
+candidates reaching the LLM are the highest-`listedNum` slice of that keyword's
+page. To see a keyword's whole threshold distribution *without* spending an LLM
+call or writing a package, run `scripts/verify_cj_gate.py`.
 
 ### 4.3 CJ liveness: the manual verification step (important)
 
@@ -426,12 +456,14 @@ Playbook:
 - `CJ_MCP_TOKEN` issues: re-copy the token from CJdropshipping's API
   Authorization page. It is a static MCP token embedded in the endpoint URL
   as a path segment — there is no access-token cache or refresh.
-- AliExpress blocks: check the Apify token is valid and the account's
-  monthly spend limit (`$5` on the free tier) is not exhausted, and that
-  `APIFY_ACTOR_ID` still points at a pay-per-result actor
-  (`cryptosignals/aliexpress-scraper`); the chain otherwise falls through to
-  the next engine. Note the actor documents that residential proxies give
-  consistent results, which free-tier API runs cannot use.
+- AliExpress blocks: the DS Center needs no credential, so a block is
+  AliExpress refusing this client rather than a config fault. The chain
+  otherwise falls through to the next engine. If the refusal is a
+  session/auth error, the run halts with re-login instructions — re-run
+  `python scripts/generate_ali_session.py`, or delete `ALI_DS_STATE_PATH`
+  and run anonymously again. Keep `TARGET_COUNTRY` on the market you actually
+  sell into: the DS Center quotes prices per ship-to market, and the pin is
+  what keeps the landed cost honest.
 - LLM config: verify `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL` against your
   Ollama Cloud account.
 - CJ MCP rate limits: tool calls return 429-style errors under load — the
@@ -444,13 +476,14 @@ Playbook:
 python -m pytest tests/ -v
 ```
 
-- **292 hermetic tests** across 9 test modules (schema validators incl. the
+- **317 hermetic tests** across 9 test modules (schema validators incl. the
   zero-URL `cogs_estimation_basis` rule and PDP-shape rejection, the MCP
-  Payload Liveness Gate and its wiring in the CJ extractor, the AliExpress
-  actor payload/budget guard/mapping and failure taxonomy against a scripted
-  `apify_client` fake, LLM prompt/reconcile contract, image gates against
-  real PIL-encoded fixtures with mocked httpx, exporter hard-fail rules,
-  orchestrator counters and CLI exit codes) — no network.
+  Payload Liveness Gate and the CJ commercial gate with their wiring in the
+  CJ extractor, the DS Center payload decoding / order-rating gate / currency
+  guard and failure taxonomy against scripted MTOP fakes, LLM
+  prompt/reconcile contract, image gates against real PIL-encoded fixtures
+  with mocked httpx, exporter hard-fail rules, orchestrator counters and CLI
+  exit codes) — no network.
 
 ---
 
@@ -473,13 +506,16 @@ dropship-scout-agent/
 │   │   └── llm_filter.py      # 5-point gate via instructor (no image/supplier fields)
 │   ├── extractors/
 │   │   ├── base.py            # Extractor ABC + block/timeout/not-configured exceptions
-│   │   ├── cj_mcp_extractor.py    # CJdropshipping MCP + liveness gate
-│   │   ├── aliexpress_apify.py    # Apify pay-per-result AliExpress scraper + PDP harvest
+│   │   ├── cj_mcp_extractor.py    # CJdropshipping MCP + commercial gate + liveness gate
+│   │   ├── aliexpress_ds.py       # Native Dropshipping Center ingestion + winner gate
 │   │   └── etsy_api.py            # Etsy Open API v3
 │   └── pipeline/
 │       ├── cj_mcp_client.py   # CJ MCP client (token-in-URL auth, log redaction, liveness gate)
 │       └── image_sourcing.py  # Deterministic supplier-gallery image engine
-└── tests/                     # 292 hermetic tests, zero network
+├── scripts/
+│   ├── generate_ali_session.py  # Optional saved DS Center login
+│   └── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
+└── tests/                     # 317 hermetic tests, zero network
 ```
 
 ---
