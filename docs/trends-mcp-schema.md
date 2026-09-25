@@ -71,6 +71,23 @@ Observations from a live `date="today 5-y"`, `geo="AU"` call (262 weekly points)
   (`https://api.hasdata.com/scrape/google-trends/search/`), so the same data is
   reachable without MCP from Python later if that is preferred.
 
+### Calling it from code — two traps (observed 2026-09-25)
+
+1. **Replies are framed as SSE.** `content-type: text/event-stream`, one JSON
+   message per `data:` line. A client that calls `response.json()` on the raw
+   body fails with `JSONDecodeError: Expecting value: line 1 column 1` — parse
+   the `data:` lines instead.
+2. **Tool-level failures are not HTTP errors.** A rejected call returns
+   **HTTP 200** with `result.isError: true` and the diagnostic as plain text in
+   `content[0].text` (e.g. `MCP error -32602: Input validation error: … Expected
+   number, received string at tz`); the query never runs. Read `isError` before
+   decoding `content[0].text` as JSON, or the real error is masked by a decode
+   failure.
+3. **`tz` is a number, not a string.** `"tz": "600"` is rejected at input
+   validation; `"tz": 600` works.
+
+Measured spend for the Step 2 research pass: 36 successful calls ≈ 180 credits.
+
 ## 3. Apify fallback — `data_xplorer/google-trends-fast-scraper`
 
 The actor is exposed as one dedicated tool, `data_xplorer--google-trends-fast-scraper`
