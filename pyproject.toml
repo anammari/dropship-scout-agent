@@ -41,3 +41,6 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "live: needs the developer's own credentials / real network access — opts out of the credential scrub in tests/conftest.py",
+]
