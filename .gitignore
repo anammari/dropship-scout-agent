@@ -20,8 +20,15 @@ SESSION_CONTEXT.md
 
 # Agent plan prompts — working directives, not deliverables. They live on the
 # operator's machine only (and in the session they came from), so no plan
-# prompt is ever tracked, here or in any future checkout.
+# prompt is ever tracked, here or in any future checkout. The Step 2 product
+# list lives here too: it is scoping input for the keyword-generation LLM, not
+# a repo artefact.
 plans/
+
+# Third-party reference kept for a later phase: the TypeSafe (Jev) API doc.
+# The Jev gate is wired through OpenRouter for now, so this stays a local
+# future reference rather than a tracked file.
+docs/TypeSafe_agent_skill_doc.md
 
 # Test / tooling caches
 .pytest_cache/
