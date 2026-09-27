@@ -111,8 +111,12 @@ dropship-scout-agent/
 │   ├── extractors/
 │   │   ├── base.py          # BaseSupplierExtractor + shared exceptions
 │   │   ├── cj_mcp_extractor.py      # CJdropshipping MCP: commercial gate, liveness gate, freight quote
-│   │   └── aliexpress_ds.py         # native DS Center ingestion + winner gate
-│   ├── evaluators/llm_filter.py     # instructor + ProvisionalProductEvaluation
+│   │   ├── aliexpress_ds.py         # native DS Center ingestion + winner gate
+│   │   └── google_shopping.py        # Step-3 gold-research Apify actor wrapper (§13; NOT a supplier extractor)
+│   ├── evaluators/
+│   │   ├── llm_filter.py    # instructor + ProvisionalProductEvaluation
+│   │   └── gold_curator.py  # Step-3 LLM curation: select-by-url, facts code-assembled (§13)
+│   ├── keywords/            # Step-3 keyword generation engine (gold-list rewrite pending, §13)
 │   ├── pipeline/
 │   │   ├── cj_mcp_client.py # CJ MCP client + MCP Payload Liveness Gate
 │   │   └── image_sourcing.py# deterministic CDN image download/validation
@@ -120,8 +124,10 @@ dropship-scout-agent/
 │   └── main.py              # CLI orchestrator, funnel counters, exit codes
 ├── scripts/
 │   ├── generate_ali_session.py  # optional saved DS Center login (§6)
-│   └── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
-└── tests/                   # 359 hermetic tests, zero network (9 modules + conftest)
+│   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
+│   ├── generate_keywords.py     # Step-3 keyword generator CLI (§13)
+│   └── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
+└── tests/                   # 423 hermetic tests, zero network (12 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -481,6 +487,11 @@ requiring a login for the MTOP calls in §6.
 | `MIN_MARKUP_MULTIPLIER` | `2.5` | margin floor (markup leg), llm_filter + models |
 | `MIN_MARGIN_AUD` | `20.0` | margin floor (gross-profit leg), llm_filter + models |
 | `TARGET_COUNTRY` | `AU` | extraction/evaluation target; also the AliExpress ship-to market |
+| `APIFY_TOKEN` | — | Apify account token: Step-3 gold-research actor (§13); also the trend-research fallback via the Apify MCP (`.mcp.json`) |
+| `APIFY_GS_ACTOR` | `damilo/google-shopping-apify` | Step-3 gold-research actor id (§13) |
+| `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | `10` | Step-3 results requested per keyword (actor `num`; closed set 10/20/30/40/50/100) |
+| `APIFY_GS_MAX_CHARGE_USD` | `7.5` | Step-3 hard USD spend ceiling per actor run, enforced by Apify itself; sized above the observed full-bank envelope (~$5.60) and within the free-tier remainder |
+| `GOLD_PRODUCTS_PATH` | `plans/step-3-gold-standard-products.json` | Step-3 gold-product deliverable (untracked `plans/` tree) |
 | `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads, Playwright PDP harvest |
 
@@ -493,9 +504,17 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 359
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 423
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
-  Playwright/MTOP fakes).
+  Playwright/MTOP fakes + faked Apify SDK / scripted LLM transports).
+- `tests/test_keyword_generator.py` covers the Step-3 keyword engine's
+  batching, salvaging and validation contract; `tests/test_google_shopping.py`
+  covers the Step-3 gold-research scraper (actor input shape incl. the
+  closed-set `num`, spend ceiling riding the run options, run-status
+  taxonomy, row parsing) and the gold curator (facts assembled from rows,
+  invented-URL join drop, pillar/boundary enforcement, dedupe, fenced and
+  truncated-response salvage, the reasoning-model empty-content failure,
+  batching, transport/HTTP/config errors) — see §13.
 - `tests/test_aliexpress_ds.py` covers the payload decoding (plain and
   JSONP), order/rating parsing, the currency guard and AUD conversion, the
   §6.1 gate and each documented drop log, the MTOP priming-then-signed
@@ -580,3 +599,100 @@ only in `.env` / the real environment.
   `ExtractorBlockedException` (the chain moves on) rather than reporting an
   empty funnel, and a session/auth refusal raises
   `DsCenterSessionExpiredError`, which halts with re-login instructions.
+## 13. THE UPDATED MULTI-STEP WINNING-PRODUCT PIPELINE (branch `feature/jev-keyword-gate-multistep-pipeline`)
+
+> Appended as §13 (not renumbered into §5's position) so every existing
+> §5–§12 cross-reference across the repo stays valid. This section covers
+> the gold-kernel pipeline being built **on this branch**; the supplier core
+> (§5–§9) is untouched by it and remains the general intake. The full
+> engineering plan is the (untracked) `plans/updated_multistep_pipeline_implementation_plan.md`.
+
+### 13.1 Overview — gold-kernel intake vs general intake
+
+The updated pipeline produces a **gold kernel**: a small set of
+proven-demand AU retail products (Google Shopping evidence) that drives
+keyword generation, supplier ingestion and Jev ranking, exported to
+`my-store-build/inspiration/optimal-dropship-candidates/{aliexpress,cjdropshipping}/`
+(Step 5, planned). The existing `dropship-candidates/` intake (§8) stays as
+the general flow. **Jev never was a keyword gate** — its role is
+post-ingestion product ranking (Step 6).
+
+| Step | What | Status on this branch |
+|---|---|---|
+| 1 | Google Trends (HasData MCP) research | done (research, `/tmp` scratch — no repo code by design) |
+| 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `plans/step-2-search-keywords.{json,md}` (untracked) |
+| 3 | Apify Google Shopping AU scrape of the Step-2 keywords + LLM curation → gold-standard product list | done — §13.2 |
+| 4 | Reasoning LLM → 50–70 supplier keywords from the gold list | planned — `src/keywords/` rewrite |
+| 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | planned |
+| 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | planned |
+| 7–8 | Human-only: DSers/Zendrop manual supplier search; store curation | no code (deliberately) |
+
+All `plans/` deliverables are **untracked** (scoping data, not repo
+artifacts).
+
+### 13.2 Step 3 — gold-standard product research (implemented)
+
+```bash
+source .venv/bin/activate && python scripts/run_gold_standard_research.py \
+    [--limit 2] [--num 10] [--dump-raw /tmp/step3_raw_rows.json] \
+    [--from-raw /tmp/step3_raw_rows.json] \
+    [--output plans/step-3-gold-standard-products.json]
+```
+
+- **Scrape** (`src/extractors/google_shopping.py`): ONE batched run of the
+  `damilo/google-shopping-apify` actor (pay-per-result, ~$3.50/1,000
+  results) carries every keyword (`queries` input), `country="au"`,
+  `max_pages=1`. Spend is governed three ways: the actor's closed-set `num`
+  is validated before any money moves; a hard `max_total_charge_usd`
+  ceiling (`APIFY_GS_MAX_CHARGE_USD`) rides the run options and is enforced
+  by Apify itself; `--limit N` pilots on the first N keywords. It is
+  **extractor-shaped but deliberately NOT a `BaseSupplierExtractor`**: these
+  are marketplace retail listings with no supplier PDP, freight quote or
+  gallery, so they can never become `RawSupplierProduct` without fabricating
+  sourcing fields — the module is never registered in the extractor chain.
+- **Curate** (`src/evaluators/gold_curator.py`): the reasoning LLM only
+  **selects by verbatim `url`** and annotates `pillar` /
+  `compliance_note` / `unit_economics_note` (one of
+  `curated_home`/`self_care_rituals`/`other`, strict no-cosmetics /
+  no-consumable / no-IP boundaries). Every product fact (name, price,
+  merchant, demand evidence, keyword) is **code-assembled from the scraped
+  rows** — a hallucinated or edited url can never become a product (dropped
+  at the code-side join). Demand evidence comes from the row's
+  rating/reviewCount or is honestly `not_available_from_source` (the actor
+  publishes no purchased-recently KPI).
+- **Deliverable**: `plans/step-3-gold-standard-products.json` (+ `.md`
+  digest) — the reference set Steps 4 and 6 measure against. The runner
+  prints the planned spend envelope before the first call, exits non-zero
+  when nothing usable comes back, and `--from-raw` replays curation over a
+  prior `--dump-raw` dump at **zero Apify spend** (the debugging path).
+- **Pacing:** the curation batches at `ROWS_PER_CALL=10` rows per LLM call
+  — the configured model is a *reasoning* model whose chain-of-thought
+  shares the completion budget with the answer, and a larger batch makes it
+  spend the whole `max_tokens` budget thinking and return empty `content`
+  with `finish_reason="length"` (observed live at 60 rows / 8,000 tokens;
+  the empty-content error names the finish reason explicitly). A full
+  40-keyword run (~1,600 rows) is therefore ~160 reasoning LLM calls —
+  roughly 1–2 hours of curation after the scrape. That is the pacing, not
+  a hang; the batch size buys reliability, not speed.
+
+### 13.3 Step-3 live evidence (2026-09-28, pilot: `--limit 2`, 2 keywords)
+
+- Actor input validation is real: `num` accepts ONLY
+  10/20/30/40/50/100 — anything else fails the run before spending.
+- The actor returns a **full first SERP page per keyword (~40 rows) even at
+  `num=10`** — `num` is not a per-keyword cap on this actor. The honest
+  spend envelope is keywords × ~40 rows (~$0.14/keyword at
+  $0.0035/result); the pilot's 2 keywords returned 80 rows (~$0.28).
+- **The `link` field carries Google Shopping SEARCH urls**
+  (`google.com/search?ibp=oshop&…`), not merchant PDP urls — the actor
+  README's merchant-style example link is misleading. The url is therefore
+  a stable row identity for the anti-hallucination join and resolves to the
+  listing on Google, not the merchant's page.
+- End-to-end (rows cached via `--dump-raw`, then curated via `--from-raw`
+  at zero credit): 80 rows → 24 gold products, every product url verified
+  verbatim against the scraped rows. The first curation attempt failed
+  because the 60-row batch exhausted the reasoning budget (empty content,
+  `finish_reason="length"`); the fix — 10 rows/call + `MAX_TOKENS=16000` —
+  is covered by hermetic tests.
+- The full 40-keyword production run (~$5.60 envelope, under the free-tier
+  remainder) is deliberately **deferred until the operator's go**.
