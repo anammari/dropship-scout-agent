@@ -9,6 +9,12 @@ deliverable (name, url, price, merchant, demand evidence, keyword
 attribution) is assembled by code from the verbatim scraped rows, so a
 hallucinated or mistyped url can never become a product — it is dropped by
 the code-side join (`curated url has no scraped source row`).
+
+A gold product must carry ON-PAGE demand evidence: rows with neither a
+rating nor a review count are filtered out BEFORE the LLM (operator
+decision 2026-09-28), so `demand_evidence="not_available_from_source"` can
+never reach the deliverable — the Step-2 Trends evidence stays in the
+keyword file where it belongs.
 """
 
 from __future__ import annotations
@@ -163,12 +169,20 @@ def _prompt_row(row: ShoppingRow) -> dict:
 
 
 def _demand_evidence(row: ShoppingRow) -> str:
-    """Code-assembled from the scraped row — the LLM never authors this."""
+    """Code-assembled from the scraped row — the LLM never authors this.
+
+    curate() filters rows with neither KPI out pre-LLM, so the final
+    `not_available_from_source` branch only guards a direct call with a
+    bare row; every product that reaches the deliverable carries at least
+    a rating or a review count.
+    """
     if row.rating is not None and row.rating_count:
         return (
             f"rating {row.rating:g}/5, {row.rating_count} reviews "
             "(Google Shopping AU)"
         )
+    if row.rating is not None:
+        return f"rating {row.rating:g}/5 (review count not reported)"
     if row.rating_count:
         return f"{row.rating_count} reviews (Google Shopping AU)"
     # The actor carries no purchased-recently KPI; say so rather than invent.
@@ -260,21 +274,49 @@ class GoldProductCurator:
         return content
 
     def curate(self, rows: List[ShoppingRow]) -> List[GoldStandardProduct]:
-        """Select + annotate rows into gold-standard products (code-assembled)."""
+        """Select + annotate rows into gold-standard products (code-assembled).
+
+        Rows carrying no rating/review KPI are dropped before the LLM: a gold
+        product must cite on-page demand evidence, so
+        `demand_evidence="not_available_from_source"` can never be emitted.
+        """
         if not rows:
             raise GoldCurationError("no scraped rows to curate")
-        by_url = {row.url.strip(): row for row in rows}
+        # Demand-evidence filter (operator decision 2026-09-28): a row with
+        # neither a rating nor a review count has no verifiable AU demand
+        # signal and is filtered out pre-LLM, saving the reasoning tokens too.
+        demand_rows = [
+            row for row in rows if row.rating is not None or row.rating_count
+        ]
+        dropped_no_kpi = len(rows) - len(demand_rows)
+        if dropped_no_kpi:
+            logger.info(
+                "demand-evidence filter: dropped %d row(s) with no "
+                "rating/review KPI before the LLM", dropped_no_kpi,
+            )
+        if not demand_rows:
+            raise GoldCurationError(
+                "every scraped row lacks rating/review KPIs — no gold "
+                "product could carry on-page demand evidence"
+            )
         products: List[GoldStandardProduct] = []
         seen: set = set()
         dropped_at_join = 0
-        for start in range(0, len(rows), self.rows_per_call):
-            batch = rows[start : start + self.rows_per_call]
+        for start in range(0, len(demand_rows), self.rows_per_call):
+            batch = demand_rows[start : start + self.rows_per_call]
             batch_urls = {row.url.strip(): row for row in batch}
             user_message = USER_TEMPLATE.replace(
                 "{rows_json}",
                 json.dumps([_prompt_row(r) for r in batch], ensure_ascii=False),
             )
-            content = self._call_llm(user_message)
+            # One retry per batch: a ~120-call production run meets the
+            # reasoning model's flaky empty-content mode eventually, and a
+            # single flaky batch must not void the whole run.
+            try:
+                content = self._call_llm(user_message)
+            except GoldCurationError as exc:
+                logger.warning("curation batch failed (%s); retrying once", exc)
+                content = self._call_llm(user_message)
             for raw in _parse_products(content):
                 try:
                     selection = GoldSelection(**raw)
@@ -325,6 +367,8 @@ class GoldProductCurator:
                 dropped_at_join, "y" if dropped_at_join == 1 else "ies",
             )
         logger.info(
-            "curation: %d gold product(s) from %d row(s)", len(products), len(rows)
+            "curation: %d gold product(s) from %d row(s) with demand "
+            "evidence (%d raw row(s), %d filtered pre-LLM)",
+            len(products), len(demand_rows), len(rows), dropped_no_kpi,
         )
         return products

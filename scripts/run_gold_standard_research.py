@@ -9,11 +9,13 @@ by url, it never authors a product fact. Both outputs default under
 `plans/` (git-ignored — scoping data, not repo artefacts).
 
 A run spends real Apify credit AND real LLM tokens. The planned envelope
-(keywords x results/keyword and its cost estimate at the actor's published
-$3.50/1,000-result rate) is printed BEFORE the first call, and a hard USD
-ceiling (`APIFY_GS_MAX_CHARGE_USD`) rides the run options. Use `--limit` to
-pilot: `--limit 2` is ≤ 20 results (~$0.07) — the actor's smallest page is
-10 results per keyword.
+(keywords x ~40 observed rows/keyword and its cost estimate at the actor's
+published $3.50/1,000-result rate) is printed BEFORE the first call, and a
+hard USD ceiling (`APIFY_GS_MAX_CHARGE_USD`) rides the run options. Use
+`--limit` to pilot: the actor returns a full ~40-row SERP page per keyword
+regardless of `num` (observed live 2026-09-28), so `--limit 2` is ~80 rows
+(~$0.28). Curated gold products must carry on-page demand evidence — rows
+with no rating/review KPI are filtered out before the LLM.
 
 Usage (from the repo root):
 

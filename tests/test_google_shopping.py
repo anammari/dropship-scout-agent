@@ -320,11 +320,22 @@ def test_curate_drops_invented_url(caplog):
     assert "no scraped source row" in caplog.text
 
 
-def test_curate_demand_evidence_absent_without_kpis():
-    row = _row(rating=None, rating_count=None)
-    curator = _curator([_selection(row.url)])
-    (product,) = curator.curate([row])
-    assert product.demand_evidence == "not_available_from_source"
+def test_curate_demand_evidence_formats_from_row_kpis():
+    # Every surviving row has at least one KPI (the filter drops bare rows),
+    # and each surviving shape renders its own honest evidence string.
+    rated = _row(rating=4.7, rating_count=1203)
+    rating_only = _row(url="https://shop.example.au/products/r-only",
+                       rating=4.2, rating_count=None)
+    count_only = _row(url="https://shop.example.au/products/c-only",
+                      rating=None, rating_count=88)
+    bodies = [_selection(r.url) for r in (rated, rating_only, count_only)]
+    curator = _curator(bodies, [], rows_per_call=1)
+    products = curator.curate([rated, rating_only, count_only])
+    assert [p.demand_evidence for p in products] == [
+        "rating 4.7/5, 1203 reviews (Google Shopping AU)",
+        "rating 4.2/5 (review count not reported)",
+        "88 reviews (Google Shopping AU)",
+    ]
 
 
 def test_curate_drops_unknown_pillar(caplog):
@@ -429,6 +440,41 @@ def test_curate_empty_rows_raises():
     curator = _curator([_selection("https://x.example/1")])
     with pytest.raises(GoldCurationError, match="no scraped rows"):
         curator.curate([])
+
+
+def test_curate_filters_no_kpi_rows_before_the_llm(caplog):
+    # Operator decision 2026-09-28: a gold product must carry on-page demand
+    # evidence, so rows without any rating/review KPI never reach the LLM.
+    rated = _row()
+    unrated = _row(url="https://shop.example.au/products/no-kpi", rating=None,
+                   rating_count=None)
+    log = []
+    curator = _curator([_selection(rated.url)], log)
+    with caplog.at_level(logging.INFO, logger="src.evaluators.gold_curator"):
+        products = curator.curate([rated, unrated])
+    assert [p.url for p in products] == [rated.url]
+    assert "demand-evidence filter" in caplog.text
+    (payload,) = log  # one batch: the unrated row was never sent to the LLM
+    assert rated.url in payload["messages"][1]["content"]
+    assert unrated.url not in payload["messages"][1]["content"]
+
+
+def test_curate_all_rows_without_demand_evidence_raises():
+    rows = [_row(url=f"https://shop.example.au/products/{i}", rating=None,
+                 rating_count=None) for i in range(2)]
+    curator = _curator(["unused — no LLM call should happen"])
+    with pytest.raises(GoldCurationError, match="demand evidence"):
+        curator.curate(rows)
+
+
+def test_curate_retries_a_failed_batch_once():
+    # A ~120-call production run will eventually meet the reasoning model's
+    # flaky empty-content mode; one flaky batch must not void the whole run.
+    row = _row()
+    log = []
+    curator = _curator(["", _selection(row.url)], log, rows_per_call=1)
+    assert [p.url for p in curator.curate([row])] == [row.url]
+    assert len(log) == 2  # one retry, then success
 
 
 # ---------------------------------------------------------------------------
