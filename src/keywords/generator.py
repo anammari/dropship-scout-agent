@@ -190,8 +190,13 @@ def validate_pool(
     was told to produce is also the pool the code accepts.
     """
     problems: List[str] = []
-    broad_terms = {r["keyword"] for r in rows if r.get("role") == "broad"}
-
+    broad_terms = {
+        str(r.get("keyword"))
+        for r in rows
+        if isinstance(r, dict)
+        and r.get("role") == "broad"
+        and r.get("keyword") is not None
+    }
     for i, row in enumerate(rows):
         missing = [field for field in FIELDS if field not in row]
         if missing:
