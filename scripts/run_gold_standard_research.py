@@ -197,6 +197,7 @@ def main() -> None:
             scraper = GoogleShoppingScraper(results_per_keyword=results_per_keyword)
             rows = scraper.scrape_keywords(keywords)
             if args.dump_raw:
+                args.dump_raw.parent.mkdir(parents=True, exist_ok=True)
                 args.dump_raw.write_text(
                     json.dumps([vars(row) for row in rows], indent=1, ensure_ascii=False)
                 )
