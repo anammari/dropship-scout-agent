@@ -116,7 +116,9 @@ dropship-scout-agent/
 │   ├── evaluators/
 │   │   ├── llm_filter.py    # instructor + ProvisionalProductEvaluation
 │   │   └── gold_curator.py  # Step-3 LLM curation: select-by-url, facts code-assembled (§13)
-│   ├── keywords/            # Step-3 keyword generation engine (gold-list rewrite pending, §13)
+│   ├── keywords/            # Step-4 gold-standard keyword engine (§13.3)
+│   │   ├── gold_keyword_prompt.md  # Step-4 prompt resource ({PRODUCT_TABLE} slot)
+│   │   └── generator.py     # Batched generation + code-side pool validation
 │   ├── pipeline/
 │   │   ├── cj_mcp_client.py # CJ MCP client + MCP Payload Liveness Gate
 │   │   └── image_sourcing.py# deterministic CDN image download/validation
@@ -125,9 +127,9 @@ dropship-scout-agent/
 ├── scripts/
 │   ├── generate_ali_session.py  # optional saved DS Center login (§6)
 │   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
-│   ├── generate_keywords.py     # Step-3 keyword generator CLI (§13)
+│   ├── generate_gold_keywords.py     # Step-4 keyword bank runner (§13.3)
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
-└── tests/                   # 423 hermetic tests, zero network (12 modules + conftest)
+└── tests/                   # 445 hermetic tests, zero network (12 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -492,6 +494,7 @@ requiring a login for the MTOP calls in §6.
 | `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | `10` | Step-3 results requested per keyword (actor `num`; closed set 10/20/30/40/50/100) |
 | `APIFY_GS_MAX_CHARGE_USD` | `7.5` | Step-3 hard USD spend ceiling per actor run, enforced by Apify itself; sized above the observed full-bank envelope (~$5.60) and within the free-tier remainder |
 | `GOLD_PRODUCTS_PATH` | `outputs/step-3-gold-standard-products.json` | Step-3 gold-product deliverable (untracked `outputs/` tree) |
+| `KEYWORD_BANK_PATH` | `outputs/step-4-gold-keywords.json` | Step-4 gold-keyword bank deliverable — Step 5's intake (untracked `outputs/` tree) |
 | `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads, Playwright PDP harvest |
 
@@ -504,11 +507,19 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 423
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 445
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes + faked Apify SDK / scripted LLM transports).
-- `tests/test_keyword_generator.py` covers the Step-3 keyword engine's
-  batching, salvaging and validation contract; `tests/test_google_shopping.py`
+- `tests/test_keyword_generator.py` covers the Step-4 gold-keyword engine:
+  the template prompt (the product table is a `{PRODUCT_TABLE}` slot, never
+  a hardcoded list), the table rendering (cells verbatim, `null` → `—`), the
+  gold-deliverable read with its remediation errors, the demand-ranked
+  selection with the boundary-name exclusion, the adaptive per-product
+  target and floor, batching with the per-batch note, the merged-pool
+  validation contract (broad/modifier pairing, banned tokens, band,
+  coverage, floor), the duplicate collapse, and salvaging; it uses a tmp_path
+  gold fixture and never reads the real `outputs/` tree — see §13.3.
+  `tests/test_google_shopping.py`
   covers the Step-3 gold-research scraper (actor input shape incl. the
   closed-set `num`, spend ceiling riding the run options, run-status
   taxonomy, row parsing) and the gold curator (facts assembled from rows,
@@ -628,7 +639,7 @@ post-ingestion product ranking (Step 6).
 | 1 | Google Trends (HasData MCP) research | done (research, `/tmp` scratch — no repo code by design). The Apify fallback `data_xplorer/google-trends-fast-scraper` ($2.00/1,000) was not needed — HasData stayed healthy |
 | 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `outputs/step-2-search-keywords.{json,md}` (untracked) |
 | 3 | Apify Google Shopping AU scrape of the Step-2 keywords + LLM curation → gold-standard product list | done — §13.2 |
-| 4 | Reasoning LLM → 50–70 supplier keywords from the gold list | planned — `src/keywords/` rewrite |
+| 4 | Reasoning LLM → 50–70 supplier keywords from the gold list | done — §13.3 |
 | 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | planned |
 | 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | planned |
 | 7–8 | Human-only: DSers/Zendrop manual supplier search; store curation | no code (deliberately) |
@@ -636,9 +647,10 @@ post-ingestion product ranking (Step 6).
 All production deliverables live under `outputs/` — **untracked**
 (gitignored; scoping data, not repo artefacts). `plans/` now holds only
 the engineering/spec documents (the updated-pipeline plan and its
-predecessors). Future Steps 4–6 write their deliverables (keyword bank,
-ingestion results, Jev rankings) to `outputs/step-N-*` names in the same
-gitignored tree.
+predecessors). Future Steps 5–6 write their deliverables (ingestion results,
+Jev rankings) to `outputs/step-N-*` names in the same gitignored tree, as
+Step 4's keyword bank already does
+(`outputs/step-4-gold-keywords.{json,md}`).
 
 ### 13.2 Step 3 — gold-standard product research (implemented)
 
@@ -691,7 +703,71 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   model's flaky empty-content mode so a single flaky batch cannot void the
   run.
 
-### 13.3 Step-3 live evidence (2026-09-28)
+### 13.3 Step 4 — gold-standard keyword bank (implemented)
+
+```bash
+source .venv/bin/activate && python scripts/generate_gold_keywords.py \
+    [--gold-products outputs/step-3-gold-standard-products.json] \
+    [--batch-size 4] [--max-products 12] \
+    [--output outputs/step-4-gold-keywords.json] [--markdown …]
+```
+
+Turns the Step-3 gold list into the **50–70 supplier search keywords** Step 5
+ingests, typed as `CandidateKeyword(keyword, product, pillar, role, tightens,
+rationale)` with `role ∈ {broad, modifier}` and
+`pillar ∈ {curated_home, self_care_rituals, other}` (`"other"` was added to
+the Literal for this step).
+
+- **Prompt** (`src/keywords/gold_keyword_prompt.md`): carries **no
+  products**. Its product table is a literal `{PRODUCT_TABLE}` slot, filled
+  at runtime from the live Step-3 deliverable via `str.replace` (never
+  `.format()` — the requirements text contains literal braces,
+  `{"keywords": […]}`). `load_prompt_parts` raises if the slot is absent, so
+  a prompt that has silently lost its slot fails before any spend.
+- **The bank is validated in code, not trusted from the prompt.**
+  `validate_pool` re-checks every rule the prompt states: required fields
+  (`FIELDS`), pillar and role membership, dangling/self `tightens`,
+  broad-carries-`tightens`, the AICIS banned-token boundary, duplicates, the
+  50–70 band, unknown/unmentioned `product`, and the per-product floor. A
+  failing pool raises `KeywordGenerationError` and **writes nothing** —
+  same fail-closed posture as §2.
+- **Selection is bounded and deterministic.** The live Step-3 deliverable
+  has **263** products, while the plan's per-product target math assumes
+  8–20. `select_gold_products` therefore caps the table at
+  `DEFAULT_MAX_PRODUCTS = 12` (`--max-products`), ranked by demand
+  (`-reviews, -rating, name`), collapsed to the strongest row per duplicate
+  name, then **round-robined across `PILLARS`** so a capped table still
+  covers every pillar. The 263-product deliverable is untouched — it stays
+  the full research record; the cap only bounds what the keyword prompt
+  sees.
+- **Boundary names are excluded from the table.** `carries_banned_token`
+  drops a gold product whose own *name* carries a banned AICIS token (7 of
+  263 measured: jade 4, quartz 2, salt 1 — gua sha tools and a salt product),
+  because its honest keyword could never clear the pool validator. They
+  remain in the Step-3 deliverable.
+- **Adaptive target/floor.** `per_product_target(n) = max(min(9, max(3,
+  ceil(60/n))), ceil(50/n))` — the plan's `[3, 9]` clamp alone makes the
+  50-keyword floor unreachable below six products (4 products → 36), so the
+  second term lifts it only in that case and preserves the plan's numbers
+  everywhere the plan is coherent. `default_per_product_min(n) = max(2,
+  50 // n - 1)`.
+- **Pacing:** batches of `DEFAULT_BATCH_SIZE = 4` products per LLM call,
+  `MAX_TOKENS = 16000`. The configured reasoning model shares that budget
+  between its chain-of-thought and the visible content, so an oversize batch
+  returns empty content with `finish_reason="length"`. `parse_llm_keywords`
+  salvages a truncated fenced-JSON tail and the empty-content error names the
+  finish reason. `dedupe_keywords` then collapses repeated keywords
+  (keeping the first occurrence, logging a WARNING) before `validate_pool` —
+  the gold list legitimately holds two garlic presses, and the model wrote
+  the same supplier string for both. `validate_pool`'s duplicate check stays
+  as the guard for directly-called or hand-merged pools.
+- **Deliverable**: `outputs/step-4-gold-keywords.json` (+ `.md` digest,
+  modifiers nested under their broad term) — Step 5's keyword bank. The
+  runner prints the gold-product count, per-product target and batch size
+  before the first call, and exits non-zero on `KeywordGenerationError`
+  having written nothing.
+
+### 13.4 Step-3 live evidence (2026-09-28)
 
 - Actor input validation is real: `num` accepts ONLY
   10/20/30/40/50/100 — anything else fails the run before spending.
@@ -727,3 +803,28 @@ Deliverables: `outputs/step-3-gold-standard-products.{json,md}` plus the
 raw rows at `outputs/step-3-gold-raw-rows.json` (any future re-curation
 replays
 from that dump at zero Apify spend).
+
+### 13.5 Step-4 live evidence (2026-09-28)
+
+- **Run 1 failed closed on duplicates** — the pool validator rejected
+  `duplicate keywords in the pool: ['stainless garlic press', 'stainless
+  garlic press with peeler']`. Cause: the gold list holds two garlic presses
+  (OXO Good Grips, Joseph Joseph Helix) and the model wrote the same supplier
+  search string for both. Fix: `dedupe_keywords` in `generate()` before
+  validation (§13.3), keeping the first occurrence. Run 2 was green.
+- **Banned-token collision measured before the cap was chosen** — 3 of the
+  top 12 gold products by demand were jade/quartz gua sha tools whose honest
+  keyword carries a banned AICIS token; 7 of 263 names affected overall.
+  Hence the `carries_banned_token` exclusion in `select_gold_products`
+  (§13.3) rather than a prompt-level workaround.
+- **Green run:** 12 selected products, `per_product_target = 8`, batch size
+  4 → **3 LLM calls, 20 keywords per batch**, **58 keywords in the final
+  bank** across 12 products (band 50–70 ✓, floor 3 ✓). Dedupe collapsed
+  exactly the 2 garlic-press repeats; Joseph Joseph Helix Garlic Press ended
+  at 3 (the floor), every other product at 5. Roles broad 31 / modifier 27;
+  pillars curated_home 28 / self_care_rituals 30; 58 unique keywords, longest
+  6 words, no uppercase, no punctuation. Sample vocabulary: `coffee press`,
+  `stainless garlic press`, `dry body brush natural bristle`, `garlic press
+  dishwasher safe`.
+- Deliverables written to `outputs/step-4-gold-keywords.{json,md}` —
+  confirmed gitignored (`.gitignore:31` = `outputs/`).

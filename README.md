@@ -170,6 +170,8 @@ EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates
 | `MIN_MARKUP_MULTIPLIER` | — | Margin floor, markup leg: an ACCEPT must clear this **or** `MIN_MARGIN_AUD` against the real landed cost (default `2.5`) |
 | `MIN_MARGIN_AUD` | — | Margin floor, gross-profit leg, in AUD per unit (default `20.0`) |
 | `TARGET_COUNTRY` | — | Extraction/evaluation target (default `AU`); also the AliExpress DS Center's ship-to market, which decides both its catalogue and its quoted price. CJ's MCP search `countryCode` is pinned to the China warehouse (`CN`) instead |
+| `GOLD_PRODUCTS_PATH` | — | Step-3 gold-product deliverable Steps 4 and 6 read (default `outputs/step-3-gold-standard-products.json`) |
+| `KEYWORD_BANK_PATH` | — | Step-4 deliverable — the Step-5 keyword bank (default `outputs/step-4-gold-keywords.json`) |
 | `EXPORT_DIR` | — | Destination workspace (defaults to the Shopify path below) |
 | `USER_AGENT` | — | Desktop UA used by CDN downloads and the Playwright PDP gallery harvest |
 
@@ -236,8 +238,8 @@ annotates pillar/compliance/economics; every product fact is code-assembled
 from the scraped rows, so a hallucinated URL can never become a product.
 Curated gold products must carry on-page demand evidence — rows with no
 rating/review KPI are filtered out before the LLM.
-The gold list is the reference set the planned Steps 4–6 (gold-driven
-keyword generation, dual-supplier ingestion, Jev ranking) measure against.
+The gold list is the reference set Steps 4–6 (gold-driven keyword
+generation, dual-supplier ingestion, Jev ranking) measure against.
 Full details: `CLAUDE.md` §13.
 
 ```bash
@@ -258,6 +260,38 @@ over all 40 Step-2 keywords spent $4.06 of Apify credit and produced 263
 demand-evidenced gold products (157 `curated_home`, 106
 `self_care_rituals`), stored in the untracked `outputs/` tree with the raw
 rows alongside, so re-curation never repeats the scrape.
+
+### 2.3 Gold-standard keyword bank (updated multi-step pipeline, Step 4)
+
+Step 4 turns the gold products into the **gold-standard keyword bank**: the
+50–70 supplier search keywords that Step 5 ingests through **both** supplier
+pipelines (CJdropshipping MCP and the AliExpress Dropshipping Center) and
+that Step 6 ranks the ingested products against. The reasoning LLM authors
+the keywords; every structural rule is re-checked in code (broad/modifier
+pairing, pillar membership, the AICIS banned-token boundary, the 50–70 band,
+per-product coverage and floor), and a pool that breaks any rule exits
+non-zero with nothing written.
+
+The prompt (`src/keywords/gold_keyword_prompt.md`) carries no products: its
+product table is a `{PRODUCT_TABLE}` slot the generator renders from the
+live Step-3 deliverable, so the gold products are ground truth the prompt
+file never hardcodes.
+
+```bash
+source .venv/bin/activate && python scripts/generate_gold_keywords.py
+```
+
+Because Step 3's production run curated 263 gold products — far more than a
+50–70 pool can cover — the generator keeps the strongest 12 (review-volume
+ranked, name-deduped, round-robined across pillars) for the keyword table;
+the Step-3 deliverable itself stays the full research record. Products whose
+own name carries an AICIS boundary token (jade/quartz/salt tools) are not
+eligible: their honest supplier keyword *is* the banned token, so no keyword
+could both match the product and clear the boundary rule.
+
+Deliverables (untracked `outputs/` tree):
+`step-4-gold-keywords.{json,md}` — the JSON is what `KEYWORD_BANK_PATH`
+points at and what Step 5 reads.
 
 ---
 
@@ -541,7 +575,7 @@ Playbook:
 python -m pytest tests/ -v
 ```
 
-- **423 hermetic tests** across 12 test modules (schema validators incl. the
+- **445 hermetic tests** across 12 test modules (schema validators incl. the
   zero-URL `cogs_estimation_basis` rule and PDP-shape rejection, the MCP
   Payload Liveness Gate and the CJ commercial gate with their wiring in the
   CJ extractor (commercial gate, freight quoting, derived shipping notice),
@@ -549,9 +583,11 @@ python -m pytest tests/ -v
   guard and failure taxonomy against scripted MTOP fakes, LLM
   prompt/reconcile contract, image gates against real PIL-encoded fixtures
   with mocked httpx, exporter hard-fail rules, orchestrator counters and CLI
-  exit codes, the Step-3 keyword generator, and the Step-3 gold-research
-  scraper + curator against a faked Apify SDK and a scripted LLM transport)
-  — no network.
+  exit codes, the Step-4 gold-keyword generator — batched prompt assembly,
+  the rendered product table, the gold-deliverable read with its remediation
+  errors, the demand-ranked selection, the merged-pool validation rules and
+  the truncation salvage — and the Step-3 gold-research scraper + curator
+  against a faked Apify SDK and a scripted LLM transport) — no network.
 
 ---
 
@@ -577,16 +613,18 @@ dropship-scout-agent/
 │   │   ├── cj_mcp_extractor.py    # CJdropshipping MCP + commercial gate + liveness gate
 │   │   ├── aliexpress_ds.py       # Native Dropshipping Center ingestion + winner gate
 │   │   └── google_shopping.py     # Step-3 gold-research Apify actor wrapper (not a supplier extractor)
-│   ├── keywords/              # Step-3 keyword generation engine (gold-list rewrite pending)
+│   ├── keywords/              # Step-4 gold-standard keyword engine
+│   │   ├── gold_keyword_prompt.md  # Step-4 prompt resource ({PRODUCT_TABLE} slot)
+│   │   └── generator.py       # Batched generation + code-side pool validation
 │   └── pipeline/
 │       ├── cj_mcp_client.py   # CJ MCP client (token-in-URL auth, log redaction, liveness gate)
 │       └── image_sourcing.py  # Deterministic supplier-gallery image engine
 ├── scripts/
 │   ├── generate_ali_session.py  # Optional saved DS Center login
 │   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
-│   ├── generate_keywords.py     # Step-3 keyword generator CLI
+│   ├── generate_gold_keywords.py      # Step-4 keyword bank runner
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (Apify + LLM)
-└── tests/                     # 423 hermetic tests, zero network
+└── tests/                     # 445 hermetic tests, zero network
 ```
 
 ---

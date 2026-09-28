@@ -264,6 +264,34 @@ def test_min_margin_aud_env_override_is_respected(monkeypatch):
 
 
 # ----------------------------------------------------------------------
+# Updated-pipeline deliverable paths
+# ----------------------------------------------------------------------
+
+
+def test_gold_products_path_defaults_to_the_step_3_deliverable(monkeypatch):
+    monkeypatch.delenv("GOLD_PRODUCTS_PATH", raising=False)
+    assert (
+        load_settings().GOLD_PRODUCTS_PATH
+        == "outputs/step-3-gold-standard-products.json"
+    )
+
+
+def test_keyword_bank_path_defaults_to_the_step_4_deliverable(monkeypatch):
+    monkeypatch.delenv("KEYWORD_BANK_PATH", raising=False)
+    assert load_settings().KEYWORD_BANK_PATH == "outputs/step-4-gold-keywords.json"
+
+
+def test_keyword_bank_path_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("KEYWORD_BANK_PATH", "/tmp/bank.json")
+    assert load_settings().KEYWORD_BANK_PATH == "/tmp/bank.json"
+
+
+def test_keyword_bank_path_blank_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("KEYWORD_BANK_PATH", "")
+    assert load_settings().KEYWORD_BANK_PATH == "outputs/step-4-gold-keywords.json"
+
+
+# ----------------------------------------------------------------------
 # .env / .env.example alignment
 # ----------------------------------------------------------------------
 

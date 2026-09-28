@@ -181,6 +181,14 @@ class Settings:
             os.getenv("GOLD_PRODUCTS_PATH")
             or "outputs/step-3-gold-standard-products.json"
         )
+        # Step-4 deliverable path — the Step-5 "keyword bank": the 50-70
+        # supplier search keywords Step 4 generated from the gold products,
+        # which Step 5 ingests through BOTH supplier pipelines (CJ MCP and the
+        # AliExpress DS Center) and Step 6 ranks against the gold list. Same
+        # untracked outputs/ tree as every other production deliverable.
+        self.KEYWORD_BANK_PATH: str = (
+            os.getenv("KEYWORD_BANK_PATH") or "outputs/step-4-gold-keywords.json"
+        )
 
         # --- Margin floor (the deterministic half of gate 2) ---
         # An ACCEPT must clear markup_multiplier >= MIN_MARKUP_MULTIPLIER OR
