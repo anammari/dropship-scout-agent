@@ -318,6 +318,8 @@ class GoldProductCurator:
                 logger.warning("curation batch failed (%s); retrying once", exc)
                 content = self._call_llm(user_message)
             for raw in _parse_products(content):
+                try:
+                    selection = GoldSelection(**raw)
                 except (TypeError, ValidationError) as exc:
                     dropped_at_join += 1
                     logger.warning(
