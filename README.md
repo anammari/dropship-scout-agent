@@ -282,12 +282,31 @@ source .venv/bin/activate && python scripts/generate_gold_keywords.py
 ```
 
 Because Step 3's production run curated 263 gold products — far more than a
-50–70 pool can cover — the generator keeps the strongest 12 (review-volume
-ranked, name-deduped, round-robined across pillars) for the keyword table;
-the Step-3 deliverable itself stays the full research record. Products whose
-own name carries an AICIS boundary token (jade/quartz/salt tools) are not
-eligible: their honest supplier keyword *is* the banned token, so no keyword
-could both match the product and clear the boundary rule.
+50–70 pool can cover — the generator keeps the strongest 30 by demand
+(review-volume ranked, name-deduped, **one product per Step-2 source
+keyword**, then round-robined across pillars) for the keyword table, which
+spreads the band over 2 keywords per product; the Step-3 deliverable itself
+stays the full research record.
+
+The one-per-source-keyword collapse is load-bearing: the research is
+keyword-driven, so the strongest 30 rows by raw demand were about 15 distinct
+types (5 garlic presses, 5 coffee presses, 4 body brushes, 4 ice rollers).
+Every product must be named by its *own* keywords, a duplicate keyword string
+is fatal and brand names are banned — so five garlic presses cannot each own
+two honest keywords, and the first cap-30 run starved. One row per source
+keyword spends the table on distinct products instead. Where selected
+products are still close in kind, the prompt requires differentiation by
+mechanism, form, size or pack size rather than the shared head term — and
+because each batch call is independent, every later call is handed the
+keyword strings earlier ones already claimed as an explicit do-not-repeat
+list, so a cross-batch repeat cannot slip through to the dedupe.
+
+The band is what sets the ceiling: every product in the table must be named
+by at least one keyword inside a 50–70 pool, so 35 products is the hard
+maximum (2 each = 70) and 30 leaves headroom. Products whose own name carries an AICIS boundary token
+(jade/quartz/salt tools) are not eligible: their honest supplier keyword *is*
+the banned token, so no keyword could both match the product and clear the
+boundary rule.
 
 Deliverables (untracked `outputs/` tree):
 `step-4-gold-keywords.{json,md}` — the JSON is what `KEYWORD_BANK_PATH`
@@ -575,7 +594,7 @@ Playbook:
 python -m pytest tests/ -v
 ```
 
-- **445 hermetic tests** across 12 test modules (schema validators incl. the
+- **450 hermetic tests** across 12 test modules (schema validators incl. the
   zero-URL `cogs_estimation_basis` rule and PDP-shape rejection, the MCP
   Payload Liveness Gate and the CJ commercial gate with their wiring in the
   CJ extractor (commercial gate, freight quoting, derived shipping notice),
@@ -583,11 +602,13 @@ python -m pytest tests/ -v
   guard and failure taxonomy against scripted MTOP fakes, LLM
   prompt/reconcile contract, image gates against real PIL-encoded fixtures
   with mocked httpx, exporter hard-fail rules, orchestrator counters and CLI
-  exit codes, the Step-4 gold-keyword generator — batched prompt assembly,
-  the rendered product table, the gold-deliverable read with its remediation
-  errors, the demand-ranked selection, the merged-pool validation rules and
-  the truncation salvage — and the Step-3 gold-research scraper + curator
-  against a faked Apify SDK and a scripted LLM transport) — no network.
+  exit codes, the Step-4 gold-keyword generator — batched prompt assembly
+  with the carried do-not-repeat list, the rendered product table, the
+  gold-deliverable read with its remediation errors, the demand-ranked
+  type-diverse selection, the merged-pool validation rules, the
+  neediest-first duplicate collapse and the truncation salvage — and the
+  Step-3 gold-research scraper + curator against a faked Apify SDK and a
+  scripted LLM transport) — no network.
 
 ---
 
@@ -624,7 +645,7 @@ dropship-scout-agent/
 │   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
 │   ├── generate_gold_keywords.py      # Step-4 keyword bank runner
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (Apify + LLM)
-└── tests/                     # 445 hermetic tests, zero network
+└── tests/                     # 450 hermetic tests, zero network
 ```
 
 ---

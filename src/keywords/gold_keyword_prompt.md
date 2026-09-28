@@ -40,7 +40,17 @@ search keywords** in total.
 1. **50–70 keywords in total**, spread across every product in the table
    (the per-product floor is enforced in code).
 
-2. **Every product yields both kinds of keyword, deliberately paired:**
+2. **Every keyword is unique across the whole response and across the whole
+   pool.** Two products never share a keyword string — a repeat is dropped in
+   code, and a product left with too few of its own fails the run. The strings
+   earlier batches already used are listed in the call block below the table;
+   never repeat one of them. Where two products are close in kind, keep the
+   shared head term for ONE of them and differentiate the other by mechanism,
+   form, size or pack size (`rocking garlic press`, `garlic press with
+   cleaner`, `double wall french press`, `8 cup french press`) — never by
+   brand, which is banned.
+
+3. **Every product yields both kinds of keyword, deliberately paired:**
    - **broad** — the generic supplier search string the catalogue indexes
      (e.g. `stainless garlic press`).
    - **modifier** — the same product tightened with a functional, material,
@@ -49,14 +59,14 @@ search keywords** in total.
      names the broad keyword it tightens via `tightens`.
    - Roughly balance the two roles per product.
 
-3. **Describe the physical product, not the marketing angle.** Prefer the
+4. **Describe the physical product, not the marketing angle.** Prefer the
    attributes visible in the product's table row — material, mechanism,
    form factor, pack size, colour where it is a real variant axis.
 
-4. **Australian English, supplier vocabulary.** Lowercase, 2–7 words per
+5. **Australian English, supplier vocabulary.** Lowercase, 2–7 words per
    keyword, no punctuation, no brand names, no invented SKUs.
 
-5. **Hard AICIS boundary.** Tools, hardware and textiles only. No
+6. **Hard AICIS boundary.** Tools, hardware and textiles only. No
    cosmetics, liquids, creams, soaps, bath salts, gels, oils, supplements,
    raw minerals or mineral-sourcing language (never: dead sea,
    diatomaceous, jade, quartz, crystal, mud, salt, soap, cream, lotion,
@@ -64,14 +74,14 @@ search keywords** in total.
    coles, woolworths, big w, toilet) — not even inside a longer keyword.
    No cultural icon, celebrity or copyrighted term.
 
-6. **Exclude commodity-replacement intent.** Supermarket/hardware-store
+7. **Exclude commodity-replacement intent.** Supermarket/hardware-store
    replacement phrasing (`pumice stone bunnings` style) is out.
 
-7. **`product` must equal a table row's product name verbatim**; `pillar`
+8. **`product` must equal a table row's product name verbatim**; `pillar`
    is copied from that row (`curated_home`, `self_care_rituals`, or
    `other`).
 
-8. **Output strict JSON only** — no markdown fence, no commentary. Keep
+9. **Output strict JSON only** — no markdown fence, no commentary. Keep
    any single response to **at most ~30 keywords** and always close the
    JSON — a truncated response is unusable:
 

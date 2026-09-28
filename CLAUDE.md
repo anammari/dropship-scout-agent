@@ -129,7 +129,7 @@ dropship-scout-agent/
 │   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
 │   ├── generate_gold_keywords.py     # Step-4 keyword bank runner (§13.3)
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
-└── tests/                   # 445 hermetic tests, zero network (12 modules + conftest)
+└── tests/                   # 450 hermetic tests, zero network (12 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -507,18 +507,20 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 445
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 450
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes + faked Apify SDK / scripted LLM transports).
 - `tests/test_keyword_generator.py` covers the Step-4 gold-keyword engine:
   the template prompt (the product table is a `{PRODUCT_TABLE}` slot, never
   a hardcoded list), the table rendering (cells verbatim, `null` → `—`), the
   gold-deliverable read with its remediation errors, the demand-ranked
-  selection with the boundary-name exclusion, the adaptive per-product
-  target and floor, batching with the per-batch note, the merged-pool
+  selection with its boundary-name exclusion and one-per-`source_keyword`
+  type collapse, the adaptive per-product target and floor, batching with the
+  per-batch note and the carried do-not-repeat list, the merged-pool
   validation contract (broad/modifier pairing, banned tokens, band,
-  coverage, floor), the duplicate collapse, and salvaging; it uses a tmp_path
-  gold fixture and never reads the real `outputs/` tree — see §13.3.
+  coverage, floor), the neediest-first duplicate collapse, and salvaging; it
+  uses a tmp_path gold fixture and never reads the real `outputs/` tree —
+  see §13.3.
   `tests/test_google_shopping.py`
   covers the Step-3 gold-research scraper (actor input shape incl. the
   closed-set `num`, spend ceiling riding the run options, run-status
@@ -731,36 +733,68 @@ the Literal for this step).
   50–70 band, unknown/unmentioned `product`, and the per-product floor. A
   failing pool raises `KeywordGenerationError` and **writes nothing** —
   same fail-closed posture as §2.
-- **Selection is bounded and deterministic.** The live Step-3 deliverable
-  has **263** products, while the plan's per-product target math assumes
-  8–20. `select_gold_products` therefore caps the table at
-  `DEFAULT_MAX_PRODUCTS = 12` (`--max-products`), ranked by demand
+- **Selection is bounded, type-diverse and deterministic.** The live Step-3
+  deliverable has **263** products, while the plan's per-product target math
+  assumed 8–20. `select_gold_products` therefore caps the table at
+  `DEFAULT_MAX_PRODUCTS = 30` (`--max-products`), ranked by demand
   (`-reviews, -rating, name`), collapsed to the strongest row per duplicate
-  name, then **round-robined across `PILLARS`** so a capped table still
-  covers every pillar. The 263-product deliverable is untouched — it stays
-  the full research record; the cap only bounds what the keyword prompt
-  sees.
+  name, **collapsed to the strongest row per Step-2 `source_keyword`**, then
+  **round-robined across `PILLARS`** so a capped table still covers every
+  pillar. The 263-product deliverable is untouched — it stays the full
+  research record; the cap only bounds what the keyword prompt sees.
+
+  **The type collapse is load-bearing, not tidiness.** The research is
+  keyword-driven, so the strongest 30 rows by raw demand were about 15
+  distinct types — 5 garlic presses, 5 coffee/French presses, 4 body dry
+  brushes, 4 ice rollers. Every table product must be named by *its own*
+  keywords, the pool treats a duplicate keyword string as fatal (Step 5 runs
+  each once) and brand names are banned, so five garlic presses cannot each
+  own two honest keywords: the model writes the shared head term for all of
+  them and dedupe starves the rest — exactly how the first cap-30 run failed.
+  One row per source keyword spends the table on distinct products instead
+  (the live rerun selected 30 distinct types). A row with no source keyword
+  falls back to its own name as the group key.
+
+  **30 is not arbitrary either:** the validator requires every table product
+  to be named inside a 50–70 pool at ≥ `default_per_product_min`, so 35
+  products is the band's hard ceiling (2 each = 70 exactly) and 30 keeps
+  headroom (60 of 70). Widening from the original 12 spreads the band across
+  more of the researched demand at no extra Step-5 ingestion cost.
 - **Boundary names are excluded from the table.** `carries_banned_token`
   drops a gold product whose own *name* carries a banned AICIS token (7 of
   263 measured: jade 4, quartz 2, salt 1 — gua sha tools and a salt product),
   because its honest keyword could never clear the pool validator. They
   remain in the Step-3 deliverable.
-- **Adaptive target/floor.** `per_product_target(n) = max(min(9, max(3,
-  ceil(60/n))), ceil(50/n))` — the plan's `[3, 9]` clamp alone makes the
-  50-keyword floor unreachable below six products (4 products → 36), so the
-  second term lifts it only in that case and preserves the plan's numbers
-  everywhere the plan is coherent. `default_per_product_min(n) = max(2,
-  50 // n - 1)`.
+- **Adaptive target/floor, bounded by the band at both ends.**
+  `per_product_target(n) = min(9, ceil(60/n), 70 // n)`, raised to
+  `ceil(50/n)` only when that lift still fits under 70, and never below
+  `default_per_product_min(n) = max(2, 50 // n - 1)`. The `70 // n` term is
+  what makes a 30-product table work at all: the plan's `[3, 9]` clamp asks
+  90 keywords there, past the ceiling. At 30 → **2 per product (60 total)**;
+  at 35 → 2 (70, the ceiling). One size has no uniform target: 24 products
+  (2 each = 48, 3 each = 72) — the target takes the floor there, and only
+  `--max-products` can reach it. 36+ is infeasible; the cap of 30 sits well
+  inside that.
+- **Uniqueness is enforced at both ends — in the prompt and in code.**
+  `validate_pool` treats a duplicate keyword string as fatal (Step 5 runs
+  each once), and each batch call is independent, so the model cannot infer
+  what a previous batch wrote. `generate()` therefore accumulates every
+  keyword emitted so far and `_assemble_user_message` appends them to later
+  calls as an explicit do-not-repeat list (requirement 2 says the list is
+  there). Without it the rule is unsatisfiable across batches, which is how
+  the second cap-30 run failed: three shared head terms were written by two
+  products each, and dedupe left three products with 1 of their 2 keywords.
 - **Pacing:** batches of `DEFAULT_BATCH_SIZE = 4` products per LLM call,
   `MAX_TOKENS = 16000`. The configured reasoning model shares that budget
   between its chain-of-thought and the visible content, so an oversize batch
   returns empty content with `finish_reason="length"`. `parse_llm_keywords`
   salvages a truncated fenced-JSON tail and the empty-content error names the
-  finish reason. `dedupe_keywords` then collapses repeated keywords
-  (keeping the first occurrence, logging a WARNING) before `validate_pool` —
-  the gold list legitimately holds two garlic presses, and the model wrote
-  the same supplier string for both. `validate_pool`'s duplicate check stays
-  as the guard for directly-called or hand-merged pools.
+  finish reason. `dedupe_keywords` then collapses any repeated keyword still
+  written (logging a WARNING) before `validate_pool`, awarding a contested
+  string to the product with the fewest keywords of its own rather than to
+  the batch that answered first — first-wins always starves the later
+  batches. `validate_pool`'s duplicate check stays as the guard for
+  directly-called or hand-merged pools.
 - **Deliverable**: `outputs/step-4-gold-keywords.json` (+ `.md` digest,
   modifiers nested under their broad term) — Step 5's keyword bank. The
   runner prints the gold-product count, per-product target and batch size
@@ -806,25 +840,38 @@ from that dump at zero Apify spend).
 
 ### 13.5 Step-4 live evidence (2026-09-28)
 
-- **Run 1 failed closed on duplicates** — the pool validator rejected
-  `duplicate keywords in the pool: ['stainless garlic press', 'stainless
-  garlic press with peeler']`. Cause: the gold list holds two garlic presses
-  (OXO Good Grips, Joseph Joseph Helix) and the model wrote the same supplier
-  search string for both. Fix: `dedupe_keywords` in `generate()` before
-  validation (§13.3), keeping the first occurrence. Run 2 was green.
-- **Banned-token collision measured before the cap was chosen** — 3 of the
-  top 12 gold products by demand were jade/quartz gua sha tools whose honest
-  keyword carries a banned AICIS token; 7 of 263 names affected overall.
-  Hence the `carries_banned_token` exclusion in `select_gold_products`
-  (§13.3) rather than a prompt-level workaround.
-- **Green run:** 12 selected products, `per_product_target = 8`, batch size
-  4 → **3 LLM calls, 20 keywords per batch**, **58 keywords in the final
-  bank** across 12 products (band 50–70 ✓, floor 3 ✓). Dedupe collapsed
-  exactly the 2 garlic-press repeats; Joseph Joseph Helix Garlic Press ended
-  at 3 (the floor), every other product at 5. Roles broad 31 / modifier 27;
-  pillars curated_home 28 / self_care_rituals 30; 58 unique keywords, longest
-  6 words, no uppercase, no punctuation. Sample vocabulary: `coffee press`,
-  `stainless garlic press`, `dry body brush natural bristle`, `garlic press
-  dishwasher safe`.
-- Deliverables written to `outputs/step-4-gold-keywords.{json,md}` —
-  confirmed gitignored (`.gitignore:31` = `outputs/`).
+Four green/failed runs, each fix below coming out of a failure:
+
+| Run | Table | Result |
+|---|---|---|
+| — | the strongest 12 by demand (first attempt) | **failed** — the validator rejected a duplicate keyword written for two garlic presses; `dedupe_keywords` (§13.3) is the fix |
+| 1 | the strongest 12 by demand | green: **58 keywords**, `per_product_target = 8`, 3 calls |
+| 2 | the strongest 30 by demand | **failed** — the table was ~15 distinct types (5 garlic presses, 5 coffee presses), and five garlic presses cannot each own 2 unique honest keywords |
+| 3 | 30, one per Step-2 `source_keyword` | **failed** — 3 cross-batch repeats (`stainless steel garlic press`, `dry body brush`, `pumice stone foot file`), dedupe left 3 products with 1 of their 2 keywords |
+| 4 | 30, one per source keyword, with the carried taken list | **green** |
+
+- **Run 2's real cause was table composition, not the model.** One product
+  type recurs across several Step-2 `source_keyword` values and several
+  merchants, and a duplicate keyword string is fatal while brand names are
+  banned, so the collapse to one product per source keyword (§13.3) was the
+  fix — the table spent its 30 slots on distinct products.
+- **Run 3's real cause was batching.** Each call is independent, so a batch
+  cannot know what an earlier one claimed: asking for pool-wide uniqueness
+  without saying what was taken is unsatisfiable, not merely unstated. Hence
+  the accumulated do-not-repeat list in `_assemble_user_message` (§13.3,
+  plan §6.5 delta 6).
+- **Green run (run 4):** 30 products, `per_product_target = 2`, batch size 4
+  → **8 LLM calls**, **60 keywords in the final bank** (band 50–70 ✓, floor
+  2 ✓), **zero duplicates written** so `dedupe_keywords` dropped nothing.
+  Roles broad 30 / modifier 30; pillars curated_home 30 /
+  self_care_rituals 30; 60 unique keywords, 2–7 words, no uppercase, no
+  punctuation; every product at exactly 2. Model `deepseek-v4.1-flash:cloud`,
+  ~15 minutes of wall clock.
+- **The near-type families are differentiated as intended:** `stainless
+  garlic press` / `rocking garlic press` / `garlic rocker`; `pumice stone
+  foot file` / `pumice foot tool` / `pumice stone`; `stainless steel gua sha`
+  / `scalp massage tool` / `gua sha facial tool` / `gua sha set`; `dry body
+  brush` / `body brush with handle`.
+- Deliverables written to `outputs/step-4-gold-keywords.{json,md}` on every
+  green run — confirmed gitignored (`.gitignore:31` = `outputs/`). A failed
+  run writes nothing.

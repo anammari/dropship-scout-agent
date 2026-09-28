@@ -54,8 +54,12 @@ DEFAULT_BATCH_SIZE = 4
 #: curated 263, which no 50–70 pool can cover, so the generator keeps the
 #: strongest `max_products` of them (demand-ranked, pillar-balanced, deduped
 #: by name) and reports the selection. The Step-3 deliverable itself is
-#: untouched — it stays the full research record.
-DEFAULT_MAX_PRODUCTS = 12
+#: untouched — it stays the full research record. 30 keeps the band's
+#: headroom: at the 2-keyword floor this set needs 60 of the 70 allowed,
+#: leaving 10 keywords of pool slack. The band hard-caps the set at 35
+#: products (2 each = 70 exactly); beyond that no pool could name every
+#: product and still fit.
+DEFAULT_MAX_PRODUCTS = 30
 #: The pool size the adaptive per-product target aims at.
 TARGET_TOTAL = 60
 PER_PRODUCT_MIN_FLOOR = 2
@@ -261,7 +265,7 @@ def carries_banned_token(text: object) -> Optional[str]:
 def select_gold_products(
     products: Sequence[Dict], limit: int = DEFAULT_MAX_PRODUCTS
 ) -> List[Dict]:
-    """The strongest `limit` products: demand-ranked, pillar-balanced, deduped.
+    """The strongest `limit` products: demand-ranked, type-diverse, pillar-balanced.
 
     Deterministic. Products whose own NAME carries an AICIS boundary token
     (jade/quartz/salt tools and the like) are not eligible: their honest
@@ -269,10 +273,21 @@ def select_gold_products(
     match the product and clear the code's fatal boundary rule. They stay in
     the Step-3 deliverable — Step 4 simply cannot name them. The rest are
     ordered by review volume, then rating, then name; listings naming the
-    same product are collapsed to their strongest row; and the selection then
-    round-robins across pillars so a capped table keeps every pillar
-    represented (the plan targets 8–20 products; the production Step-3 run
-    curated 263).
+    same product are collapsed to their strongest row.
+
+    **At most one product per Step-2 `source_keyword` survives.** The
+    research is keyword-driven, so one product type recurs under several
+    search terms and again as several merchants: the strongest 30 rows of the
+    live deliverable are 5 garlic presses, 5 coffee/French presses, 4 body
+    dry brushes, 4 ice rollers, 2 shower caddies and 2 gua shas — about 15
+    distinct types across 30 slots. Every table product must be named by its
+    own keywords, the pool forbids duplicates and brand names are banned, so
+    five garlic presses cannot each own two honest keywords. Keeping the
+    strongest row per source keyword (the source keyword is what the demand
+    evidence was gathered for; a row without one falls back to its own name)
+    spends the table on distinct products instead, which is what the Step-5
+    ingestion budget is for. The selection then round-robins across pillars
+    so a capped table still covers every pillar.
     """
     ranked: Dict[str, Dict] = {}
     for product in products:
@@ -291,6 +306,16 @@ def select_gold_products(
             str(p.get("name")),
         ),
     )
+    seen_types: set = set()
+    diverse: List[Dict] = []
+    for product in ordered:
+        source = str(product.get("source_keyword") or "").strip().lower()
+        key = source or str(product.get("name") or "").strip().lower()
+        if key in seen_types:
+            continue
+        seen_types.add(key)
+        diverse.append(product)
+    ordered = diverse
     if limit <= 0 or len(ordered) <= limit:
         return ordered
     by_pillar: Dict[str, List[Dict]] = defaultdict(list)
@@ -314,19 +339,36 @@ def select_gold_products(
 
 
 def per_product_target(product_count: int) -> int:
-    """Adaptive per-product keyword target: `ceil(60 / products)` in [3, 9].
+    """Adaptive per-product keyword target, bounded by the pool band.
 
-    The floor is lifted above the clamp only when a small gold set could not
-    otherwise reach the 50-keyword band the validator enforces (below six
-    products) — the same instruction the LLM is given, so a pool that
-    follows the note is a pool the code accepts.
+    Aims at `TARGET_TOTAL` keywords spread across the products and never
+    instructs the LLM past `MAX_KEYWORDS` in total: at 30 products the plan's
+    original 3-per-product would ask for 90 and overshoot the 70 ceiling, so
+    the band term caps it at 2. The lift raises the target above that only to
+    reach the 50-keyword band the validator enforces, and only when the lift
+    itself still fits under the 70 ceiling — so the instruction the LLM is
+    given is one the code accepts.
+
+    One set size has no uniform target inside the band: 24 products (2 each =
+    48, short of 50; 3 each = 72, past 70). There the target takes the floor —
+    2 each, two short of the band — and only the debugging `--max-products`
+    flag can reach that size, since the Step-3 production run leaves far more
+    than `DEFAULT_MAX_PRODUCTS` candidates to choose from.
     """
     if product_count <= 0:
         return 0
+    ceiling = MAX_KEYWORDS // product_count
+    if ceiling <= 0:
+        return max(1, math.ceil(MIN_KEYWORDS / product_count))
     target = min(
-        PER_PRODUCT_MIN_CEILING, max(3, math.ceil(TARGET_TOTAL / product_count))
+        PER_PRODUCT_MIN_CEILING,
+        max(1, math.ceil(TARGET_TOTAL / product_count)),
+        ceiling,
     )
-    return max(target, math.ceil(MIN_KEYWORDS / product_count))
+    lift = math.ceil(MIN_KEYWORDS / product_count)
+    if lift <= ceiling:
+        target = max(target, lift)
+    return max(1, min(target, ceiling), min(default_per_product_min(product_count), ceiling))
 
 
 def default_per_product_min(product_count: int) -> int:
@@ -375,31 +417,50 @@ def parse_llm_keywords(body: str) -> Tuple[List[dict], bool]:
 
 
 def dedupe_keywords(rows: List[dict]) -> Tuple[List[dict], List[str]]:
-    """Drop repeated keywords, keeping the first occurrence of each.
+    """Drop repeated keywords, awarding each repeat to the neediest product.
 
-    The gold list can carry two listings of the same product type (the
-    production Step-3 deliverable has two garlic presses), and the model then
-    writes the same supplier search string for both. Step 5 runs each keyword
-    once and the same keyword returns the same supplier products, so a repeat
-    is redundant rather than useful — it is dropped here and the pool is
-    re-validated in full, so any product left short of its floor still fails
-    the run. Returns `(rows, dropped_keywords)`.
+    The gold list can carry two listings of the same product type, and the
+    model then writes the same supplier search string for both. Step 5 runs
+    each keyword once and the same keyword returns the same supplier products,
+    so a repeat is redundant rather than useful — it is dropped here and the
+    pool is re-validated in full, so any product left short of its floor still
+    fails the run.
+
+    A contested keyword goes to the product with the fewest keywords of its
+    own so far (ties to the earliest row), not to whichever batch happened to
+    answer first: the rows arrive in batch order, so keeping the first
+    occurrence always starves the products in the later batches, and a product
+    can end up with none of its own keywords. Returns
+    `(rows, dropped_keywords)`.
     """
-    seen: set = set()
-    kept: List[dict] = []
-    dropped: List[str] = []
-    for row in rows:
+    unique: List[Tuple[int, dict]] = []
+    contested: Dict[str, List[Tuple[int, dict]]] = {}
+    for index, row in enumerate(rows):
         keyword = row.get("keyword") if isinstance(row, dict) else None
         if keyword is None:
-            kept.append(row)
+            unique.append((index, row))
             continue
-        key = str(keyword)
-        if key in seen:
-            dropped.append(key)
+        contested.setdefault(str(keyword), []).append((index, row))
+    assigned: List[Tuple[int, dict]] = list(unique)
+    dropped: List[str] = []
+    counts: Dict[str, int] = defaultdict(int)
+    for _, row in unique:
+        counts[_row_product(row)] += 1
+    for keyword, candidates in contested.items():
+        if len(candidates) == 1:
+            assigned.append(candidates[0])
+            counts[_row_product(candidates[0][1])] += 1
             continue
-        seen.add(key)
-        kept.append(row)
-    return kept, dropped
+        winner = min(candidates, key=lambda item: (counts[_row_product(item[1])], item[0]))
+        assigned.append(winner)
+        counts[_row_product(winner[1])] += 1
+        dropped.extend([keyword] * (len(candidates) - 1))
+    assigned.sort(key=lambda item: item[0])
+    return [row for _, row in assigned], dropped
+
+
+def _row_product(row: dict) -> str:
+    return str(row.get("product") or "")
 
 
 def validate_pool(
@@ -595,20 +656,36 @@ class KeywordGenerator:
             )
         return content, finish_reason
 
-    def _assemble_user_message(self, chunk: List[str]) -> str:
+    def _assemble_user_message(
+        self, chunk: List[str], taken: Sequence[str] = ()
+    ) -> str:
         count = len(chunk)
         total = len(self.products)
         target = self.per_product_target
         note = (
             f"\n\n**This call covers only the {count} products in the table "
             f"above**: produce **{target} keywords per product** "
-            f"({target * count} in total). The full {MIN_KEYWORDS}-{MAX_KEYWORDS} "
+            f"({target * count} in total), **every one of them a string no "
+            f"other product uses**. The full {MIN_KEYWORDS}-{MAX_KEYWORDS} "
             f"keyword pool across all {total} products is generated in "
             "batches, so do not attempt the others. **Keep the response as "
             "short as possible**: `rationale` must be at most 6 words, and "
             "omit any other commentary, so the JSON closes well within the "
             "output limit."
         )
+        if taken:
+            # Each call is independent, so a later batch cannot know what an
+            # earlier one already claimed. Without this list the uniqueness
+            # rule is unsatisfiable across batches and the model repeats a
+            # shared head term — the exact way the first cap-30 run starved
+            # products of their own keywords.
+            note += (
+                f"\n\nThe pool is unique across **all** batches. Earlier "
+                f"batches already used these {len(taken)} strings — never "
+                "repeat one of them, here or for any other product: "
+                + ", ".join(f"`{keyword}`" for keyword in taken)
+                + "."
+            )
         table = "\n".join([TABLE_HEADER, TABLE_SEPARATOR] + chunk)
         body = self.prompt.user_template.replace("{PRODUCT_TABLE}", table + note)
         return f"{body}\n\n{self.prompt.requirements}"
@@ -623,10 +700,11 @@ class KeywordGenerator:
         structural rule.
         """
         rows: List[dict] = []
+        taken: List[str] = []
         for start in range(0, len(self.table_lines), self.batch_size):
             chunk = self.table_lines[start : start + self.batch_size]
             number = start // self.batch_size + 1
-            user_message = self._assemble_user_message(chunk)
+            user_message = self._assemble_user_message(chunk, taken)
             content, finish_reason = self._call_llm(user_message)
             if finish_reason == "length":
                 logger.warning(
@@ -645,6 +723,12 @@ class KeywordGenerator:
                 )
             logger.info("keyword batch %d: %d keywords", number, len(batch_rows))
             rows.extend(batch_rows)
+            taken.extend(
+                str(row.get("keyword"))
+                for row in batch_rows
+                if isinstance(row, dict) and row.get("keyword") is not None
+            )
+            taken = list(dict.fromkeys(taken))
 
         rows, dropped = dedupe_keywords(rows)
         if dropped:

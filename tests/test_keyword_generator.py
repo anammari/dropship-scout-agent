@@ -20,6 +20,10 @@ import pytest
 from src.config import settings
 from src.keywords.generator import (
     BANNED_TOKENS,
+    DEFAULT_MAX_PRODUCTS,
+    MAX_KEYWORDS,
+    MIN_KEYWORDS,
+    TARGET_TOTAL,
     CandidateKeyword,
     KeywordGenerationConfigError,
     KeywordGenerationError,
@@ -284,6 +288,49 @@ def test_select_gold_products_excludes_boundary_named_products():
     assert carries_banned_token("Stainless garlic press") is None
 
 
+def test_select_gold_products_keeps_one_product_per_source_keyword():
+    """The research recurs: one product type, several Step-2 search terms.
+
+    The live table's strongest 30 rows held 5 garlic presses and 5 coffee
+    presses, which the pool cannot name with unique keywords — so only the
+    strongest row per source keyword reaches the table.
+    """
+    products = [
+        {
+            "name": "Garlic Press OXO Good Grips",
+            "pillar": "curated_home",
+            "source_keyword": "garlic press",
+            "demand_evidence": "rating 4.8/5, 900 reviews (Google Shopping AU)",
+        },
+        {
+            "name": "Joseph Joseph Helix Garlic Press",
+            "pillar": "curated_home",
+            "source_keyword": "garlic press",
+            "demand_evidence": "rating 4.7/5, 400 reviews (Google Shopping AU)",
+        },
+        {
+            "name": "Dreamfarm Garject Garlic Press",
+            "pillar": "curated_home",
+            "source_keyword": "garlic crusher",
+            "demand_evidence": "rating 4.6/5, 120 reviews (Google Shopping AU)",
+        },
+        {
+            "name": "Ceramic bath tray",
+            "pillar": "self_care_rituals",
+            "demand_evidence": "rating 4.5/5, 430 reviews (Google Shopping AU)",
+        },
+    ]
+    selected = select_gold_products(products, limit=50)
+    names = [p["name"] for p in selected]
+    assert "Garlic Press OXO Good Grips" in names
+    assert "Joseph Joseph Helix Garlic Press" not in names
+    # A different source keyword is a different product type, so it survives.
+    assert "Dreamfarm Garject Garlic Press" in names
+    # No source keyword at all falls back to the name: its own group.
+    assert "Ceramic bath tray" in names
+    assert len(selected) == 3
+
+
 def test_adaptive_target_and_floor_math():
     # 8-20 gold products is the plan's design zone (§5.4).
     assert per_product_target(8) == 8
@@ -297,6 +344,30 @@ def test_adaptive_target_and_floor_math():
     assert default_per_product_min(12) == 3
     assert default_per_product_min(4) == 11
     assert default_per_product_min(1) == 49
+
+
+def test_target_math_stays_inside_the_pool_band():
+    # The Step-3 production run curated 263 products, so the generator trims to
+    # DEFAULT_MAX_PRODUCTS; its target math has to fit 50-70 keywords for every
+    # set size the cap can produce. 35 is the band's hard ceiling (2 each = 70
+    # exactly); past that no pool could name every product and still fit.
+    assert DEFAULT_MAX_PRODUCTS == 30
+    # 24 products is the one size with no uniform target inside the band: 2
+    # each is 48 (short of 50) and 3 each is 72 (past 70). The target takes
+    # the floor there, and only --max-products can reach that size.
+    for count in range(1, DEFAULT_MAX_PRODUCTS + 1):
+        target = per_product_target(count)
+        assert target >= default_per_product_min(count), count
+        assert target * count <= MAX_KEYWORDS, count
+        if count != 24:
+            assert target * count >= MIN_KEYWORDS, count
+    assert per_product_target(24) == 2
+    assert per_product_target(30) == 2
+    assert per_product_target(30) * 30 == TARGET_TOTAL
+    assert per_product_target(35) == 2
+    assert per_product_target(35) * 35 == MAX_KEYWORDS
+    # 36 products cannot be named individually inside the band.
+    assert default_per_product_min(36) * 36 > MAX_KEYWORDS
 
 
 # --- the generation flow --------------------------------------------------
@@ -425,6 +496,37 @@ def test_generate_dedupes_repeated_keywords(tmp_path, caplog):
     assert "dropped 2 repeated keyword(s)" in caplog.text
 
 
+def test_generate_carries_earlier_keywords_into_later_batches(tmp_path):
+    """The pool-wide uniqueness rule is only satisfiable with the taken list.
+
+    Each call is independent, so a later batch cannot know what an earlier one
+    claimed. The live cap-30 rerun (2026-09-28) failed exactly there: batch 1
+    claimed `stainless steel garlic press` for one press and a later batch
+    wrote the same string for the other, which dedupe then starved.
+    """
+    rows = _keyword_rows(GOLD_NAMES)
+    log = []
+    generator = _generator(
+        [_batch_json(rows[:32]), _batch_json(rows[32:])], log, tmp_path
+    )
+
+    generator.generate()
+
+    first_send = log[0]["payload"]["messages"][1]["content"]
+    second_send = log[1]["payload"]["messages"][1]["content"]
+    # The first call has nothing to avoid; the second is told the first's pool.
+    assert "already used these" not in first_send
+    assert "never repeat one of them" in second_send
+    first_keywords = {row["keyword"] for row in rows[:32]}
+    for keyword in first_keywords:
+        assert f"`{keyword}`" in second_send
+    # A keyword only the second batch is expected to write is not pre-listed.
+    later_only = {row["keyword"] for row in rows[32:]} - first_keywords
+    assert later_only
+    for keyword in later_only:
+        assert f"`{keyword}`" not in second_send
+
+
 def test_dedupe_keywords_keeps_the_first_occurrence():
     rows = [
         {"keyword": "a", "product": "one"},
@@ -434,6 +536,40 @@ def test_dedupe_keywords_keeps_the_first_occurrence():
     kept, dropped = dedupe_keywords(rows)
     assert [r["product"] for r in kept] == ["one", "two"]
     assert dropped == ["a"]
+
+
+def test_dedupe_keywords_awards_a_contested_keyword_to_the_neediest_product():
+    """Two products writing the same pair must end up with one each.
+
+    First-wins would hand both keywords to the first product and leave the
+    second with none, which is what failed the live cap-30 run — the rows
+    arrive in batch order, so the loss always fell on the later batch.
+    """
+    rows = [
+        {"keyword": "garlic press", "product": "helix"},
+        {"keyword": "garlic press with peeler", "product": "helix"},
+        {"keyword": "garlic press", "product": "oxo"},
+        {"keyword": "garlic press with peeler", "product": "oxo"},
+    ]
+    kept, dropped = dedupe_keywords(rows)
+    by_product = {}
+    for row in kept:
+        by_product.setdefault(row["product"], []).append(row["keyword"])
+    assert sorted(by_product) == ["helix", "oxo"]
+    assert len(by_product["helix"]) == 1
+    assert len(by_product["oxo"]) == 1
+    assert len({row["keyword"] for row in kept}) == 2
+    assert dropped == ["garlic press", "garlic press with peeler"]
+
+
+def test_dedupe_keywords_leaves_a_single_writer_alone():
+    rows = [
+        {"keyword": "olive wood board", "product": "board"},
+        {"keyword": "bamboo bath caddy", "product": "caddy"},
+    ]
+    kept, dropped = dedupe_keywords(rows)
+    assert kept == rows
+    assert dropped == []
 
 
 def test_parse_llm_keywords_reports_salvage():
