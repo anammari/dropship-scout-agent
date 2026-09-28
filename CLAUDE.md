@@ -560,6 +560,12 @@ only in `.env` / the real environment.
 
 ## 12. OPERATIONAL NOTES
 
+- **PR review workflow:** the operator personally requests the Copilot PR
+  review when he wants it — a Copilot review is **never auto-requested on
+  PR creation or push** (requesting it is his action, only ever on his
+  explicit ask). Once a review reports no High-severity findings, he merges
+  to `main` himself and decides the fix-now vs follow-up split. The agent
+  raises PRs only when he asks (he normally raises them himself).
 - **CJ liveness:** the MCP stream is the sole arbiter (no frontend reads, no
   Turnstile). Manual browser spot-checks of exported CJ
   `supplier_retail_url`s remain the cheap final safeguard until the stream
