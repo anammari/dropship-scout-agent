@@ -487,7 +487,7 @@ requiring a login for the MTOP calls in §6.
 | `MIN_MARKUP_MULTIPLIER` | `2.5` | margin floor (markup leg), llm_filter + models |
 | `MIN_MARGIN_AUD` | `20.0` | margin floor (gross-profit leg), llm_filter + models |
 | `TARGET_COUNTRY` | `AU` | extraction/evaluation target; also the AliExpress ship-to market |
-| `APIFY_TOKEN` | — | Apify account token: Step-3 gold-research actor (§13); also the trend-research fallback via the Apify MCP (`.mcp.json`) |
+| `APIFY_TOKEN` | — | Apify account token, shared by TWO actors: (1) Step-2 trend-research FALLBACK `data_xplorer/google-trends-fast-scraper` via the Apify MCP (`.mcp.json`) — used only if the HasData Google Trends MCP fails or returns an info-poor schema, $2.00/1,000 results; (2) Step-3 gold-research CORE actor (§13), $3.50/1,000 results |
 | `APIFY_GS_ACTOR` | `damilo/google-shopping-apify` | Step-3 gold-research actor id (§13) |
 | `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | `10` | Step-3 results requested per keyword (actor `num`; closed set 10/20/30/40/50/100) |
 | `APIFY_GS_MAX_CHARGE_USD` | `7.5` | Step-3 hard USD spend ceiling per actor run, enforced by Apify itself; sized above the observed full-bank envelope (~$5.60) and within the free-tier remainder |
@@ -619,7 +619,7 @@ post-ingestion product ranking (Step 6).
 
 | Step | What | Status on this branch |
 |---|---|---|
-| 1 | Google Trends (HasData MCP) research | done (research, `/tmp` scratch — no repo code by design) |
+| 1 | Google Trends (HasData MCP) research | done (research, `/tmp` scratch — no repo code by design). The Apify fallback `data_xplorer/google-trends-fast-scraper` ($2.00/1,000) was not needed — HasData stayed healthy |
 | 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `outputs/step-2-search-keywords.{json,md}` (untracked) |
 | 3 | Apify Google Shopping AU scrape of the Step-2 keywords + LLM curation → gold-standard product list | done — §13.2 |
 | 4 | Reasoning LLM → 50–70 supplier keywords from the gold list | planned — `src/keywords/` rewrite |

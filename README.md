@@ -222,11 +222,15 @@ fails immediately without burning supplier quota.
 
 On the `feature/jev-keyword-gate-multistep-pipeline` branch, the updated
 pipeline builds a gold-kernel intake on top of the supplier core above:
-Google Trends research → AU search keywords (deliverables in the untracked
+Google Trends research (primary: the HasData Google Trends MCP; fallback:
+the `data_xplorer/google-trends-fast-scraper` Apify actor at $2.00/1,000
+results, used only when HasData is unavailable or info-poor) → AU search
+keywords (deliverables in the untracked
 `outputs/` tree: `step-2-search-keywords.{json,md}` — 40 AU keywords tagged
 `curated_home`/`self_care_rituals`/`other`, each with live demand
 evidence) → **gold-standard products scraped from live Google Shopping
-AU** (`damilo/google-shopping-apify` via Apify, pay-per-result) and curated
+AU** (`damilo/google-shopping-apify` via Apify, pay-per-result at
+$3.50/1,000) and curated
 by the reasoning LLM. The LLM only selects rows by their verbatim URL and
 annotates pillar/compliance/economics; every product fact is code-assembled
 from the scraped rows, so a hallucinated URL can never become a product.
