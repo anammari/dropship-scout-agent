@@ -174,11 +174,12 @@ class Settings:
         self.APIFY_GS_MAX_CHARGE_USD: float = _parse_float(
             os.getenv("APIFY_GS_MAX_CHARGE_USD"), default=7.5
         )
-        # Step-3 deliverable path (untracked plans/ tree); Steps 4 and 6 read
-        # the gold product list from here.
+        # Step-3 deliverable path (untracked outputs/ tree — all production
+        # deliverables of the updated pipeline live there, never a repo
+        # artefact); Steps 4 and 6 read the gold product list from here.
         self.GOLD_PRODUCTS_PATH: str = (
             os.getenv("GOLD_PRODUCTS_PATH")
-            or "plans/step-3-gold-standard-products.json"
+            or "outputs/step-3-gold-standard-products.json"
         )
 
         # --- Margin floor (the deterministic half of gate 2) ---

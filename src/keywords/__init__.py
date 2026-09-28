@@ -1,7 +1,8 @@
 """Step 3 keyword generation: the reasoning LLM's 50–70 candidate supplier
 keywords from the Step 2 product list, validated and typed for Step 4's Jev
 gate (plan §4). The prompt ships as the package resource `step3_prompt.md`;
-the keyword deliverable itself stays untracked (plans/, scoping data).
+the keyword deliverable itself stays untracked (outputs/ — production
+deliverables of the updated pipeline, never repo artefacts).
 """
 
 from src.keywords.generator import (

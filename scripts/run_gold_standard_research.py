@@ -6,7 +6,8 @@ One Apify actor run (pay-per-result) carries every keyword, then the
 reasoning LLM curates the rows (`src.evaluators.gold_curator`) and code
 assembles the deliverable from the verbatim scraped rows — the LLM selects
 by url, it never authors a product fact. Both outputs default under
-`plans/` (git-ignored — scoping data, not repo artefacts).
+`outputs/` (git-ignored — production deliverables of the updated pipeline,
+never repo artefacts).
 
 A run spends real Apify credit AND real LLM tokens. The planned envelope
 (keywords x ~40 observed rows/keyword and its cost estimate at the actor's
@@ -111,7 +112,7 @@ def main() -> None:
     parser.add_argument(
         "--keywords",
         type=Path,
-        default=REPO / "plans" / "step-2-search-keywords.json",
+        default=REPO / "outputs" / "step-2-search-keywords.json",
         help="Step-2 deliverable to seed from",
     )
     parser.add_argument(

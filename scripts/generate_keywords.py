@@ -4,8 +4,8 @@
 Wraps `src.keywords.generator.KeywordGenerator` with the file outputs the
 operator reviews: the structured pool (`--output`) and a readable digest
 (`--markdown`) that nests each modifier keyword under the broad term it
-tightens. Both default under `plans/` (git-ignored — scoping data, not repo
-artefacts). Each call makes one live LLM request per batch (default 4
+tightens. Both default under `outputs/` (git-ignored — production
+deliverables, not repo artefacts). Each call makes one live LLM request per batch (default 4
 products per batch, 8 products total), so a run takes minutes and spends
 real LLM credits.
 
@@ -95,13 +95,13 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=REPO / "plans" / "step-3-keywords.json",
+        default=REPO / "outputs" / "step-3-keywords.json",
         help="structured pool destination",
     )
     parser.add_argument(
         "--markdown",
         type=Path,
-        default=REPO / "plans" / "step-3-keywords.md",
+        default=REPO / "outputs" / "step-3-keywords.md",
         help="readable digest destination",
     )
     args = parser.parse_args()

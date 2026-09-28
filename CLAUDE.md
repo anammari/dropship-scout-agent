@@ -491,7 +491,7 @@ requiring a login for the MTOP calls in §6.
 | `APIFY_GS_ACTOR` | `damilo/google-shopping-apify` | Step-3 gold-research actor id (§13) |
 | `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | `10` | Step-3 results requested per keyword (actor `num`; closed set 10/20/30/40/50/100) |
 | `APIFY_GS_MAX_CHARGE_USD` | `7.5` | Step-3 hard USD spend ceiling per actor run, enforced by Apify itself; sized above the observed full-bank envelope (~$5.60) and within the free-tier remainder |
-| `GOLD_PRODUCTS_PATH` | `plans/step-3-gold-standard-products.json` | Step-3 gold-product deliverable (untracked `plans/` tree) |
+| `GOLD_PRODUCTS_PATH` | `outputs/step-3-gold-standard-products.json` | Step-3 gold-product deliverable (untracked `outputs/` tree) |
 | `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads, Playwright PDP harvest |
 
@@ -620,15 +620,19 @@ post-ingestion product ranking (Step 6).
 | Step | What | Status on this branch |
 |---|---|---|
 | 1 | Google Trends (HasData MCP) research | done (research, `/tmp` scratch — no repo code by design) |
-| 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `plans/step-2-search-keywords.{json,md}` (untracked) |
+| 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `outputs/step-2-search-keywords.{json,md}` (untracked) |
 | 3 | Apify Google Shopping AU scrape of the Step-2 keywords + LLM curation → gold-standard product list | done — §13.2 |
 | 4 | Reasoning LLM → 50–70 supplier keywords from the gold list | planned — `src/keywords/` rewrite |
 | 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | planned |
 | 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | planned |
 | 7–8 | Human-only: DSers/Zendrop manual supplier search; store curation | no code (deliberately) |
 
-All `plans/` deliverables are **untracked** (scoping data, not repo
-artifacts).
+All production deliverables live under `outputs/` — **untracked**
+(gitignored; scoping data, not repo artefacts). `plans/` now holds only
+the engineering/spec documents (the updated-pipeline plan and its
+predecessors). Future Steps 4–6 write their deliverables (keyword bank,
+ingestion results, Jev rankings) to `outputs/step-N-*` names in the same
+gitignored tree.
 
 ### 13.2 Step 3 — gold-standard product research (implemented)
 
@@ -636,7 +640,7 @@ artifacts).
 source .venv/bin/activate && python scripts/run_gold_standard_research.py \
     [--limit 2] [--num 10] [--dump-raw /tmp/step3_raw_rows.json] \
     [--from-raw /tmp/step3_raw_rows.json] \
-    [--output plans/step-3-gold-standard-products.json]
+    [--output outputs/step-3-gold-standard-products.json]
 ```
 
 - **Scrape** (`src/extractors/google_shopping.py`): ONE batched run of the
@@ -663,7 +667,7 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   `not_available_from_source` never reaches the deliverable — a gold
   product must carry on-page demand evidence, and the Step-2 Trends
   evidence stays in the keyword file where it belongs.
-- **Deliverable**: `plans/step-3-gold-standard-products.json` (+ `.md`
+- **Deliverable**: `outputs/step-3-gold-standard-products.json` (+ `.md`
   digest) — the reference set Steps 4 and 6 measure against. The runner
   prints the planned spend envelope before the first call, exits non-zero
   when nothing usable comes back, and `--from-raw` replays curation over a
@@ -713,6 +717,7 @@ rating+review-count evidence and a price, and the anti-hallucination join
 verified all 263 urls verbatim against the raw rows with zero join drops.
 The one-retry guard fired exactly once (one flaky empty-content batch,
 retried, run continued) — it earned its keep on the first production run.
-Deliverables: `plans/step-3-gold-standard-products.{json,md}` plus the raw
-rows at `plans/step-3-gold-raw-rows.json` (any future re-curation replays
+Deliverables: `outputs/step-3-gold-standard-products.{json,md}` plus the
+raw rows at `outputs/step-3-gold-raw-rows.json` (any future re-curation
+replays
 from that dump at zero Apify spend).
