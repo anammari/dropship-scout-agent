@@ -658,8 +658,11 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   merchant, demand evidence, keyword) is **code-assembled from the scraped
   rows** — a hallucinated or edited url can never become a product (dropped
   at the code-side join). Demand evidence comes from the row's
-  rating/reviewCount or is honestly `not_available_from_source` (the actor
-  publishes no purchased-recently KPI).
+  rating/reviewCount; **rows with neither KPI are filtered out before the
+  LLM** (operator decision 2026-09-28), so
+  `not_available_from_source` never reaches the deliverable — a gold
+  product must carry on-page demand evidence, and the Step-2 Trends
+  evidence stays in the keyword file where it belongs.
 - **Deliverable**: `plans/step-3-gold-standard-products.json` (+ `.md`
   digest) — the reference set Steps 4 and 6 measure against. The runner
   prints the planned spend envelope before the first call, exits non-zero
@@ -671,11 +674,14 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   spend the whole `max_tokens` budget thinking and return empty `content`
   with `finish_reason="length"` (observed live at 60 rows / 8,000 tokens;
   the empty-content error names the finish reason explicitly). A full
-  40-keyword run (~1,600 rows) is therefore ~160 reasoning LLM calls —
-  roughly 1–2 hours of curation after the scrape. That is the pacing, not
-  a hang; the batch size buys reliability, not speed.
+  40-keyword run is therefore ~100–160 reasoning LLM calls after the
+  demand-evidence filter shrinks the pool — roughly an hour or two of
+  curation after the scrape. That is the pacing, not a hang; the batch
+  size buys reliability, not speed, and one retry per batch absorbs the
+  model's flaky empty-content mode so a single flaky batch cannot void the
+  run.
 
-### 13.3 Step-3 live evidence (2026-09-28, pilot: `--limit 2`, 2 keywords)
+### 13.3 Step-3 live evidence (2026-09-28)
 
 - Actor input validation is real: `num` accepts ONLY
   10/20/30/40/50/100 — anything else fails the run before spending.
@@ -696,3 +702,17 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   is covered by hermetic tests.
 - The full 40-keyword production run (~$5.60 envelope, under the free-tier
   remainder) is deliberately **deferred until the operator's go**.
+
+**Production run (same day, operator's go):** all 40 Step-2 keywords, run
+`rP09Pk3x0nkqlSuLB`, actor usage **$4.06** (1,567 rows ≈ $0.0026/result —
+under the README rate; total Apify spend $6.76 of the $10 free tier). The
+demand-evidence filter kept 718 rows (46%); 72 curation batches produced
+**263 gold products** (157 `curated_home`, 106 `self_care_rituals`, zero
+`other`), **every one of the 40 keywords contributed**, all 263 carry
+rating+review-count evidence and a price, and the anti-hallucination join
+verified all 263 urls verbatim against the raw rows with zero join drops.
+The one-retry guard fired exactly once (one flaky empty-content batch,
+retried, run continued) — it earned its keep on the first production run.
+Deliverables: `plans/step-3-gold-standard-products.{json,md}` plus the raw
+rows at `plans/step-3-gold-raw-rows.json` (any future re-curation replays
+from that dump at zero Apify spend).

@@ -223,11 +223,15 @@ fails immediately without burning supplier quota.
 On the `feature/jev-keyword-gate-multistep-pipeline` branch, the updated
 pipeline builds a gold-kernel intake on top of the supplier core above:
 Google Trends research → AU search keywords (deliverables in the untracked
-`plans/` tree) → **gold-standard products scraped from live Google Shopping
+`plans/` tree: `step-2-search-keywords.{json,md}` — 40 AU keywords tagged
+`curated_home`/`self_care_rituals`/`other`, each with live demand
+evidence) → **gold-standard products scraped from live Google Shopping
 AU** (`damilo/google-shopping-apify` via Apify, pay-per-result) and curated
 by the reasoning LLM. The LLM only selects rows by their verbatim URL and
 annotates pillar/compliance/economics; every product fact is code-assembled
 from the scraped rows, so a hallucinated URL can never become a product.
+Curated gold products must carry on-page demand evidence — rows with no
+rating/review KPI are filtered out before the LLM.
 The gold list is the reference set the planned Steps 4–6 (gold-driven
 keyword generation, dual-supplier ingestion, Jev ranking) measure against.
 Full details: `CLAUDE.md` §13.
@@ -239,13 +243,17 @@ python scripts/run_gold_standard_research.py --limit 2 --dump-raw /tmp/step3_raw
 # Re-play curation over a previous dump — zero Apify spend (debugging path)
 python scripts/run_gold_standard_research.py --from-raw /tmp/step3_raw_rows.json
 
-# Full production run over every Step-2 keyword (~$5.60 spend envelope)
-python scripts/run_gold_standard_research.py
+# Full production run over every Step-2 keyword (observed: ~1,600 rows, ~$4.10)
+python scripts/run_gold_standard_research.py --dump-raw plans/step-3-gold-raw-rows.json
 ```
 
 The runner prints the planned spend envelope before the first call, and a
 hard per-run USD ceiling (`APIFY_GS_MAX_CHARGE_USD`) rides the actor run
-options and is enforced by Apify itself.
+options and is enforced by Apify itself. The 2026-09-28 production run
+over all 40 Step-2 keywords spent $4.06 of Apify credit and produced 263
+demand-evidenced gold products (157 `curated_home`, 106
+`self_care_rituals`), stored in the untracked `plans/` tree with the raw
+rows alongside, so re-curation never repeats the scrape.
 
 ---
 
