@@ -212,6 +212,48 @@ class Settings:
             os.getenv("OPTIMAL_EXPORT_DIR") or DEFAULT_OPTIMAL_EXPORT_DIR
         )
 
+        # --- Step 6: Jev product ranking (TypeSafe System One via OpenRouter;
+        # updated multi-step pipeline) ---
+        # OpenRouter API key (`sk-or-v1-…`), the operator's credential for the
+        # Jev-hosted System One endpoint. Optional at import (the supplier
+        # core never needs it); the Step-6 ranker raises `JevConfigError` when
+        # it is absent, which the runner renders as an intervention block —
+        # that is how the step gates on the operator's credential cadence.
+        self.OPENROUTER_API_KEY: Optional[str] = (
+            os.getenv("OPENROUTER_API_KEY") or None
+        )
+        # OpenRouter API base; the System One path (`/systemone`) is appended
+        # by the client. A blank value falls back to the public endpoint.
+        self.OPENROUTER_BASE_URL: str = (
+            os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+        )
+        # The System One model id (OpenRouter form). `typesafe/jev-1.13` is the
+        # pinned version; the `~typesafe/jev-latest` alias tracks the moving
+        # latest and is deliberately not the default (a pinned model keeps a
+        # ranking reproducible).
+        self.JEV_MODEL: str = os.getenv("JEV_MODEL") or "typesafe/jev-1.13"
+        # Products per System One call. The native batch is one shared state +
+        # many independent questions, and TypeSafe cites ~13 questions per
+        # call as ~11.5x cheaper / 9.6x faster than separate calls; at three
+        # questions per product, 4 products = 12 questions sits right at that
+        # envelope. Cost control, not a hard ceiling.
+        self.JEV_BATCH_SIZE: int = _parse_int(
+            os.getenv("JEV_BATCH_SIZE"), default=4
+        )
+        # Tier boundaries on `rank_score` (0.6*similarity + 0.4*value). Jev
+        # reports a score POSITION along an ordered level list; the ranker
+        # shifts Jev's 0-based position onto a 1-5 scale (§8.0 semantics), so
+        # both floors read on 1-5: >= 4.0 -> shortlist, >= 2.5 -> review,
+        # else disregard. The two score questions and the choice question live
+        # in `src/ranking/jev_client.py`, so all judgement edits are in one
+        # place.
+        self.JEV_SHORTLIST_MIN_SCORE: float = _parse_float(
+            os.getenv("JEV_SHORTLIST_MIN_SCORE"), default=4.0
+        )
+        self.JEV_REVIEW_MIN_SCORE: float = _parse_float(
+            os.getenv("JEV_REVIEW_MIN_SCORE"), default=2.5
+        )
+
         # --- Margin floor (the deterministic half of gate 2) ---
         # An ACCEPT must clear markup_multiplier >= MIN_MARKUP_MULTIPLIER OR
         # estimated_margin_aud > MIN_MARGIN_AUD against the real landed cost;

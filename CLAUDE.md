@@ -1,6 +1,7 @@
 # CLAUDE.md - Dropship Scout Agent (Supplier-First Architecture)
 
-> Aligned with the implemented codebase as of 2026-09-23. This file is the
+> Aligned with the implemented codebase as of 2026-09-29 (Step 6 Jev ranking
+> implemented and live-run; see §13.7). This file is the
 > operating mandate and the single source of operating context: it carries
 > the schemas, gate rules, config reference and operational notes. The
 > retired `_docs/plan.md` engineering spec was deleted — it described the
@@ -119,6 +120,9 @@ dropship-scout-agent/
 │   ├── keywords/            # Step-4 gold-standard keyword engine (§13.3)
 │   │   ├── gold_keyword_prompt.md  # Step-4 prompt resource ({PRODUCT_TABLE} slot)
 │   │   └── generator.py     # Batched generation + code-side pool validation
+│   ├── ranking/             # Step-6 Jev product ranking (§13.7)
+│   │   ├── jev_client.py    # System One transport + all question/threshold constants
+│   │   └── jev_product_ranker.py  # Batching, composite score, tiers, report writer
 │   ├── pipeline/
 │   │   ├── cj_mcp_client.py # CJ MCP client + MCP Payload Liveness Gate
 │   │   ├── image_sourcing.py# deterministic CDN image download/validation
@@ -130,8 +134,9 @@ dropship-scout-agent/
 │   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
 │   ├── generate_gold_keywords.py     # Step-4 keyword bank runner (§13.3)
 │   ├── ingest_keyword_bank.py        # Step-5 dual-supplier ingestion runner (§13.6)
+│   ├── rank_optimal_candidates.py    # Step-6 Jev ranking runner (report only, no deletion)
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
-└── tests/                   # 485 hermetic tests, zero network (13 modules + conftest)
+└── tests/                   # 514 hermetic tests, zero network (14 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -499,6 +504,12 @@ requiring a login for the MTOP calls in §6.
 | `KEYWORD_BANK_PATH` | `outputs/step-4-gold-keywords.json` | Step-4 gold-keyword bank deliverable — Step 5's intake (untracked `outputs/` tree) |
 | `BANK_TARGET_PER_KEYWORD` | `2` | Step-5 packages exported per **(keyword, engine)** leg — a PER-LEG target, so the bank's keyword count multiplies it (§13.6) |
 | `OPTIMAL_EXPORT_DIR` | `…/my-store-build/inspiration/optimal-dropship-candidates` | Step-5 gold-kernel root: each engine writes into its own subfolder, numbered independently (§13.6) |
+| `OPENROUTER_API_KEY` | — | Step-6 Jev ranking: Bearer token for the OpenRouter System One endpoint (never logged) |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Step-6 client base; it appends `/systemone` |
+| `JEV_MODEL` | `typesafe/jev-1.13` | Step-6 System One model id (pinned so a ranking is reproducible) |
+| `JEV_BATCH_SIZE` | `4` | Step-6 packages per System One call (three questions each; ~13-question native batch) |
+| `JEV_SHORTLIST_MIN_SCORE` | `4.0` | Step-6 tier floor: `rank_score` ≥ this → shortlist (1–5 scale) |
+| `JEV_REVIEW_MIN_SCORE` | `2.5` | Step-6 tier floor: `rank_score` ≥ this → review, else disregard |
 | `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter (general intake §9) |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads, Playwright PDP harvest |
 
@@ -511,7 +522,7 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 485
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 514
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes + faked Apify SDK / scripted LLM transports).
 - `tests/test_keyword_bank.py` covers the Step-5 bank and its dual-supplier
@@ -559,6 +570,17 @@ only in `.env` / the real environment.
 - `tests/test_models.py` covers the schema validators, the zero-URL basis
   rule, `from_raw` cost and margin math, and the §8 shipping-notice derivation
   including the unquoted case; `tests/test_config.py` covers every key in §10.
+- `tests/test_jev_ranker.py` covers the Step-6 ranker: the System One
+  transport envelope (URL, Bearer auth, attribution headers, body shape), the
+  transport/HTTP/non-JSON/missing-`answers` failures, the `JevConfigError`
+  path, both question builders, the **0-based → 1–5 score shift**
+  (`answer_score`), the judgement constants and thresholds, both-supplier
+  collection with engine-qualified slugs, the unreadable/non-object metadata
+  skips, the empty-tree and missing-gold remediation, batching with one shared
+  state, the tier boundaries, the descending sort, the composite weights, a
+  missing answer key landing as `disregard` with a note, the discard-pillar
+  note, the retry-then-`disregard` batch failure, later batches continuing, and
+  the JSON/Markdown report writers — see §13.7.
 - **Live evidence (2026-09-21, read-only):** `garlic grater` → 20 search hits
   → 18 gated out → 2 kept, both harvested with 13 gallery URLs; a full
   pipeline run exported one package at a real DS cost of **AUD 3.86** and the
@@ -627,6 +649,12 @@ only in `.env` / the real environment.
   3.64 on screen). It is commercially negligible for margin work and is
   deliberately not "fixed" — a live FX feed adds a failure mode for ~6%
   on a cost basis that the relaxed floor of §3 already absorbs.
+- **Jev's `score` is 0-based, not 1-based (live probe 2026-09-29).** The plan
+  (§8.0) recorded the score position as 1-indexed; the live probe returned
+  `score = 3.24` against a 5-entry criteria list whose `legend` keys were
+  `"0".."4"`. `jev_client.answer_score` therefore shifts the raw position by
+  `JEV_SCORE_INDEX_SHIFT = 1.0` onto the 1–5 scale the thresholds are written
+  against, so no config default had to move (§13.7).
 - **AliExpress pacing:** each search hit costs one item-record round trip
   (~2-5 s), so `ALI_DS_MAX_PRODUCTS=20` means a keyword takes roughly 1-2
   minutes before the PDP harvest, which adds one page load per survivor.
@@ -659,7 +687,7 @@ post-ingestion product ranking (Step 6).
 | 3 | Apify Google Shopping AU scrape of the Step-2 keywords + LLM curation → gold-standard product list | done — §13.2 |
 | 4 | Reasoning LLM → 50–70 supplier keywords from the gold list | done — §13.3 |
 | 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | done — §13.6 |
-| 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | planned |
+| 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | done — §13.7 |
 | 7–8 | Human-only: DSers/Zendrop manual supplier search; store curation | no code (deliberately) |
 
 All research deliverables live under `outputs/` — **untracked**
@@ -667,9 +695,9 @@ All research deliverables live under `outputs/` — **untracked**
 packages are written into the Shopify workspace tree
 (`optimal-dropship-candidates/`, §13.6), like the general intake (§8). `plans/`
 now holds only the engineering/spec documents (the updated-pipeline plan and
-its predecessors). Step 6's Jev rankings will go to an `outputs/step-6-*` name
-in the same gitignored tree, as Step 4's keyword bank already does
-(`outputs/step-4-gold-keywords.{json,md}`).
+its predecessors). Step 6's Jev rankings live under the same gitignored tree as
+`outputs/step-6-ranked-candidates.{json,md}` (§13.7), as Step 4's keyword bank
+already does there (`outputs/step-4-gold-keywords.{json,md}`).
 
 ### 13.2 Step 3 — gold-standard product research (implemented)
 
@@ -1008,3 +1036,96 @@ truthful counts (21 duplicate skips: CJ 17, Ali 4; 3 no-image drops). Fixed as
 described above; `candidates_exported` was never affected, since it comes from
 `summary.exports`, and all 33 exports in the summary were verified against the
 `Exported` log lines.
+
+### 13.7 Step 6 — Jev product ranking (implemented)
+
+```bash
+source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
+    [--gold-products outputs/step-3-gold-standard-products.json] \
+    [--export-root <OPTIMAL_EXPORT_DIR>] [--batch-size 4] \
+    [--output outputs/step-6-ranked-candidates.json] [--markdown …]
+```
+
+Ranks **every** Step-5 gold-kernel package against the Step-3 gold-standard
+product list with **Jev** (TypeSafe **System One** via OpenRouter) and writes a
+tiered report. This is Jev's *new* role: **post-ingestion product ranking** — a
+product ranker, never a keyword gate (§13.1, plan §0.1). The two-tier keyword
+gate it replaces (and every `supplier_probe` / `[AICIS-T1-DROP]`-style tag) was
+never built and must never be.
+
+**Intake** is the gold-kernel tree (`<OPTIMAL_EXPORT_DIR>/{cjdropshipping,
+aliexpress}/product-NN/`) plus the Step-3 deliverable. Every package in both
+supplier folders is ranked; nothing is filtered on the way in. A package whose
+`metadata.json` is missing or non-object is skipped with a warning (the
+exporter's own duplicate-scan tolerance); nothing found at all raises
+`JevRankingError` naming `scripts/ingest_keyword_bank.py`, and a missing gold
+deliverable raises the same naming Step 3. The gold set is settled and the
+client built **before** the first System One call, so a bad intake never costs a
+billable request.
+
+**One shared state + many independent questions is the native batch (§8.0).**
+Each call's `state` is an object — `{"gold_reference": <Step-3 fields>,
+"products": {<slug>: <Step-5 metadata fields>}}` — and every question in the
+call sees that whole state. Three typed questions ride each package:
+`<slug>__similarity` (score: 5 ordered levels), `<slug>__winning_value` (score:
+5 ordered levels) and `<slug>__pillar` (choice: `curated_home` /
+`self_care_rituals` / `other` / `discard`). `JEV_BATCH_SIZE` defaults to **4**,
+so a call carries 12 questions — right at the docs' cited ~13-questions-per-call
+envelope (11.5× cheaper, 9.6× faster than separate calls). The slug is
+engine-qualified (`cjdropshipping_product_04`, `aliexpress_product_04`): the two
+suppliers number their folders independently, so an unqualified slug would
+collide in one state; and it never contains `__`, which the question-id
+`<slug>__<question>` scheme reserves.
+
+**Scoring and tiers.** `rank_score = 0.6·similarity + 0.4·value` on a 1–5 scale;
+`≥ JEV_SHORTLIST_MIN_SCORE` (4.0) → `shortlist`, `≥ JEV_REVIEW_MIN_SCORE` (2.5)
+→ `review`, else `disregard`. A package whose answer keys are missing lands as
+`disregard` with a note; a `discard` pillar adds its own note without moving the
+tier. The weights and thresholds live in `jev_client.py` (`SIMILARITY_LEVELS`,
+`VALUE_LEVELS`, `PILLAR_OPTIONS`, `QUESTIONS`, `SHORTLIST_MIN_SCORE`,
+`REVIEW_MIN_SCORE`) — "judgement in one place", per the vendor's review
+principle.
+
+**Jev's raw `score` is 0-BASED, and the client shifts it onto 1–5.** The plan
+(§8.0) assumed a 1-indexed position; the live probe (2026-09-29) returned
+`score = 3.24` against a 5-entry criteria list whose `legend` keys were
+`"0".."4"` — i.e. the position is zero-based and may fall between levels.
+`jev_client.answer_score` therefore adds `JEV_SCORE_INDEX_SHIFT = 1.0` so 0 maps
+to 1.0 and 4 maps to 5.0, keeping the plan's config defaults verbatim
+(4.0/2.5) meaningful on the intended 1–5 scale: with the shift, a shortlist
+score means "close match or better". The finding is recorded in the
+`jev_client.py` docstring and in §12.
+
+**A failed call retries once, and only that batch degrades.** `_decide_with_retry`
+retries one `JevError`; if the second attempt fails, only that batch's packages
+become `disregard` with `Jev batch call failed: <exc>` — the run never aborts on
+one bad call and later batches still rank.
+
+**Ranking is a report, not a deletion (plan §8.3).** No package directory is
+moved or removed — the ranker writes the tiered report and lets Step 7 (human)
+decide what to validate and link. Jev authors no product fact either: it returns
+only a similarity score, a winning-value score and a pillar; every field in the
+report is copied verbatim from the package's `metadata.json`.
+
+**Deliverables**: `outputs/step-6-ranked-candidates.json` (per-package verdicts
+plus a `summary` and a `tiers` grouping) and `.md` (tier-grouped digest) — the
+**untracked** `outputs/` tree (plan §11.8: production deliverables live in the
+gitignored tree, not `plans/`).
+
+**Runner blocks** (same rendered shape as §9/§13.6): *Step 6 Ranking Intake*
+(gold list or gold-kernel tree missing/empty) and *LLM Evaluation Filter
+Configuration* (`OPENROUTER_API_KEY` unset). Exit `0` complete, `1` intervention,
+`2` unexpected error; a run always prints `[STEP 6 COMPLETE]` with the tier
+counts.
+
+**Step-6 live run (2026-09-29, operator's go):** the 38 Step-5 packages
+(cjdropshipping 25, aliexpress 13) were ranked against **263** Step-3 gold
+products in **10 System One calls** of 4 packages each — **0 failed batches**,
+no retries needed. Result: **shortlist 12, review 8, disregard 18**. The
+shortlist leads with body brushes (`aliexpress/product-02`, 4.43) and garlic
+presses (`aliexpress/product-09`, 4.41; `aliexpress/product-08`, 4.30;
+`cjdropshipping/product-06`, 4.25) plus gua sha boards (`aliexpress/product-10`,
+4.36; `cjdropshipping/product-25`, 4.33) — exactly the Step-3/Step-4 pillars the
+gold list is built on, which is the signal the similarity axis works. The
+deliverables were written to `outputs/step-6-ranked-candidates.{json,md}` and
+confirmed gitignored (`.gitignore:31` = `outputs/`).
