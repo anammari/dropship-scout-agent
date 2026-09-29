@@ -40,6 +40,12 @@ complete, sourcing-ready product packages into the Shopify store workspace.
 └──────────────────────────────────────┘
 ```
 
+Two intake paths share this core: the **general intake** (§2.1–2.2), one
+keyword at a time into `dropship-candidates/`, and the **updated multi-step
+gold-kernel pipeline** (§2.3–2.6, Steps 3–6), which researches proven AU retail
+demand, generates a supplier keyword bank, ingests it through both suppliers,
+and ranks the result with Jev.
+
 **Key design contracts** (enforced by schema validators, not prompt wording):
 
 - **Candidates are real before the LLM sees them.** Every candidate is a
@@ -62,6 +68,10 @@ complete, sourcing-ready product packages into the Shopify store workspace.
   transit window.
 - **No incomplete packages** — a candidate with fewer than 3 validated images
   is dropped entirely; an `images/`-less directory is never written.
+- **Ranking is a report, not a deletion** — Step 6 ranks the gold kernel against
+  the gold products and writes a tiered shortlist/review/disregard report. It
+  never moves or removes a package, and it cannot author or edit a product fact:
+  Jev only scores similarity and winning value and picks a pillar.
 
 ---
 
@@ -76,11 +86,13 @@ complete, sourcing-ready product packages into the Shopify store workspace.
 - A supplier credential: `CJ_MCP_TOKEN`. The AliExpress Dropshipping Center
   engine needs no credential — it reads the DS Center's own APIs anonymously.
 - Research credentials for the updated multi-step pipeline: `APIFY_TOKEN` for
-  the Step-3 Google Shopping scrape, and `HASDATA_API_KEY` for Step-2 trend
-  research. Both are optional for the general intake (§2.1) — only the Steps
-  that use them need them.
+  the Step-3 Google Shopping scrape, `HASDATA_API_KEY` for Step-2 trend
+  research, and `OPENROUTER_API_KEY` for the Step-6 Jev ranking. All three are
+  optional for the general intake (§2.1) — only the Steps that use them need
+  them.
 - Internet access to `cjdropshipping.com`, `aliexpress.com`, `ollama.com`,
-  `apify.com`, and supplier CDN hosts (`cdn.alibabaimg.com`, etc.)
+  `apify.com`, `openrouter.ai`, and supplier CDN hosts (`cdn.alibabaimg.com`,
+  etc.)
 
 ### 1.2 Create and activate the virtual environment
 
@@ -195,8 +207,15 @@ APIFY_TOKEN="YOUR_APIFY_API_TOKEN"
 # --- Misc ---
 #USER_AGENT=""
 
-# --- Step 6: Jev product ranking (planned) ---
-#OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
+# --- Step 6: Jev product ranking (updated multi-step pipeline) ---
+# OpenRouter API key for the System One endpoint (model typesafe/jev-1.13).
+# Sent as a Bearer token; never logged.
+OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
+#OPENROUTER_BASE_URL=""
+#JEV_MODEL=""
+#JEV_BATCH_SIZE="4"
+#JEV_SHORTLIST_MIN_SCORE="4.0"
+#JEV_REVIEW_MIN_SCORE="2.5"
 ```
 
 | Variable | Required | Purpose |
@@ -229,7 +248,12 @@ APIFY_TOKEN="YOUR_APIFY_API_TOKEN"
 | `OPTIMAL_EXPORT_DIR` | — | Step-5 gold-kernel destination root; each engine writes into its own subfolder (default `…/my-store-build/inspiration/optimal-dropship-candidates`) |
 | `EXPORT_DIR` | — | Destination workspace for the general intake §2.1 (defaults to the Shopify path below) |
 | `USER_AGENT` | — | Desktop UA used by CDN downloads and the Playwright PDP gallery harvest |
-| `OPENROUTER_API_KEY` | reserved | OpenRouter key for the Step-6 Jev product-ranking endpoint (**Step 6 is planned, not implemented**). Read by that step's caller, not by `src/config.py` |
+| `OPENROUTER_API_KEY` | for Step 6 | OpenRouter key for the System One endpoint (model `typesafe/jev-1.13`); sent as a Bearer token, never logged |
+| `OPENROUTER_BASE_URL` | — | OpenRouter API base; the client appends `/systemone` (default `https://openrouter.ai/api/v1`) |
+| `JEV_MODEL` | — | System One model id, pinned so a ranking is reproducible (default `typesafe/jev-1.13`) |
+| `JEV_BATCH_SIZE` | — | Packages per System One call, three questions each (default `4`, matching the documented ~13-questions-per-call envelope) |
+| `JEV_SHORTLIST_MIN_SCORE` | — | Tier floor: `rank_score` at or above this is shortlist (default `4.0`, on the 1–5 scale) |
+| `JEV_REVIEW_MIN_SCORE` | — | Tier floor: `rank_score` at or above this is review, else disregard (default `2.5`) |
 
 **Security:** secrets from `.env` are never printed or logged by the agent
 (`Settings` holds a no-leak repr). Keep `.env` out of version control (it is
@@ -462,21 +486,49 @@ round trip for every hit, and a PDP harvest per survivor. A full bank across
 both engines is a long run — that is the pacing, not a hang. The two supplier
 trees are production deliverables, not repo artefacts, and stay untracked.
 
-### 2.6 Running the test suite
+### 2.6 Step 6 — Jev product ranking (the gold kernel's last automated step)
 
-```bash
-python -m pytest tests/ -v
+Ranks **every** Step-5 package against the Step-3 gold-standard product list with
+Jev (TypeSafe **System One** via OpenRouter) and writes a tiered report:
+
+```
+outputs/step-6-ranked-candidates.json   # the structured ranking
+outputs/step-6-ranked-candidates.md     # the tier-grouped digest
 ```
 
-The suite is **hermetic — zero network**. External services are faked:
-`httpx.MockTransport`, fake MCP sessions, scripted Playwright/MTOP fakes, a
-faked Apify SDK and scripted LLM transports. Coverage spans the schema
-validators (including the zero-URL `cogs_estimation_basis` rule and PDP-shape
-rejection), the MCP liveness gate and the CJ commercial gate and freight quote,
-the DS Center payload decoding and winning-product gate against scripted MTOP
-fakes, the LLM prompt/reconcile contract, the image gates against real
-PIL-encoded fixtures, the exporter hard-fail rules, the orchestrator counters and
-CLI exit codes, and the Step-3/4/5 engines.
+```bash
+source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
+    [--gold-products outputs/step-3-gold-standard-products.json] \
+    [--export-root <OPTIMAL_EXPORT_DIR>] [--batch-size 4] \
+    [--output outputs/step-6-ranked-candidates.json]
+```
+
+- **Intake is both supplier trees plus the gold list.** Every
+  `product-NN` under `<OPTIMAL_EXPORT_DIR>/{cjdropshipping,aliexpress}/` is
+  ranked; nothing is filtered on the way in. The Step-3 gold products are the
+  reference set the ranking measures against.
+- **Three questions per package, one batch per call.** Each System One call
+  carries a single shared state — the gold reference plus `JEV_BATCH_SIZE`
+  products — with `<slug>__similarity` and `<slug>__winning_value` (score) and
+  `<slug>__pillar` (choice) per product. One state + many independent questions
+  is the native batch: the vendor cites ~13 questions in one call as 11.5×
+  cheaper and 9.6× faster than separate calls, which is why the default is 4
+  packages (12 questions) per call.
+- **Scoring and tiers.** `rank_score = 0.6·similarity + 0.4·value` on a 1–5
+  scale; `≥ JEV_SHORTLIST_MIN_SCORE` (4.0) is **shortlist**, `≥
+  JEV_REVIEW_MIN_SCORE` (2.5) is **review**, otherwise **disregard**. Jev's raw
+  `score` is a **0-based** level position on the criteria list (a live probe
+  returned `3.24` for a 5-entry legend keyed `"0".."4"`), so the client shifts it
+  by +1 onto 1–5 before any threshold is compared — with the shift, a shortlist
+  score means "close match or better".
+- **A report, not a deletion.** No package directory is moved or removed — the
+  ranker writes the tiered report and Step 7 (human) decides what to validate
+  and link. A failed batch call retries once; if it still fails, only that
+  batch's packages become `disregard` with a note, and the run continues.
+- **Deliverable**: `step-6-ranked-candidates.{json,md}` in the untracked
+  `outputs/` tree. The JSON carries the per-package verdicts plus a `tiers`
+  grouping; the digest groups the packages by tier with each one's similarity,
+  value, rank score and pillar.
 
 ---
 
@@ -515,6 +567,21 @@ supplier, each numbering and deduping only against itself:
 The two trees never interleave: `dropship-candidates/` is the general intake,
 `optimal-dropship-candidates/` is the gold-kernel intake where **both** engines
 run every gold keyword.
+
+**Step 6 ranks that gold kernel without touching it** (§2.6): it reads the
+packages and writes its tiered report to the untracked `outputs/` tree beside
+the other research deliverables —
+
+```
+outputs/
+├── step-2-search-keywords.{json,md}
+├── step-3-gold-standard-products.{json,md}   # the gold reference Step 6 measures against
+├── step-4-gold-keywords.{json,md}            # the Step-5 keyword bank
+└── step-6-ranked-candidates.{json,md}        # Step 6's tiered ranking (shortlist/review/disregard)
+```
+
+The `outputs/` tree is git-ignored (scoping data, not repo artefacts), and Step
+6 never moves or deletes a package — it only reports.
 
 ### 3.2 `metadata.json` schema
 
@@ -746,6 +813,28 @@ Step 5 raises its own blocks (§2.5), all with the same rendered shape:
 - **LLM config** — the shared evaluator is built before the first leg, so a bad
   `.env` fails before supplier quota is spent.
 
+Step 6 raises two blocks (§2.6), same rendered shape:
+
+- **Step 6 Ranking Intake** — the Step-3 gold list or the Step-5 gold-kernel tree
+  is missing or empty; the block names the runner to re-run
+  (`scripts/run_gold_standard_research.py` / `scripts/ingest_keyword_bank.py`).
+- **LLM Evaluation Filter Configuration** — `OPENROUTER_API_KEY` is unset. The
+  gold set is settled before the client is built, so a missing Step-3
+  deliverable fails before any billable System One call.
+
+### 4.5 Running the test suite
+
+```bash
+python -m pytest tests/ -v
+```
+
+The suite is **hermetic — zero network**: every external service is faked
+(`httpx.MockTransport`, fake MCP sessions, scripted Playwright/MTOP fakes, a
+faked Apify SDK and scripted LLM transports). Coverage spans the schema
+validators and supplier gates, the LLM prompt/reconcile contract, the image
+gates against real PIL-encoded fixtures, the exporter hard-fail rules, the
+orchestrator counters and CLI exit codes, and the Step-3/4/5/6 engines.
+
 ---
 
 ## 5. Repository Layout
@@ -774,6 +863,9 @@ dropship-scout-agent/
 │   ├── keywords/              # Step-4 gold-standard keyword engine
 │   │   ├── gold_keyword_prompt.md  # Step-4 prompt resource ({PRODUCT_TABLE} slot)
 │   │   └── generator.py       # Batched generation + code-side pool validation
+│   ├── ranking/               # Step-6 Jev product ranking
+│   │   ├── jev_client.py      # System One transport + all question/threshold constants
+│   │   └── jev_product_ranker.py  # Batching, composite score, tiers, report writer
 │   └── pipeline/
 │       ├── cj_mcp_client.py   # CJ MCP client (token-in-URL auth, log redaction, liveness gate)
 │       ├── image_sourcing.py  # Deterministic supplier-gallery image engine
@@ -784,6 +876,7 @@ dropship-scout-agent/
 │   ├── mcp_headers.py           # MCP headersHelper: emits the trend-server auth headers
 │   ├── generate_gold_keywords.py      # Step-4 keyword bank runner
 │   ├── ingest_keyword_bank.py         # Step-5 dual-supplier ingestion runner
+│   ├── rank_optimal_candidates.py     # Step-6 Jev ranking runner (report only, no deletion)
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (Apify + LLM)
 └── tests/                     # Hermetic test suite, zero network
 ```
