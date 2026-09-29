@@ -75,8 +75,12 @@ complete, sourcing-ready product packages into the Shopify store workspace.
 - An **Ollama Cloud** account (the LLM evaluation endpoint)
 - A supplier credential: `CJ_MCP_TOKEN`. The AliExpress Dropshipping Center
   engine needs no credential — it reads the DS Center's own APIs anonymously.
-- Internet access to `cjdropshipping.com`, `aliexpress.com`, `ollama.com`, and
-  supplier CDN hosts (`cdn.alibabaimg.com`, etc.)
+- Research credentials for the updated multi-step pipeline: `APIFY_TOKEN` for
+  the Step-3 Google Shopping scrape, and `HASDATA_API_KEY` for Step-2 trend
+  research. Both are optional for the general intake (§2.1) — only the Steps
+  that use them need them.
+- Internet access to `cjdropshipping.com`, `aliexpress.com`, `ollama.com`,
+  `apify.com`, and supplier CDN hosts (`cdn.alibabaimg.com`, etc.)
 
 ### 1.2 Create and activate the virtual environment
 
@@ -121,36 +125,78 @@ Copy the template and fill in your credentials:
 cp .env.example .env
 ```
 
+`.env.example` is the authoritative template — the block below mirrors it, in
+the same order, with the same comment state. A key that is **commented out or
+present but blank** resolves to its default in `src/config.py`, so you only
+need to uncomment what you want to override.
+
 ```ini
 # .env — runtime configuration (NEVER commit this file)
 
-# CJdropshipping MCP (primary extractor) — paste the token from CJ's API
-# Authorization page; it is appended to the MCP endpoint as a path segment
-# and is never logged.
+# --- Supplier extractors (tried in SUPPLIER_PRIORITY_ORDER) ---
+
+# CJdropshipping MCP token (primary engine). Generate it on CJ's API
+# Authorization page; the client appends it to the remote MCP endpoint as a
+# path segment (never logged).
 CJ_MCP_TOKEN="YOUR_COPIED_MCP_TOKEN"
+# Remote MCP endpoint WITHOUT the token (the token is appended at connect time)
+#CJ_MCP_BASE_URL="https://developers.cjdropshipping.com/mcp"
 
-# LLM evaluation endpoint — Ollama Cloud (OpenAI-compatible)
-LLM_BASE_URL="https://ollama.com/v1"
-LLM_API_KEY="your_ollama_cloud_api_token"
-LLM_MODEL="deepseek-v4-flash:cloud"
-
-# AliExpress Dropshipping Center engine (optional; fallback in the chain).
-# No credential needed — the DS Center answers these calls anonymously.
+# AliExpress Dropshipping Center — no credential needed; the DS Center answers
+# these calls anonymously. The saved login below is optional and is injected
+# only when the file exists. Refresh it with:
+# python scripts/generate_ali_session.py
 #ALI_DS_STATE_PATH="ali_ds_state.json"
 #ALI_DS_MAX_PRODUCTS="20"
 #MIN_DS_ORDER_COUNT="500"
 #MIN_DS_RATING="4.5"
 
-# Optional tunables (defaults shown)
-TARGET_COUNTRY=AU
-USD_TO_AUD=1.55
-MIN_CJ_LISTED_COUNT=150
-CJ_FREIGHT_METHOD=
-CJ_MAX_PRODUCTS=10
-EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates
-# Step 5 (dual-supplier ingestion into the gold kernel)
-BANK_TARGET_PER_KEYWORD=2
-OPTIMAL_EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/optimal-dropship-candidates
+# --- Extractor chain & pricing ---
+#SUPPLIER_PRIORITY_ORDER="cjdropshipping,aliexpress"
+#USD_TO_AUD="1.55"
+#MIN_CJ_LISTED_COUNT="150"
+#CJ_FREIGHT_METHOD="CJPacket Eub"
+#CJ_MAX_PRODUCTS="10"
+
+# Margin floor (deterministic half of evaluation gate 2)
+#MIN_MARKUP_MULTIPLIER="2.5"
+#MIN_MARGIN_AUD="20.0"
+
+#TARGET_COUNTRY="AU"
+
+# --- LLM evaluation (Ollama Cloud, OpenAI-compatible) ---
+LLM_BASE_URL="https://ollama.com/v1"
+LLM_API_KEY="your_ollama_cloud_api_token"
+LLM_MODEL="deepseek-v4-flash:cloud"
+
+# --- Trend research (keyword brainstorming; MCP servers) ---
+# HasData is consumed by the project MCP config (.mcp.json) via
+# scripts/mcp_headers.py, not by src/config.py; APIFY_TOKEN is also read by
+# src/config.py for the Step-3 scrape.
+HASDATA_API_KEY="YOUR_HASDATA_API_KEY"
+APIFY_TOKEN="YOUR_APIFY_API_TOKEN"
+
+# --- Step 3 gold-standard research (Apify Google Shopping actor) ---
+#APIFY_GS_ACTOR=""
+#APIFY_GS_MAX_RESULTS_PER_KEYWORD="10"
+#APIFY_GS_MAX_CHARGE_USD="7.5"
+#GOLD_PRODUCTS_PATH="outputs/step-3-gold-standard-products.json"
+
+# --- Step 4 gold-standard keyword bank ---
+#KEYWORD_BANK_PATH="outputs/step-4-gold-keywords.json"
+
+# --- Step 5 dual-supplier ingestion (CJ MCP + AliExpress DS Center) ---
+#BANK_TARGET_PER_KEYWORD="2"
+#OPTIMAL_EXPORT_DIR=""
+
+# --- Export destination (Shopify workspace) ---
+#EXPORT_DIR="/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates"
+
+# --- Misc ---
+#USER_AGENT=""
+
+# --- Step 6: Jev product ranking (planned) ---
+#OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
 ```
 
 | Variable | Required | Purpose |
@@ -160,6 +206,7 @@ OPTIMAL_EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/optimal-drop
 | `LLM_BASE_URL` | ✅ | OpenAI-compatible chat-completions endpoint (Ollama Cloud: `https://ollama.com/v1`) |
 | `LLM_API_KEY` | ✅ | Ollama Cloud API token |
 | `LLM_MODEL` | — | Defaults to `deepseek-v4-flash:cloud` |
+| `HASDATA_API_KEY` | for trend research | HasData Google Trends MCP key — the default trend source for Step 2 keyword brainstorming. Read from `.env` by `scripts/mcp_headers.py` for the `.mcp.json` servers, not by `src/config.py` |
 | `ALI_DS_STATE_PATH` | — | Optional saved AliExpress login (`storage_state`), injected only when the file exists; the DS Center answers anonymously, so it is never required. Refresh with `python scripts/generate_ali_session.py` |
 | `ALI_DS_MAX_PRODUCTS` | — | DS Center search page size / per-keyword expansion cap (default `20`) |
 | `MIN_DS_ORDER_COUNT` | — | AliExpress winning-product gate: minimum historical orders (default `500`) |
@@ -172,7 +219,7 @@ OPTIMAL_EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/optimal-drop
 | `MIN_MARKUP_MULTIPLIER` | — | Margin floor, markup leg: an ACCEPT must clear this **or** `MIN_MARGIN_AUD` against the real landed cost (default `2.5`) |
 | `MIN_MARGIN_AUD` | — | Margin floor, gross-profit leg, in AUD per unit (default `20.0`) |
 | `TARGET_COUNTRY` | — | Extraction/evaluation target (default `AU`); also the AliExpress DS Center's ship-to market, which decides both its catalogue and its quoted price. CJ's MCP search `countryCode` is pinned to the China warehouse (`CN`) instead |
-| `APIFY_TOKEN` | for Step 3/2 research | Apify token shared by the Google Trends fallback actor and the Step-3 gold-research actor |
+| `APIFY_TOKEN` | for Step 3/2 research | Apify token shared by the Google Trends fallback actor (Step 2, via `scripts/mcp_headers.py`) and the Step-3 gold-research actor (`apify-client`) |
 | `APIFY_GS_ACTOR` | — | Step-3 gold-research actor id (default `damilo/google-shopping-apify`) |
 | `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | — | Step-3 results requested per keyword; the actor's closed set is 10/20/30/40/50/100 (default `10`) |
 | `APIFY_GS_MAX_CHARGE_USD` | — | Step-3 hard USD spend ceiling per run, enforced by Apify itself (default `7.5`) |
@@ -182,6 +229,7 @@ OPTIMAL_EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/optimal-drop
 | `OPTIMAL_EXPORT_DIR` | — | Step-5 gold-kernel destination root; each engine writes into its own subfolder (default `…/my-store-build/inspiration/optimal-dropship-candidates`) |
 | `EXPORT_DIR` | — | Destination workspace for the general intake §2.1 (defaults to the Shopify path below) |
 | `USER_AGENT` | — | Desktop UA used by CDN downloads and the Playwright PDP gallery harvest |
+| `OPENROUTER_API_KEY` | reserved | OpenRouter key for the Step-6 Jev product-ranking endpoint (**Step 6 is planned, not implemented**). Read by that step's caller, not by `src/config.py` |
 
 **Security:** secrets from `.env` are never printed or logged by the agent
 (`Settings` holds a no-leak repr). Keep `.env` out of version control (it is
@@ -285,6 +333,7 @@ reasoning LLM.
 
 ```bash
 source .venv/bin/activate && python scripts/run_gold_standard_research.py \
+    [--keywords outputs/step-2-search-keywords.json] \
     [--limit 2] [--num 10] [--dump-raw /tmp/step3_raw_rows.json] \
     [--from-raw /tmp/step3_raw_rows.json] \
     [--output outputs/step-3-gold-standard-products.json]
@@ -320,7 +369,7 @@ pool that breaks any rule exits non-zero with nothing written.
 ```bash
 source .venv/bin/activate && python scripts/generate_gold_keywords.py \
     [--gold-products outputs/step-3-gold-standard-products.json] \
-    [--batch-size 4] [--max-products 12] \
+    [--batch-size 4] [--max-products 30] \
     [--output outputs/step-4-gold-keywords.json] [--markdown …]
 ```
 
@@ -499,7 +548,7 @@ Exactly these 13 keys, every run:
 | `suggested_price_aud` | LLM verdict under the 5-point gate, reconciled against the real cost |
 | `estimated_cogs_aud` + `cogs_estimation_basis` | **Not LLM-authored** — the supplier's real listed price **plus its own quoted freight**; the basis string is zero-URL (any URL substring fails schema validation) and cites both halves of the landed cost |
 | `projected_margin_aud` | Recomputed deterministically in code (`retail − COGS`) — the LLM's arithmetic is never trusted |
-| `shipping_notice_au` | **Not LLM-authored** — derived in code from the freight quote's service name and transit window. Where the supplier quoted no shipping (AliExpress) it asserts nothing about tracking or transit, because nothing verified them. It makes no claim about what the customer pays, because the pipeline does not know the store's shipping policy |
+| `shipping_notice_au` | **Not LLM-authored** — derived in code from the freight quote's service name and transit window. Where the supplier quoted no shipping (AliExpress) it is the bare literal `Ships to Australia from the supplier.` and asserts nothing about tracking or transit, because nothing verified them. It makes no claim about what the customer pays, because the pipeline does not know the store's shipping policy |
 | `supplier_name`, `supplier_retail_url` | **Not LLM-authored** — copied verbatim from the verified `RawSupplierProduct`; the URL must match the supplier's direct-product-page shape |
 | `image_source` | Always `"supplier_gallery"` — imagery provenance for the files in `images/` |
 
@@ -531,7 +580,8 @@ never trusted. An image ships only if it passes **all** gates:
 Before download, alicdn thumbnail URLs are upgraded to the original asset via
 `strip_size_suffix()` (covering both the legacy trailing `_640x640.jpg` form and
 alicdn's mid-filename `_960x960q75.jpg_.avif` marker); the upgrade is tried first
-with the as-served URL as fallback. At most 8 images are kept.
+with the as-served URL as fallback. At most **64 candidate URLs** are considered
+and at most **8 images** are kept per product.
 
 ### 3.4 Image provenance
 
@@ -707,6 +757,7 @@ dropship-scout-agent/
 ├── pyproject.toml             # Pinned dependencies + pytest configuration
 ├── .env.example               # Template for runtime configuration
 ├── .env                       # Actual credentials — never committed
+├── .mcp.json                  # Trend-research MCP servers (Step 2)
 ├── src/
 │   ├── config.py              # Env-driven settings singleton
 │   ├── models.py              # Pydantic schemas + sourcing/anti-hallucination validators
@@ -730,6 +781,7 @@ dropship-scout-agent/
 ├── scripts/
 │   ├── generate_ali_session.py  # Optional saved DS Center login
 │   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
+│   ├── mcp_headers.py           # MCP headersHelper: emits the trend-server auth headers
 │   ├── generate_gold_keywords.py      # Step-4 keyword bank runner
 │   ├── ingest_keyword_bank.py         # Step-5 dual-supplier ingestion runner
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (Apify + LLM)
