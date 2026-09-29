@@ -29,6 +29,14 @@ DEFAULT_EXPORT_DIR = (
     "/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates"
 )
 
+# Step-5 gold-kernel intake destination (plan §7.2). One supplier subfolder
+# per engine, each numbered independently; this is the gold-kernel tree the
+# updated pipeline produces, distinct from the general `dropship-candidates/`
+# intake above.
+DEFAULT_OPTIMAL_EXPORT_DIR = (
+    "/Users/ahmadammari/PD/my-store-build/inspiration/optimal-dropship-candidates"
+)
+
 # Remote CJdropshipping MCP server (StreamableHTTP). The MCP token is
 # appended as a path segment at connect time — see cj_mcp_client.py.
 DEFAULT_CJ_MCP_BASE_URL = "https://developers.cjdropshipping.com/mcp"
@@ -142,6 +150,108 @@ class Settings:
         # sku-detail tool; this caps how many products one keyword expands to.
         self.CJ_MAX_PRODUCTS_PER_KEYWORD: int = _parse_int(
             os.getenv("CJ_MAX_PRODUCTS"), default=10
+        )
+
+        # --- Step 3: Google Shopping gold-standard research (updated
+        # multi-step pipeline) ---
+        # Apify token, shared with the trends fallback MCP (both bill the same
+        # Apify account). The actor is pay-per-result ($3.50/1,000 results
+        # observed), so the per-keyword result cap is the spend ceiling.
+        self.APIFY_TOKEN: Optional[str] = os.getenv("APIFY_TOKEN") or None
+        # The Google Shopping actor id; overridable for a replacement actor
+        # without a code change.
+        self.APIFY_GS_ACTOR: str = (
+            os.getenv("APIFY_GS_ACTOR") or "damilo/google-shopping-apify"
+        )
+        # Results requested per keyword (actor `num` field; closed set
+        # 10/20/30/40/50/100 — anything else fails the run before spending).
+        # NOTE (observed live 2026-09-28): the actor returns a full ~40-row
+        # SERP page per keyword REGARDLESS of this value, so spend is
+        # governed by keywords × ~40 × $0.0035, not by this cap.
+        self.APIFY_GS_MAX_RESULTS_PER_KEYWORD: int = _parse_int(
+            os.getenv("APIFY_GS_MAX_RESULTS_PER_KEYWORD"), default=10
+        )
+        # Hard spend ceiling, enforced by Apify itself (the run's
+        # `max_total_charge_usd` option): the actor run aborts rather than
+        # exceed it. Sized from the OBSERVED envelope (2026-09-28 pilot: the
+        # actor returns a full ~40-row SERP page per keyword regardless of
+        # `num`, so the full 40-keyword bank is ~1,600 results ≈ $5.60): the
+        # ceiling must sit ABOVE that or the production run is aborted by its
+        # own safety net, and it stays within the free-tier remainder
+        # ($7.58 as of 2026-09-28) so even the worst case bills no real money.
+        self.APIFY_GS_MAX_CHARGE_USD: float = _parse_float(
+            os.getenv("APIFY_GS_MAX_CHARGE_USD"), default=7.5
+        )
+        # Step-3 deliverable path (untracked outputs/ tree — all production
+        # deliverables of the updated pipeline live there, never a repo
+        # artefact); Steps 4 and 6 read the gold product list from here.
+        self.GOLD_PRODUCTS_PATH: str = (
+            os.getenv("GOLD_PRODUCTS_PATH")
+            or "outputs/step-3-gold-standard-products.json"
+        )
+        # Step-4 deliverable path — the Step-5 "keyword bank": the 50-70
+        # supplier search keywords Step 4 generated from the gold products,
+        # which Step 5 ingests through BOTH supplier pipelines (CJ MCP and the
+        # AliExpress DS Center) and Step 6 ranks against the gold list. Same
+        # untracked outputs/ tree as every other production deliverable.
+        self.KEYWORD_BANK_PATH: str = (
+            os.getenv("KEYWORD_BANK_PATH") or "outputs/step-4-gold-keywords.json"
+        )
+        # Step-5 export target PER ENGINE: the number of ACCEPTed packages
+        # one (keyword, engine) leg may write. It is a per-leg target, so the
+        # bank's keyword count multiplies it — 2 keeps a 60-keyword bank from
+        # turning into hundreds of packages, while still giving each keyword
+        # a real chance to contribute to both supplier folders.
+        self.BANK_TARGET_PER_KEYWORD: int = _parse_int(
+            os.getenv("BANK_TARGET_PER_KEYWORD"), default=2
+        )
+        # Step-5 gold-kernel intake root: the two supplier subfolders are
+        # created under it by the runner, each numbered independently
+        # (`cjdropshipping/product-NN`, `aliexpress/product-NN`).
+        self.OPTIMAL_EXPORT_DIR: str = (
+            os.getenv("OPTIMAL_EXPORT_DIR") or DEFAULT_OPTIMAL_EXPORT_DIR
+        )
+
+        # --- Step 6: Jev product ranking (TypeSafe System One via OpenRouter;
+        # updated multi-step pipeline) ---
+        # OpenRouter API key (`sk-or-v1-…`), the operator's credential for the
+        # Jev-hosted System One endpoint. Optional at import (the supplier
+        # core never needs it); the Step-6 ranker raises `JevConfigError` when
+        # it is absent, which the runner renders as an intervention block —
+        # that is how the step gates on the operator's credential cadence.
+        self.OPENROUTER_API_KEY: Optional[str] = (
+            os.getenv("OPENROUTER_API_KEY") or None
+        )
+        # OpenRouter API base; the System One path (`/systemone`) is appended
+        # by the client. A blank value falls back to the public endpoint.
+        self.OPENROUTER_BASE_URL: str = (
+            os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+        )
+        # The System One model id (OpenRouter form). `typesafe/jev-1.13` is the
+        # pinned version; the `~typesafe/jev-latest` alias tracks the moving
+        # latest and is deliberately not the default (a pinned model keeps a
+        # ranking reproducible).
+        self.JEV_MODEL: str = os.getenv("JEV_MODEL") or "typesafe/jev-1.13"
+        # Products per System One call. The native batch is one shared state +
+        # many independent questions, and TypeSafe cites ~13 questions per
+        # call as ~11.5x cheaper / 9.6x faster than separate calls; at three
+        # questions per product, 4 products = 12 questions sits right at that
+        # envelope. Cost control, not a hard ceiling.
+        self.JEV_BATCH_SIZE: int = _parse_int(
+            os.getenv("JEV_BATCH_SIZE"), default=4
+        )
+        # Tier boundaries on `rank_score` (0.6*similarity + 0.4*value). Jev
+        # reports a score POSITION along an ordered level list; the ranker
+        # shifts Jev's 0-based position onto a 1-5 scale (§8.0 semantics), so
+        # both floors read on 1-5: >= 4.0 -> shortlist, >= 2.5 -> review,
+        # else disregard. The two score questions and the choice question live
+        # in `src/ranking/jev_client.py`, so all judgement edits are in one
+        # place.
+        self.JEV_SHORTLIST_MIN_SCORE: float = _parse_float(
+            os.getenv("JEV_SHORTLIST_MIN_SCORE"), default=4.0
+        )
+        self.JEV_REVIEW_MIN_SCORE: float = _parse_float(
+            os.getenv("JEV_REVIEW_MIN_SCORE"), default=2.5
         )
 
         # --- Margin floor (the deterministic half of gate 2) ---

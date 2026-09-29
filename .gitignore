@@ -20,8 +20,20 @@ SESSION_CONTEXT.md
 
 # Agent plan prompts — working directives, not deliverables. They live on the
 # operator's machine only (and in the session they came from), so no plan
-# prompt is ever tracked, here or in any future checkout.
+# prompt is ever tracked, here or in any future checkout. Engineering plans
+# and spec docs live here; PRODUCTION DELIVERABLES moved to outputs/ (below).
 plans/
+
+# Research-stage production deliverables (Steps 2-6 of the updated pipeline):
+# AU search keywords, gold-standard products + raw scraped rows, the Step-4
+# keyword bank, Step-6 rankings. Scoping data the operator consumes, never a
+# repo artefact.
+outputs/
+
+# Third-party reference kept for a later phase: the TypeSafe (Jev) API doc.
+# The Jev gate is wired through OpenRouter for now, so this stays a local
+# future reference rather than a tracked file.
+docs/TypeSafe_agent_skill_doc.md
 
 # Test / tooling caches
 .pytest_cache/

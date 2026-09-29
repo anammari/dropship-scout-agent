@@ -1,6 +1,7 @@
 # CLAUDE.md - Dropship Scout Agent (Supplier-First Architecture)
 
-> Aligned with the implemented codebase as of 2026-09-23. This file is the
+> Aligned with the implemented codebase as of 2026-09-29 (Step 6 Jev ranking
+> implemented and live-run; see §13.7). This file is the
 > operating mandate and the single source of operating context: it carries
 > the schemas, gate rules, config reference and operational notes. The
 > retired `_docs/plan.md` engineering spec was deleted — it described the
@@ -111,17 +112,31 @@ dropship-scout-agent/
 │   ├── extractors/
 │   │   ├── base.py          # BaseSupplierExtractor + shared exceptions
 │   │   ├── cj_mcp_extractor.py      # CJdropshipping MCP: commercial gate, liveness gate, freight quote
-│   │   └── aliexpress_ds.py         # native DS Center ingestion + winner gate
-│   ├── evaluators/llm_filter.py     # instructor + ProvisionalProductEvaluation
+│   │   ├── aliexpress_ds.py         # native DS Center ingestion + winner gate
+│   │   └── google_shopping.py        # Step-3 gold-research Apify actor wrapper (§13; NOT a supplier extractor)
+│   ├── evaluators/
+│   │   ├── llm_filter.py    # instructor + ProvisionalProductEvaluation
+│   │   └── gold_curator.py  # Step-3 LLM curation: select-by-url, facts code-assembled (§13)
+│   ├── keywords/            # Step-4 gold-standard keyword engine (§13.3)
+│   │   ├── gold_keyword_prompt.md  # Step-4 prompt resource ({PRODUCT_TABLE} slot)
+│   │   └── generator.py     # Batched generation + code-side pool validation
+│   ├── ranking/             # Step-6 Jev product ranking (§13.7)
+│   │   ├── jev_client.py    # System One transport + all question/threshold constants
+│   │   └── jev_product_ranker.py  # Batching, composite score, tiers, report writer
 │   ├── pipeline/
 │   │   ├── cj_mcp_client.py # CJ MCP client + MCP Payload Liveness Gate
-│   │   └── image_sourcing.py# deterministic CDN image download/validation
+│   │   ├── image_sourcing.py# deterministic CDN image download/validation
+│   │   └── keyword_bank.py  # Step-5 bank loader + dual-supplier ingestion (§13.6)
 │   ├── exporter.py          # workspace writer (metadata.json + images/)
 │   └── main.py              # CLI orchestrator, funnel counters, exit codes
 ├── scripts/
 │   ├── generate_ali_session.py  # optional saved DS Center login (§6)
-│   └── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
-└── tests/                   # 359 hermetic tests, zero network (9 modules + conftest)
+│   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
+│   ├── generate_gold_keywords.py     # Step-4 keyword bank runner (§13.3)
+│   ├── ingest_keyword_bank.py        # Step-5 dual-supplier ingestion runner (§13.6)
+│   ├── rank_optimal_candidates.py    # Step-6 Jev ranking runner (report only, no deletion)
+│   └── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
+└── tests/                   # 514 hermetic tests, zero network (14 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -481,7 +496,21 @@ requiring a login for the MTOP calls in §6.
 | `MIN_MARKUP_MULTIPLIER` | `2.5` | margin floor (markup leg), llm_filter + models |
 | `MIN_MARGIN_AUD` | `20.0` | margin floor (gross-profit leg), llm_filter + models |
 | `TARGET_COUNTRY` | `AU` | extraction/evaluation target; also the AliExpress ship-to market |
-| `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter |
+| `APIFY_TOKEN` | — | Apify account token, shared by TWO actors: (1) Step-2 trend-research FALLBACK `data_xplorer/google-trends-fast-scraper` via the Apify MCP (`.mcp.json`) — used only if the HasData Google Trends MCP fails or returns an info-poor schema, $2.00/1,000 results; (2) Step-3 gold-research CORE actor (§13), $3.50/1,000 results |
+| `APIFY_GS_ACTOR` | `damilo/google-shopping-apify` | Step-3 gold-research actor id (§13) |
+| `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | `10` | Step-3 results requested per keyword (actor `num`; closed set 10/20/30/40/50/100) |
+| `APIFY_GS_MAX_CHARGE_USD` | `7.5` | Step-3 hard USD spend ceiling per actor run, enforced by Apify itself; sized above the observed full-bank envelope (~$5.60) and within the free-tier remainder |
+| `GOLD_PRODUCTS_PATH` | `outputs/step-3-gold-standard-products.json` | Step-3 gold-product deliverable (untracked `outputs/` tree) |
+| `KEYWORD_BANK_PATH` | `outputs/step-4-gold-keywords.json` | Step-4 gold-keyword bank deliverable — Step 5's intake (untracked `outputs/` tree) |
+| `BANK_TARGET_PER_KEYWORD` | `2` | Step-5 packages exported per **(keyword, engine)** leg — a PER-LEG target, so the bank's keyword count multiplies it (§13.6) |
+| `OPTIMAL_EXPORT_DIR` | `…/my-store-build/inspiration/optimal-dropship-candidates` | Step-5 gold-kernel root: each engine writes into its own subfolder, numbered independently (§13.6) |
+| `OPENROUTER_API_KEY` | — | Step-6 Jev ranking: Bearer token for the OpenRouter System One endpoint (never logged) |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Step-6 client base; it appends `/systemone` |
+| `JEV_MODEL` | `typesafe/jev-1.13` | Step-6 System One model id (pinned so a ranking is reproducible) |
+| `JEV_BATCH_SIZE` | `4` | Step-6 packages per System One call (three questions each; ~13-question native batch) |
+| `JEV_SHORTLIST_MIN_SCORE` | `4.0` | Step-6 tier floor: `rank_score` ≥ this → shortlist (1–5 scale) |
+| `JEV_REVIEW_MIN_SCORE` | `2.5` | Step-6 tier floor: `rank_score` ≥ this → review, else disregard |
+| `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter (general intake §9) |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads, Playwright PDP harvest |
 
 Every key in `.env.example` is present in `.env` in the same order with the
@@ -493,9 +522,39 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 359
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 514
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
-  Playwright/MTOP fakes).
+  Playwright/MTOP fakes + faked Apify SDK / scripted LLM transports).
+- `tests/test_keyword_bank.py` covers the Step-5 bank and its dual-supplier
+  ingestion: the fail-closed loader (missing/malformed/empty/non-list
+  payloads, non-object and non-string rows, the banned-token defence in
+  depth), and `ingest_keyword_bank` over fake extractors/evaluator/exporters
+  — both engines run for every keyword, one shared evaluator, the per-leg
+  failure skip with the other engine continuing, the all-engines-failed
+  `BankIngestionFailedError`, the empty-catalogue accounting, the per-leg
+  early stop (it uses the real `run_pipeline`, so the funnel counters and the
+  early-stop rule are inherited, not re-implemented), and the
+  cumulative-exporter-counter delta fold — including the empty-funnel leg,
+  which must fold as 0 rather than as a negative. It writes to `tmp_path` and
+  never touches the real supplier trees — see §13.6.
+- `tests/test_keyword_generator.py` covers the Step-4 gold-keyword engine:
+  the template prompt (the product table is a `{PRODUCT_TABLE}` slot, never
+  a hardcoded list), the table rendering (cells verbatim, `null` → `—`), the
+  gold-deliverable read with its remediation errors, the demand-ranked
+  selection with its boundary-name exclusion and one-per-`source_keyword`
+  type collapse, the adaptive per-product target and floor, batching with the
+  per-batch note and the carried do-not-repeat list, the merged-pool
+  validation contract (broad/modifier pairing, banned tokens, band,
+  coverage, floor), the neediest-first duplicate collapse, and salvaging; it
+  uses a tmp_path gold fixture and never reads the real `outputs/` tree —
+  see §13.3.
+  `tests/test_google_shopping.py`
+  covers the Step-3 gold-research scraper (actor input shape incl. the
+  closed-set `num`, spend ceiling riding the run options, run-status
+  taxonomy, row parsing) and the gold curator (facts assembled from rows,
+  invented-URL join drop, pillar/boundary enforcement, dedupe, fenced and
+  truncated-response salvage, the reasoning-model empty-content failure,
+  batching, transport/HTTP/config errors) — see §13.
 - `tests/test_aliexpress_ds.py` covers the payload decoding (plain and
   JSONP), order/rating parsing, the currency guard and AUD conversion, the
   §6.1 gate and each documented drop log, the MTOP priming-then-signed
@@ -511,6 +570,17 @@ only in `.env` / the real environment.
 - `tests/test_models.py` covers the schema validators, the zero-URL basis
   rule, `from_raw` cost and margin math, and the §8 shipping-notice derivation
   including the unquoted case; `tests/test_config.py` covers every key in §10.
+- `tests/test_jev_ranker.py` covers the Step-6 ranker: the System One
+  transport envelope (URL, Bearer auth, attribution headers, body shape), the
+  transport/HTTP/non-JSON/missing-`answers` failures, the `JevConfigError`
+  path, both question builders, the **0-based → 1–5 score shift**
+  (`answer_score`), the judgement constants and thresholds, both-supplier
+  collection with engine-qualified slugs, the unreadable/non-object metadata
+  skips, the empty-tree and missing-gold remediation, batching with one shared
+  state, the tier boundaries, the descending sort, the composite weights, a
+  missing answer key landing as `disregard` with a note, the discard-pillar
+  note, the retry-then-`disregard` batch failure, later batches continuing, and
+  the JSON/Markdown report writers — see §13.7.
 - **Live evidence (2026-09-21, read-only):** `garlic grater` → 20 search hits
   → 18 gated out → 2 kept, both harvested with 13 gallery URLs; a full
   pipeline run exported one package at a real DS cost of **AUD 3.86** and the
@@ -541,6 +611,12 @@ only in `.env` / the real environment.
 
 ## 12. OPERATIONAL NOTES
 
+- **PR review workflow:** the operator personally requests the Copilot PR
+  review when he wants it — a Copilot review is **never auto-requested on
+  PR creation or push** (requesting it is his action, only ever on his
+  explicit ask). Once a review reports no High-severity findings, he merges
+  to `main` himself and decides the fix-now vs follow-up split. The agent
+  raises PRs only when he asks (he normally raises them himself).
 - **CJ liveness:** the MCP stream is the sole arbiter (no frontend reads, no
   Turnstile). Manual browser spot-checks of exported CJ
   `supplier_retail_url`s remain the cheap final safeguard until the stream
@@ -573,6 +649,12 @@ only in `.env` / the real environment.
   3.64 on screen). It is commercially negligible for margin work and is
   deliberately not "fixed" — a live FX feed adds a failure mode for ~6%
   on a cost basis that the relaxed floor of §3 already absorbs.
+- **Jev's `score` is 0-based, not 1-based (live probe 2026-09-29).** The plan
+  (§8.0) recorded the score position as 1-indexed; the live probe returned
+  `score = 3.24` against a 5-entry criteria list whose `legend` keys were
+  `"0".."4"`. `jev_client.answer_score` therefore shifts the raw position by
+  `JEV_SCORE_INDEX_SHIFT = 1.0` onto the 1–5 scale the thresholds are written
+  against, so no config default had to move (§13.7).
 - **AliExpress pacing:** each search hit costs one item-record round trip
   (~2-5 s), so `ALI_DS_MAX_PRODUCTS=20` means a keyword takes roughly 1-2
   minutes before the PDP harvest, which adds one page load per survivor.
@@ -580,3 +662,470 @@ only in `.env` / the real environment.
   `ExtractorBlockedException` (the chain moves on) rather than reporting an
   empty funnel, and a session/auth refusal raises
   `DsCenterSessionExpiredError`, which halts with re-login instructions.
+## 13. THE UPDATED MULTI-STEP WINNING-PRODUCT PIPELINE (branch `feature/jev-keyword-gate-multistep-pipeline`)
+
+> Appended as §13 (not renumbered into §5's position) so every existing
+> §5–§12 cross-reference across the repo stays valid. This section covers
+> the gold-kernel pipeline being built **on this branch**; the supplier core
+> (§5–§9) is untouched by it and remains the general intake. The full
+> engineering plan is the (untracked) `plans/updated_multistep_pipeline_implementation_plan.md`.
+
+### 13.1 Overview — gold-kernel intake vs general intake
+
+The updated pipeline produces a **gold kernel**: a small set of
+proven-demand AU retail products (Google Shopping evidence) that drives
+keyword generation, supplier ingestion and Jev ranking, exported to
+`my-store-build/inspiration/optimal-dropship-candidates/{aliexpress,cjdropshipping}/`
+(Step 5, §13.6). The existing `dropship-candidates/` intake (§8) stays as
+the general flow. **Jev never was a keyword gate** — its role is
+post-ingestion product ranking (Step 6).
+
+| Step | What | Status on this branch |
+|---|---|---|
+| 1 | Google Trends (HasData MCP) research | done (research, `/tmp` scratch — no repo code by design). The Apify fallback `data_xplorer/google-trends-fast-scraper` ($2.00/1,000) was not needed — HasData stayed healthy |
+| 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `outputs/step-2-search-keywords.{json,md}` (untracked) |
+| 3 | Apify Google Shopping AU scrape of the Step-2 keywords + LLM curation → gold-standard product list | done — §13.2 |
+| 4 | Reasoning LLM → 50–70 supplier keywords from the gold list | done — §13.3 |
+| 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | done — §13.6 |
+| 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | done — §13.7 |
+| 7–8 | Human-only: DSers/Zendrop manual supplier search; store curation | no code (deliberately) |
+
+All research deliverables live under `outputs/` — **untracked**
+(gitignored; scoping data, not repo artefacts) — while the Step-5 gold-kernel
+packages are written into the Shopify workspace tree
+(`optimal-dropship-candidates/`, §13.6), like the general intake (§8). `plans/`
+now holds only the engineering/spec documents (the updated-pipeline plan and
+its predecessors). Step 6's Jev rankings live under the same gitignored tree as
+`outputs/step-6-ranked-candidates.{json,md}` (§13.7), as Step 4's keyword bank
+already does there (`outputs/step-4-gold-keywords.{json,md}`).
+
+### 13.2 Step 3 — gold-standard product research (implemented)
+
+```bash
+source .venv/bin/activate && python scripts/run_gold_standard_research.py \
+    [--limit 2] [--num 10] [--dump-raw /tmp/step3_raw_rows.json] \
+    [--from-raw /tmp/step3_raw_rows.json] \
+    [--output outputs/step-3-gold-standard-products.json]
+```
+
+- **Scrape** (`src/extractors/google_shopping.py`): ONE batched run of the
+  `damilo/google-shopping-apify` actor (pay-per-result, ~$3.50/1,000
+  results) carries every keyword (`queries` input), `country="au"`,
+  `max_pages=1`. Spend is governed three ways: the actor's closed-set `num`
+  is validated before any money moves; a hard `max_total_charge_usd`
+  ceiling (`APIFY_GS_MAX_CHARGE_USD`) rides the run options and is enforced
+  by Apify itself; `--limit N` pilots on the first N keywords. It is
+  **extractor-shaped but deliberately NOT a `BaseSupplierExtractor`**: these
+  are marketplace retail listings with no supplier PDP, freight quote or
+  gallery, so they can never become `RawSupplierProduct` without fabricating
+  sourcing fields — the module is never registered in the extractor chain.
+- **Curate** (`src/evaluators/gold_curator.py`): the reasoning LLM only
+  **selects by verbatim `url`** and annotates `pillar` /
+  `compliance_note` / `unit_economics_note` (one of
+  `curated_home`/`self_care_rituals`/`other`, strict no-cosmetics /
+  no-consumable / no-IP boundaries). Every product fact (name, price,
+  merchant, demand evidence, keyword) is **code-assembled from the scraped
+  rows** — a hallucinated or edited url can never become a product (dropped
+  at the code-side join). Demand evidence comes from the row's
+  rating/reviewCount; **rows with neither KPI are filtered out before the
+  LLM** (operator decision 2026-09-28), so
+  `not_available_from_source` never reaches the deliverable — a gold
+  product must carry on-page demand evidence, and the Step-2 Trends
+  evidence stays in the keyword file where it belongs.
+- **Deliverable**: `outputs/step-3-gold-standard-products.json` (+ `.md`
+  digest) — the reference set Steps 4 and 6 measure against. The runner
+  prints the planned spend envelope before the first call, exits non-zero
+  when nothing usable comes back, and `--from-raw` replays curation over a
+  prior `--dump-raw` dump at **zero Apify spend** (the debugging path).
+- **Pacing:** the curation batches at `ROWS_PER_CALL=10` rows per LLM call
+  — the configured model is a *reasoning* model whose chain-of-thought
+  shares the completion budget with the answer, and a larger batch makes it
+  spend the whole `max_tokens` budget thinking and return empty `content`
+  with `finish_reason="length"` (observed live at 60 rows / 8,000 tokens;
+  the empty-content error names the finish reason explicitly). A full
+  40-keyword run is therefore ~100–160 reasoning LLM calls after the
+  demand-evidence filter shrinks the pool — roughly an hour or two of
+  curation after the scrape. That is the pacing, not a hang; the batch
+  size buys reliability, not speed, and one retry per batch absorbs the
+  model's flaky empty-content mode so a single flaky batch cannot void the
+  run.
+
+### 13.3 Step 4 — gold-standard keyword bank (implemented)
+
+```bash
+source .venv/bin/activate && python scripts/generate_gold_keywords.py \
+    [--gold-products outputs/step-3-gold-standard-products.json] \
+    [--batch-size 4] [--max-products 12] \
+    [--output outputs/step-4-gold-keywords.json] [--markdown …]
+```
+
+Turns the Step-3 gold list into the **50–70 supplier search keywords** Step 5
+ingests, typed as `CandidateKeyword(keyword, product, pillar, role, tightens,
+rationale)` with `role ∈ {broad, modifier}` and
+`pillar ∈ {curated_home, self_care_rituals, other}` (`"other"` was added to
+the Literal for this step).
+
+- **Prompt** (`src/keywords/gold_keyword_prompt.md`): carries **no
+  products**. Its product table is a literal `{PRODUCT_TABLE}` slot, filled
+  at runtime from the live Step-3 deliverable via `str.replace` (never
+  `.format()` — the requirements text contains literal braces,
+  `{"keywords": […]}`). `load_prompt_parts` raises if the slot is absent, so
+  a prompt that has silently lost its slot fails before any spend.
+- **The bank is validated in code, not trusted from the prompt.**
+  `validate_pool` re-checks every rule the prompt states: required fields
+  (`FIELDS`), pillar and role membership, dangling/self `tightens`,
+  broad-carries-`tightens`, the AICIS banned-token boundary, duplicates, the
+  50–70 band, unknown/unmentioned `product`, and the per-product floor. A
+  failing pool raises `KeywordGenerationError` and **writes nothing** —
+  same fail-closed posture as §2.
+- **Selection is bounded, type-diverse and deterministic.** The live Step-3
+  deliverable has **263** products, while the plan's per-product target math
+  assumed 8–20. `select_gold_products` therefore caps the table at
+  `DEFAULT_MAX_PRODUCTS = 30` (`--max-products`), ranked by demand
+  (`-reviews, -rating, name`), collapsed to the strongest row per duplicate
+  name, **collapsed to the strongest row per Step-2 `source_keyword`**, then
+  **round-robined across `PILLARS`** so a capped table still covers every
+  pillar. The 263-product deliverable is untouched — it stays the full
+  research record; the cap only bounds what the keyword prompt sees.
+
+  **The type collapse is load-bearing, not tidiness.** The research is
+  keyword-driven, so the strongest 30 rows by raw demand were about 15
+  distinct types — 5 garlic presses, 5 coffee/French presses, 4 body dry
+  brushes, 4 ice rollers. Every table product must be named by *its own*
+  keywords, the pool treats a duplicate keyword string as fatal (Step 5 runs
+  each once) and brand names are banned, so five garlic presses cannot each
+  own two honest keywords: the model writes the shared head term for all of
+  them and dedupe starves the rest — exactly how the first cap-30 run failed.
+  One row per source keyword spends the table on distinct products instead
+  (the live rerun selected 30 distinct types). A row with no source keyword
+  falls back to its own name as the group key.
+
+  **30 is not arbitrary either:** the validator requires every table product
+  to be named inside a 50–70 pool at ≥ `default_per_product_min`, so 35
+  products is the band's hard ceiling (2 each = 70 exactly) and 30 keeps
+  headroom (60 of 70). Widening from the original 12 spreads the band across
+  more of the researched demand at no extra Step-5 ingestion cost.
+- **Boundary names are excluded from the table.** `carries_banned_token`
+  drops a gold product whose own *name* carries a banned AICIS token (7 of
+  263 measured: jade 4, quartz 2, salt 1 — gua sha tools and a salt product),
+  because its honest keyword could never clear the pool validator. They
+  remain in the Step-3 deliverable.
+- **Adaptive target/floor, bounded by the band at both ends.**
+  `per_product_target(n) = min(9, ceil(60/n), 70 // n)`, raised to
+  `ceil(50/n)` only when that lift still fits under 70, and never below
+  `default_per_product_min(n) = max(2, 50 // n - 1)`. The `70 // n` term is
+  what makes a 30-product table work at all: the plan's `[3, 9]` clamp asks
+  90 keywords there, past the ceiling. At 30 → **2 per product (60 total)**;
+  at 35 → 2 (70, the ceiling). One size has no uniform target: 24 products
+  (2 each = 48, 3 each = 72) — the target takes the floor there, and only
+  `--max-products` can reach it. 36+ is infeasible; the cap of 30 sits well
+  inside that.
+- **Uniqueness is enforced at both ends — in the prompt and in code.**
+  `validate_pool` treats a duplicate keyword string as fatal (Step 5 runs
+  each once), and each batch call is independent, so the model cannot infer
+  what a previous batch wrote. `generate()` therefore accumulates every
+  keyword emitted so far and `_assemble_user_message` appends them to later
+  calls as an explicit do-not-repeat list (requirement 2 says the list is
+  there). Without it the rule is unsatisfiable across batches, which is how
+  the second cap-30 run failed: three shared head terms were written by two
+  products each, and dedupe left three products with 1 of their 2 keywords.
+- **Pacing:** batches of `DEFAULT_BATCH_SIZE = 4` products per LLM call,
+  `MAX_TOKENS = 16000`. The configured reasoning model shares that budget
+  between its chain-of-thought and the visible content, so an oversize batch
+  returns empty content with `finish_reason="length"`. `parse_llm_keywords`
+  salvages a truncated fenced-JSON tail and the empty-content error names the
+  finish reason. `dedupe_keywords` then collapses any repeated keyword still
+  written (logging a WARNING) before `validate_pool`, awarding a contested
+  string to the product with the fewest keywords of its own rather than to
+  the batch that answered first — first-wins always starves the later
+  batches. `validate_pool`'s duplicate check stays as the guard for
+  directly-called or hand-merged pools.
+- **Deliverable**: `outputs/step-4-gold-keywords.json` (+ `.md` digest,
+  modifiers nested under their broad term) — Step 5's keyword bank. The
+  runner prints the gold-product count, per-product target and batch size
+  before the first call, and exits non-zero on `KeywordGenerationError`
+  having written nothing.
+
+### 13.4 Step-3 live evidence (2026-09-28)
+
+- Actor input validation is real: `num` accepts ONLY
+  10/20/30/40/50/100 — anything else fails the run before spending.
+- The actor returns a **full first SERP page per keyword (~40 rows) even at
+  `num=10`** — `num` is not a per-keyword cap on this actor. The honest
+  spend envelope is keywords × ~40 rows (~$0.14/keyword at
+  $0.0035/result); the pilot's 2 keywords returned 80 rows (~$0.28).
+- **The `link` field carries Google Shopping SEARCH urls**
+  (`google.com/search?ibp=oshop&…`), not merchant PDP urls — the actor
+  README's merchant-style example link is misleading. The url is therefore
+  a stable row identity for the anti-hallucination join and resolves to the
+  listing on Google, not the merchant's page.
+- End-to-end (rows cached via `--dump-raw`, then curated via `--from-raw`
+  at zero credit): 80 rows → 24 gold products, every product url verified
+  verbatim against the scraped rows. The first curation attempt failed
+  because the 60-row batch exhausted the reasoning budget (empty content,
+  `finish_reason="length"`); the fix — 10 rows/call + `MAX_TOKENS=16000` —
+  is covered by hermetic tests.
+- The full 40-keyword production run (~$5.60 envelope, under the free-tier
+  remainder) is deliberately **deferred until the operator's go**.
+
+**Production run (same day, operator's go):** all 40 Step-2 keywords, run
+`rP09Pk3x0nkqlSuLB`, actor usage **$4.06** (1,567 rows ≈ $0.0026/result —
+under the README rate; total Apify spend $6.76 of the $10 free tier). The
+demand-evidence filter kept 718 rows (46%); 72 curation batches produced
+**263 gold products** (157 `curated_home`, 106 `self_care_rituals`, zero
+`other`), **every one of the 40 keywords contributed**, all 263 carry
+rating+review-count evidence and a price, and the anti-hallucination join
+verified all 263 urls verbatim against the raw rows with zero join drops.
+The one-retry guard fired exactly once (one flaky empty-content batch,
+retried, run continued) — it earned its keep on the first production run.
+Deliverables: `outputs/step-3-gold-standard-products.{json,md}` plus the
+raw rows at `outputs/step-3-gold-raw-rows.json` (any future re-curation
+replays
+from that dump at zero Apify spend).
+
+### 13.5 Step-4 live evidence (2026-09-28)
+
+Four green/failed runs, each fix below coming out of a failure:
+
+| Run | Table | Result |
+|---|---|---|
+| — | the strongest 12 by demand (first attempt) | **failed** — the validator rejected a duplicate keyword written for two garlic presses; `dedupe_keywords` (§13.3) is the fix |
+| 1 | the strongest 12 by demand | green: **58 keywords**, `per_product_target = 8`, 3 calls |
+| 2 | the strongest 30 by demand | **failed** — the table was ~15 distinct types (5 garlic presses, 5 coffee presses), and five garlic presses cannot each own 2 unique honest keywords |
+| 3 | 30, one per Step-2 `source_keyword` | **failed** — 3 cross-batch repeats (`stainless steel garlic press`, `dry body brush`, `pumice stone foot file`), dedupe left 3 products with 1 of their 2 keywords |
+| 4 | 30, one per source keyword, with the carried taken list | **green** |
+
+- **Run 2's real cause was table composition, not the model.** One product
+  type recurs across several Step-2 `source_keyword` values and several
+  merchants, and a duplicate keyword string is fatal while brand names are
+  banned, so the collapse to one product per source keyword (§13.3) was the
+  fix — the table spent its 30 slots on distinct products.
+- **Run 3's real cause was batching.** Each call is independent, so a batch
+  cannot know what an earlier one claimed: asking for pool-wide uniqueness
+  without saying what was taken is unsatisfiable, not merely unstated. Hence
+  the accumulated do-not-repeat list in `_assemble_user_message` (§13.3,
+  plan §6.5 delta 6).
+- **Green run (run 4):** 30 products, `per_product_target = 2`, batch size 4
+  → **8 LLM calls**, **60 keywords in the final bank** (band 50–70 ✓, floor
+  2 ✓), **zero duplicates written** so `dedupe_keywords` dropped nothing.
+  Roles broad 30 / modifier 30; pillars curated_home 30 /
+  self_care_rituals 30; 60 unique keywords, 2–7 words, no uppercase, no
+  punctuation; every product at exactly 2. Model `deepseek-v4.1-flash:cloud`,
+  ~15 minutes of wall clock.
+- **The near-type families are differentiated as intended:** `stainless
+  garlic press` / `rocking garlic press` / `garlic rocker`; `pumice stone
+  foot file` / `pumice foot tool` / `pumice stone`; `stainless steel gua sha`
+  / `scalp massage tool` / `gua sha facial tool` / `gua sha set`; `dry body
+  brush` / `body brush with handle`.
+- Deliverables written to `outputs/step-4-gold-keywords.{json,md}` on every
+  green run — confirmed gitignored (`.gitignore:31` = `outputs/`). A failed
+  run writes nothing.
+
+### 13.6 Step 5 — dual-supplier gold-kernel ingestion (implemented)
+
+```bash
+source .venv/bin/activate && python scripts/ingest_keyword_bank.py \
+    [--keywords outputs/step-4-gold-keywords.json] \
+    [--target-per-keyword 2] [--limit 4] \
+    [--only {both,cjdropshipping,aliexpress}] [--export-root <dir>]
+```
+
+Ingests **every** Step-4 bank keyword through **both** supplier pipelines — CJ
+MCP and the AliExpress Dropshipping Center — and exports what survives into
+the gold-kernel tree:
+
+```
+<OPTIMAL_EXPORT_DIR>/cjdropshipping/product-NN/…
+<OPTIMAL_EXPORT_DIR>/aliexpress/product-NN/…
+```
+
+`src/pipeline/keyword_bank.py` is the engine; `scripts/ingest_keyword_bank.py`
+is the runner. **This is not `run_pipeline`'s fallback chain.** Auto mode
+(§9) stops at the first engine that answers; Step 5 needs *both* engines to run
+for *every* keyword, because the point of the step is to obtain the optimal
+product from each supplier and let Step 6 (§13.1) rank them against each other.
+So each **(keyword, engine) leg** is its own call into the existing
+`run_pipeline` with a **single-engine list**, a **shared evaluator** and a
+**per-engine exporter** — the supplier core (§5–§9) is reused, never forked,
+and **no gate is relaxed**: every leg still runs CJ's commercial gate (§6.2),
+MCP payload liveness gate (§5) and mandatory freight quote (§6.3); the DS
+Center's winning-product gate (§6.1) with its AU market pin; and, for both, the
+LLM viability gate, the margin floor and the 3-image gallery gate.
+
+- **Failure is per-leg, not per-run.** An engine that is unconfigured,
+  blocked or timed out for a leg is logged at WARNING and skipped **for that
+  leg only** — the other engine still runs that keyword, and `leg_failures`
+  records the skip. Only when **every** registered engine failed **every**
+  keyword does ingestion raise `BankIngestionFailedError`, which the runner
+  renders as the intervention block.
+- **`--only` narrows without forking the engine.** The script narrows the
+  extractor-factory dict to one engine before calling `ingest_keyword_bank`;
+  the plan's signature gains no extra parameter for it.
+- **The loader is fail-closed** (plan §7.1). `load_keyword_bank` rejects a
+  missing, malformed, empty or non-list bank, a non-object or non-string row,
+  and — defence in depth on top of the Step-4 pool validator — any keyword
+  carrying a banned AICIS token, each with remediation text naming
+  `scripts/generate_gold_keywords.py`.
+- **Numbering and dedupe are per exporter, hence per supplier.** Each engine
+  gets its own `CandidateExporter` bound to its own subfolder, so the two
+  suppliers number their `product-NN` sequences independently and the same
+  product landing from both suppliers is exported **twice — intentionally, as
+  two fulfilment options** (plan §7.2). The subfolder is created on the first
+  write, so a run that exports nothing leaves no empty directory.
+- **Counters fold as deltas, read off the exporter.** `skipped_duplicate` and
+  `dropped_no_valid_images` are cumulative *instance attributes* on
+  `CandidateExporter` (the exporter is reused across an engine's legs, which is
+  what makes duplicate detection span the whole bank), and `run_pipeline`
+  copies them onto each leg's `PipelineSummary` only on its normal exit — so a
+  leg reports the running total, and an **empty-funnel leg reports zero** (the
+  early return at `src/main.py:191` precedes that copy). The bank therefore
+  snapshots the **exporter's own** attributes before each leg and folds
+  `after - before`, which sums to the exporter's real count without
+  double-counting a leg and without going negative on a leg that scraped
+  nothing — the two failure modes the leg-summary fold had. Guarded by
+  `test_ingest_folds_exporter_counters_as_deltas_not_running_totals` and
+  `test_ingest_does_not_go_negative_when_a_leg_scrapes_nothing` (§11). The
+  other counters (`candidates_scraped`, `evaluated`, `accepted`, `rejected`,
+  `dropped_llm_validation_failed`, `candidates_exported`) are per-call and fold
+  directly. `BankIngestionSummary` adds `keywords_run` and `leg_failures` per
+  engine, plus `keywords_empty` (keywords for which neither engine returned a
+  verified product) and `total_exports`.
+- **Config:** `BANK_TARGET_PER_KEYWORD` (`2`) is a **per-leg** target, so the
+  keyword count multiplies it; `OPTIMAL_EXPORT_DIR` is the gold-kernel root
+  (§10; both keys are in `.env.example` and `.env`, blank → default).
+- **Runner blocks** (same rendered shape as §9): *Step 5 Keyword Bank*,
+  *Step 5 Supplier Ingestion* (both engines down), *AliExpress Dropshipping
+  Center Session* (`DsCenterSessionExpiredError` is deliberately **not**
+  swallowed by `run_pipeline`, so it halts the bank with re-login steps),
+  *LLM Evaluation Filter Configuration* (the shared evaluator is built before
+  the first leg), and *Step 5 Funnel Exhausted* (zero exports overall). A run
+  with fewer packages than the target still prints `[STEP 5 COMPLETE]` and
+  exits 0.
+- **Deliverables stay untracked.** The two supplier trees are production
+  deliverables, not repo artefacts (plan §13.1: production deliverables live
+  under the gitignored paths).
+
+**Step-5 live evidence (2026-09-29):** three green pilots established the path
+end to end — AliExpress-only, CJ-only, and the plan's mandated
+`--limit 4 --target-per-keyword 1` both-engines pilot, which ended
+`[STEP 5 COMPLETE]` with both supplier roots populated. Two live behaviours
+were confirmed against the real suppliers on the pilot: the per-engine
+`skipped_duplicate` skip correctly re-skipped products an earlier single-keyword
+pilot had already exported (the duplicate check spans a supplier folder across
+runs), and the counter fold was found wrong *because* the pilot's `duplicate`
+count was impossible as a true total.
+
+**Full 60-keyword run (operator's go, same day, 08:31→10:45, exit 0).**
+`[STEP 5 COMPLETE]`: 60 keywords × 2 engines, **0 failed legs**, 5 keywords
+empty (no verified product from either supplier), **33 packages exported** —
+cjdropshipping 22 (`scraped=186 evaluated=174 accepted=41 rejected=133`) and
+aliexpress 11 (`scraped=67 evaluated=48 accepted=16 rejected=32`); TOTAL
+`scraped=253 evaluated=222 accepted=57 rejected=165`. All **38 packages now on
+disk** (the 33 + the 5 the earlier pilots had already written, which the full
+run re-offered and skipped as duplicates) are contract-complete: all 13
+metadata keys, a freight-itemised basis on every CJ package, an honest
+unquoted basis on every AliExpress one, `image_source=supplier_gallery`
+throughout, and every package clearing the margin floor.
+
+**The printed summary's `no_images` / `duplicate` figures were wrong on that
+run** (CJ `no_images=-8 duplicate=-43`; Ali `-50 / -200`). Cause: the bank
+folded `leg.counter - before`, and an empty-funnel leg returns from
+`run_pipeline` *before* the exporter's cumulative counters are copied onto the
+leg summary — so that leg contributed `0 - before`. The run log carries the
+truthful counts (21 duplicate skips: CJ 17, Ali 4; 3 no-image drops). Fixed as
+described above; `candidates_exported` was never affected, since it comes from
+`summary.exports`, and all 33 exports in the summary were verified against the
+`Exported` log lines.
+
+### 13.7 Step 6 — Jev product ranking (implemented)
+
+```bash
+source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
+    [--gold-products outputs/step-3-gold-standard-products.json] \
+    [--export-root <OPTIMAL_EXPORT_DIR>] [--batch-size 4] \
+    [--output outputs/step-6-ranked-candidates.json] [--markdown …]
+```
+
+Ranks **every** Step-5 gold-kernel package against the Step-3 gold-standard
+product list with **Jev** (TypeSafe **System One** via OpenRouter) and writes a
+tiered report. This is Jev's *new* role: **post-ingestion product ranking** — a
+product ranker, never a keyword gate (§13.1, plan §0.1). The two-tier keyword
+gate it replaces (and every `supplier_probe` / `[AICIS-T1-DROP]`-style tag) was
+never built and must never be.
+
+**Intake** is the gold-kernel tree (`<OPTIMAL_EXPORT_DIR>/{cjdropshipping,
+aliexpress}/product-NN/`) plus the Step-3 deliverable. Every package in both
+supplier folders is ranked; nothing is filtered on the way in. A package whose
+`metadata.json` is missing or non-object is skipped with a warning (the
+exporter's own duplicate-scan tolerance); nothing found at all raises
+`JevRankingError` naming `scripts/ingest_keyword_bank.py`, and a missing gold
+deliverable raises the same naming Step 3. The gold set is settled and the
+client built **before** the first System One call, so a bad intake never costs a
+billable request.
+
+**One shared state + many independent questions is the native batch (§8.0).**
+Each call's `state` is an object — `{"gold_reference": <Step-3 fields>,
+"products": {<slug>: <Step-5 metadata fields>}}` — and every question in the
+call sees that whole state. Three typed questions ride each package:
+`<slug>__similarity` (score: 5 ordered levels), `<slug>__winning_value` (score:
+5 ordered levels) and `<slug>__pillar` (choice: `curated_home` /
+`self_care_rituals` / `other` / `discard`). `JEV_BATCH_SIZE` defaults to **4**,
+so a call carries 12 questions — right at the docs' cited ~13-questions-per-call
+envelope (11.5× cheaper, 9.6× faster than separate calls). The slug is
+engine-qualified (`cjdropshipping_product_04`, `aliexpress_product_04`): the two
+suppliers number their folders independently, so an unqualified slug would
+collide in one state; and it never contains `__`, which the question-id
+`<slug>__<question>` scheme reserves.
+
+**Scoring and tiers.** `rank_score = 0.6·similarity + 0.4·value` on a 1–5 scale;
+`≥ JEV_SHORTLIST_MIN_SCORE` (4.0) → `shortlist`, `≥ JEV_REVIEW_MIN_SCORE` (2.5)
+→ `review`, else `disregard`. A package whose answer keys are missing lands as
+`disregard` with a note; a `discard` pillar adds its own note without moving the
+tier. The weights and thresholds live in `jev_client.py` (`SIMILARITY_LEVELS`,
+`VALUE_LEVELS`, `PILLAR_OPTIONS`, `QUESTIONS`, `SHORTLIST_MIN_SCORE`,
+`REVIEW_MIN_SCORE`) — "judgement in one place", per the vendor's review
+principle.
+
+**Jev's raw `score` is 0-BASED, and the client shifts it onto 1–5.** The plan
+(§8.0) assumed a 1-indexed position; the live probe (2026-09-29) returned
+`score = 3.24` against a 5-entry criteria list whose `legend` keys were
+`"0".."4"` — i.e. the position is zero-based and may fall between levels.
+`jev_client.answer_score` therefore adds `JEV_SCORE_INDEX_SHIFT = 1.0` so 0 maps
+to 1.0 and 4 maps to 5.0, keeping the plan's config defaults verbatim
+(4.0/2.5) meaningful on the intended 1–5 scale: with the shift, a shortlist
+score means "close match or better". The finding is recorded in the
+`jev_client.py` docstring and in §12.
+
+**A failed call retries once, and only that batch degrades.** `_decide_with_retry`
+retries one `JevError`; if the second attempt fails, only that batch's packages
+become `disregard` with `Jev batch call failed: <exc>` — the run never aborts on
+one bad call and later batches still rank.
+
+**Ranking is a report, not a deletion (plan §8.3).** No package directory is
+moved or removed — the ranker writes the tiered report and lets Step 7 (human)
+decide what to validate and link. Jev authors no product fact either: it returns
+only a similarity score, a winning-value score and a pillar; every field in the
+report is copied verbatim from the package's `metadata.json`.
+
+**Deliverables**: `outputs/step-6-ranked-candidates.json` (per-package verdicts
+plus a `summary` and a `tiers` grouping) and `.md` (tier-grouped digest) — the
+**untracked** `outputs/` tree (plan §11.8: production deliverables live in the
+gitignored tree, not `plans/`).
+
+**Runner blocks** (same rendered shape as §9/§13.6): *Step 6 Ranking Intake*
+(gold list or gold-kernel tree missing/empty) and *LLM Evaluation Filter
+Configuration* (`OPENROUTER_API_KEY` unset). Exit `0` complete, `1` intervention,
+`2` unexpected error; a run always prints `[STEP 6 COMPLETE]` with the tier
+counts.
+
+**Step-6 live run (2026-09-29, operator's go):** the 38 Step-5 packages
+(cjdropshipping 25, aliexpress 13) were ranked against **263** Step-3 gold
+products in **10 System One calls** of 4 packages each — **0 failed batches**,
+no retries needed. Result: **shortlist 12, review 8, disregard 18**. The
+shortlist leads with body brushes (`aliexpress/product-02`, 4.43) and garlic
+presses (`aliexpress/product-09`, 4.41; `aliexpress/product-08`, 4.30;
+`cjdropshipping/product-06`, 4.25) plus gua sha boards (`aliexpress/product-10`,
+4.36; `cjdropshipping/product-25`, 4.33) — exactly the Step-3/Step-4 pillars the
+gold list is built on, which is the signal the similarity axis works. The
+deliverables were written to `outputs/step-6-ranked-candidates.{json,md}` and
+confirmed gitignored (`.gitignore:31` = `outputs/`).

@@ -21,6 +21,10 @@ dependencies = [
     # Official MCP Python SDK — StreamableHTTP client for the remote
     # CJdropshipping MCP server (src/pipeline/cj_mcp_client.py).
     "mcp==2.2.0",
+    # Apify actor runs for the Step 3 gold-standard research
+    # (src/extractors/google_shopping.py) — damilo/google-shopping-apify is
+    # pay-per-result via this SDK, never the retired AliExpress Apify actor.
+    "apify-client==3.2.0",
 ]
 
 [project.optional-dependencies]
@@ -41,3 +45,6 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "live: needs the developer's own credentials / real network access — opts out of the credential scrub in tests/conftest.py",
+]
