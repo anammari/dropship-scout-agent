@@ -291,6 +291,46 @@ def test_keyword_bank_path_blank_falls_back_to_the_default(monkeypatch):
     assert load_settings().KEYWORD_BANK_PATH == "outputs/step-4-gold-keywords.json"
 
 
+def test_bank_target_per_keyword_defaults_to_two(monkeypatch):
+    # Per (keyword, engine) leg: the bank's keyword count multiplies it, so
+    # the default has to stay small for a 60-keyword bank to stay tractable.
+    monkeypatch.delenv("BANK_TARGET_PER_KEYWORD", raising=False)
+    assert load_settings().BANK_TARGET_PER_KEYWORD == 2
+
+
+def test_bank_target_per_keyword_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("BANK_TARGET_PER_KEYWORD", "1")
+    assert load_settings().BANK_TARGET_PER_KEYWORD == 1
+
+
+def test_bank_target_per_keyword_blank_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("BANK_TARGET_PER_KEYWORD", "")
+    assert load_settings().BANK_TARGET_PER_KEYWORD == 2
+
+
+def test_optimal_export_dir_defaults_to_the_gold_kernel_tree(monkeypatch):
+    # Distinct from EXPORT_DIR: the gold-kernel intake is its own tree, with
+    # one supplier subfolder per engine.
+    monkeypatch.delenv("OPTIMAL_EXPORT_DIR", raising=False)
+    assert load_settings().OPTIMAL_EXPORT_DIR == (
+        "/Users/ahmadammari/PD/my-store-build/inspiration/"
+        "optimal-dropship-candidates"
+    )
+
+
+def test_optimal_export_dir_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("OPTIMAL_EXPORT_DIR", "/tmp/optimal-candidates")
+    assert load_settings().OPTIMAL_EXPORT_DIR == "/tmp/optimal-candidates"
+
+
+def test_optimal_export_dir_blank_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("OPTIMAL_EXPORT_DIR", "")
+    assert load_settings().OPTIMAL_EXPORT_DIR == (
+        "/Users/ahmadammari/PD/my-store-build/inspiration/"
+        "optimal-dropship-candidates"
+    )
+
+
 # ----------------------------------------------------------------------
 # .env / .env.example alignment
 # ----------------------------------------------------------------------

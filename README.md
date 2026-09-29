@@ -149,6 +149,9 @@ MIN_CJ_LISTED_COUNT=150
 CJ_FREIGHT_METHOD=
 CJ_MAX_PRODUCTS=10
 EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates
+# Step 5 (dual-supplier ingestion into the gold kernel)
+BANK_TARGET_PER_KEYWORD=2
+OPTIMAL_EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/optimal-dropship-candidates
 ```
 
 | Variable | Required | Purpose |
@@ -172,7 +175,9 @@ EXPORT_DIR=/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates
 | `TARGET_COUNTRY` | — | Extraction/evaluation target (default `AU`); also the AliExpress DS Center's ship-to market, which decides both its catalogue and its quoted price. CJ's MCP search `countryCode` is pinned to the China warehouse (`CN`) instead |
 | `GOLD_PRODUCTS_PATH` | — | Step-3 gold-product deliverable Steps 4 and 6 read (default `outputs/step-3-gold-standard-products.json`) |
 | `KEYWORD_BANK_PATH` | — | Step-4 deliverable — the Step-5 keyword bank (default `outputs/step-4-gold-keywords.json`) |
-| `EXPORT_DIR` | — | Destination workspace (defaults to the Shopify path below) |
+| `BANK_TARGET_PER_KEYWORD` | — | Step-5 packages exported per **(keyword, engine)** leg — the bank's keyword count multiplies it (default `2`) |
+| `OPTIMAL_EXPORT_DIR` | — | Step-5 gold-kernel destination root; each engine writes into its own subfolder (default `…/my-store-build/inspiration/optimal-dropship-candidates`) |
+| `EXPORT_DIR` | — | Destination workspace for the general intake §2.1 (defaults to the Shopify path below) |
 | `USER_AGENT` | — | Desktop UA used by CDN downloads and the Playwright PDP gallery harvest |
 
 **Security:** secrets from `.env` are never printed or logged by the agent
@@ -312,6 +317,85 @@ Deliverables (untracked `outputs/` tree):
 `step-4-gold-keywords.{json,md}` — the JSON is what `KEYWORD_BANK_PATH`
 points at and what Step 5 reads.
 
+### 2.4 Dual-supplier ingestion — the gold kernel (updated multi-step pipeline, Step 5)
+
+Step 5 ingests **every** Step-4 keyword through **both** supplier pipelines —
+CJdropshipping (MCP) and the AliExpress Dropshipping Center — and exports
+what survives into the gold-kernel tree:
+
+```
+/Users/ahmadammari/PD/my-store-build/inspiration/optimal-dropship-candidates/
+├── cjdropshipping/product-NN/{metadata.json, images/}
+└── aliexpress/product-NN/{metadata.json, images/}
+```
+
+**This is not the general pipeline's fallback chain.** `--extractor auto` stops
+at the first engine that answers; Step 5 needs *both* engines to run for *every*
+keyword, because the point of the step is to obtain the optimal product from
+each supplier and let Step 6 rank them against one another. So each
+(keyword, engine) *leg* is its own call into the existing `run_pipeline` with a
+single-engine list — **no supplier gate is forked or relaxed**. Every leg still
+runs CJ's commercial gate, the MCP payload liveness gate and the mandatory
+freight quote (`CLAUDE.md` §6.2/§5/§6.3); the DS Center's winning-product gate
+(`CLAUDE.md` §6.1) with its AU market pin; and, for both, the LLM viability
+gate, the margin floor and the 3-image gallery gate. An engine that is
+unconfigured, blocked or timed out
+is skipped **for that leg only** — the other engine still runs that keyword.
+Only when *every* registered engine failed *every* keyword does ingestion raise,
+and the runner renders the intervention block.
+
+The two supplier folders are numbered independently (each has its own exporter,
+which scans only its own directory for numbering and for the already-exported
+duplicate skip), so the same product landing from both suppliers is exported
+twice — intentionally: two fulfilment options, two packages.
+
+```bash
+source .venv/bin/activate && python scripts/ingest_keyword_bank.py \
+    [--keywords outputs/step-4-gold-keywords.json] \
+    [--target-per-keyword 2] [--limit 4] \
+    [--only {both,cjdropshipping,aliexpress}] [--export-root <dir>]
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--keywords` | `KEYWORD_BANK_PATH` | Step-4 bank to ingest |
+| `--target-per-keyword` | `BANK_TARGET_PER_KEYWORD` (`2`) | Packages per **(keyword, engine)** leg — the bank's keyword count multiplies it |
+| `--limit` | *(all)* | Ingest only the first N bank keywords (pilot runs) |
+| `--only` | `both` | Restrict to one engine (single-leg pilot) |
+| `--export-root` | `OPTIMAL_EXPORT_DIR` | Gold-kernel intake root |
+
+```bash
+# Pilot: 4 keywords, one package per leg — the first live run
+python scripts/ingest_keyword_bank.py --limit 4 --target-per-keyword 1
+
+# Single-leg pilot, to isolate one supplier
+python scripts/ingest_keyword_bank.py --limit 1 --only cjdropshipping
+
+# Full run over the whole bank
+python scripts/ingest_keyword_bank.py
+```
+
+The runner prints the pilot banner (keyword count × engines × per-leg target,
+plus the pacing note) before the first call, the per-leg progress lines, then
+the folded funnel summary per engine with the supplier's export root and every
+exported package directory. Zero exports overall → intervention block and exit
+1; fewer packages than the target → `[STEP 5 COMPLETE]` and exit 0.
+
+The full 60-keyword bank ran on 2026-09-29 (08:31–10:45, exit 0): 0 failed
+legs, 5 keywords empty, **33 packages exported** (cjdropshipping 22,
+aliexpress 11). Together with the 5 packages the earlier pilots had already
+written — which the full run re-offered and skipped as duplicates — the tree
+holds 38 contract-complete packages ready for Step 6.
+
+**Pacing is the point of `--limit` and `--only`.** One CJ keyword costs up to
+`CJ_MAX_PRODUCTS` product-detail calls plus a freight quote each, all under CJ's
+MCP rate limits; one DS Center keyword costs a search page, a per-item record
+round trip for every hit, and a PDP harvest per survivor. A full 60-keyword bank
+across both engines is a long run — that is the pacing, not a hang.
+
+Deliverables are the two supplier trees above plus the printed funnel summary.
+Both trees are production deliverables, not repo artefacts, and stay untracked.
+
 ---
 
 ## 3. Data Contract & Staging Structure
@@ -345,6 +429,26 @@ Numbering continues past whatever already exists (`product-04`, `product-05`,
 staging directory without overwriting earlier work. A candidate that fails the
 image gates produces **no directory at all** — an incomplete package is never
 written.
+
+**The Step-5 gold kernel lands in its own tree**, one subfolder per supplier,
+with an independent numbering sequence (see §2.4):
+
+```
+/Users/ahmadammari/PD/my-store-build/inspiration/optimal-dropship-candidates/
+├── cjdropshipping/
+│   ├── product-01/{metadata.json, images/}
+│   └── product-02/…
+└── aliexpress/
+    ├── product-01/{metadata.json, images/}
+    └── product-02/…
+```
+
+`dropship-candidates/` is the general intake (§2.1, `--extractor auto` or a
+forced single engine); `optimal-dropship-candidates/` is the gold-kernel intake
+where **both** engines run every gold keyword (§2.4). The two trees never
+interleave, and each supplier subfolder numbers and dedupes only against
+itself, so the same URL landing from both suppliers is kept as two packages.
+
 
 ### 3.2 `metadata.json` schema
 
@@ -504,6 +608,19 @@ Every run prints a summary with these counters — your first diagnostic:
 Zero exports prints a `Pipeline Funnel Exhausted` intervention block; fewer
 than target prints a `[PARTIAL]` note but still exits 0.
 
+**Step 5 reads the same counters, folded per engine** (§2.4). The bank's
+summary prints every counter above for `cjdropshipping` and `aliexpress`
+separately, plus two bank-only counters: `keywords_run` (legs that reached the
+supplier without a configuration/block error) and `leg_failures` (legs that
+were skipped because that engine was unconfigured, blocked or timed out — the
+leg is skipped, the keyword is not). `skipped_duplicate` and
+`dropped_no_valid_images` are read off the **exporter itself** — snapshot
+before the leg, difference after — because the exporter's own attributes are
+cumulative across the bank and `run_pipeline` only copies them onto a leg's
+summary on its normal exit (an empty-funnel leg returns before that copy). The
+per-engine totals therefore sum to the exporter's real count: never
+over-counted across legs, never negative.
+
 **Where the log lines go.** No log file is written: `main()` calls
 `logging.basicConfig(level=INFO, format="%(asctime)s %(levelname)s %(name)s:
 %(message)s")` with no handler, so everything goes to **stderr**. Capture a run
@@ -588,13 +705,32 @@ Playbook:
   client retries once after a 2s backoff before surfacing; space out
   keyword runs.
 
+**Step 5 raises its own blocks** (§2.4), all with the same rendered shape:
+
+- **Step 5 Keyword Bank** — the Step-4 deliverable is missing, malformed,
+  empty, or carries a banned token; the block names
+  `scripts/generate_gold_keywords.py` as the fix.
+- **Step 5 Supplier Ingestion** — *every* registered engine failed *every*
+  keyword (both suppliers down). A single engine failing is **not** a block:
+  its legs are skipped and counted in `leg_failures`, and the other engine
+  still runs the keyword.
+- **AliExpress Dropshipping Center Session** — the DS Center refused the
+  client mid-bank (the leg raises `DsCenterSessionExpiredError`, which is
+  deliberately **not** swallowed by `run_pipeline`); re-run
+  `scripts/generate_ali_session.py` or delete `ALI_DS_STATE_PATH` and run
+  anonymously.
+- **Step 5 Funnel Exhausted** — the bank produced **zero** exported packages
+  across both engines.
+- **LLM config** — as §2.1: the shared evaluator is built before the first
+  leg, so a bad `.env` fails before supplier quota is spent.
+
 ### 4.5 Running the test suite
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-- **450 hermetic tests** across 12 test modules (schema validators incl. the
+- **485 hermetic tests** across 13 test modules (schema validators incl. the
   zero-URL `cogs_estimation_basis` rule and PDP-shape rejection, the MCP
   Payload Liveness Gate and the CJ commercial gate with their wiring in the
   CJ extractor (commercial gate, freight quoting, derived shipping notice),
@@ -602,7 +738,12 @@ python -m pytest tests/ -v
   guard and failure taxonomy against scripted MTOP fakes, LLM
   prompt/reconcile contract, image gates against real PIL-encoded fixtures
   with mocked httpx, exporter hard-fail rules, orchestrator counters and CLI
-  exit codes, the Step-4 gold-keyword generator — batched prompt assembly
+  exit codes, the Step-5 keyword bank — the fail-closed loader with its
+  banned-token defence-in-depth, the dual-engine fan-out over fake extractors
+  (both engines for every keyword, shared evaluator, per-leg failure skip,
+  the all-engines-failed raise, the empty-catalogue accounting, the per-leg
+  early stop and the cumulative-exporter-counter delta fold) — the Step-4
+  gold-keyword generator — batched prompt assembly
   with the carried do-not-repeat list, the rendered product table, the
   gold-deliverable read with its remediation errors, the demand-ranked
   type-diverse selection, the merged-pool validation rules, the
@@ -639,13 +780,15 @@ dropship-scout-agent/
 │   │   └── generator.py       # Batched generation + code-side pool validation
 │   └── pipeline/
 │       ├── cj_mcp_client.py   # CJ MCP client (token-in-URL auth, log redaction, liveness gate)
-│       └── image_sourcing.py  # Deterministic supplier-gallery image engine
+│       ├── image_sourcing.py  # Deterministic supplier-gallery image engine
+│       └── keyword_bank.py    # Step-5 bank loader + dual-supplier ingestion
 ├── scripts/
 │   ├── generate_ali_session.py  # Optional saved DS Center login
 │   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
 │   ├── generate_gold_keywords.py      # Step-4 keyword bank runner
+│   ├── ingest_keyword_bank.py         # Step-5 dual-supplier ingestion runner
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (Apify + LLM)
-└── tests/                     # 450 hermetic tests, zero network
+└── tests/                     # 485 hermetic tests, zero network
 ```
 
 ---

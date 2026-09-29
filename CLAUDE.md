@@ -121,15 +121,17 @@ dropship-scout-agent/
 │   │   └── generator.py     # Batched generation + code-side pool validation
 │   ├── pipeline/
 │   │   ├── cj_mcp_client.py # CJ MCP client + MCP Payload Liveness Gate
-│   │   └── image_sourcing.py# deterministic CDN image download/validation
+│   │   ├── image_sourcing.py# deterministic CDN image download/validation
+│   │   └── keyword_bank.py  # Step-5 bank loader + dual-supplier ingestion (§13.6)
 │   ├── exporter.py          # workspace writer (metadata.json + images/)
 │   └── main.py              # CLI orchestrator, funnel counters, exit codes
 ├── scripts/
 │   ├── generate_ali_session.py  # optional saved DS Center login (§6)
 │   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
 │   ├── generate_gold_keywords.py     # Step-4 keyword bank runner (§13.3)
+│   ├── ingest_keyword_bank.py        # Step-5 dual-supplier ingestion runner (§13.6)
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
-└── tests/                   # 450 hermetic tests, zero network (12 modules + conftest)
+└── tests/                   # 485 hermetic tests, zero network (13 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -495,7 +497,9 @@ requiring a login for the MTOP calls in §6.
 | `APIFY_GS_MAX_CHARGE_USD` | `7.5` | Step-3 hard USD spend ceiling per actor run, enforced by Apify itself; sized above the observed full-bank envelope (~$5.60) and within the free-tier remainder |
 | `GOLD_PRODUCTS_PATH` | `outputs/step-3-gold-standard-products.json` | Step-3 gold-product deliverable (untracked `outputs/` tree) |
 | `KEYWORD_BANK_PATH` | `outputs/step-4-gold-keywords.json` | Step-4 gold-keyword bank deliverable — Step 5's intake (untracked `outputs/` tree) |
-| `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter |
+| `BANK_TARGET_PER_KEYWORD` | `2` | Step-5 packages exported per **(keyword, engine)** leg — a PER-LEG target, so the bank's keyword count multiplies it (§13.6) |
+| `OPTIMAL_EXPORT_DIR` | `…/my-store-build/inspiration/optimal-dropship-candidates` | Step-5 gold-kernel root: each engine writes into its own subfolder, numbered independently (§13.6) |
+| `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter (general intake §9) |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads, Playwright PDP harvest |
 
 Every key in `.env.example` is present in `.env` in the same order with the
@@ -507,9 +511,21 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 450
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 485
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes + faked Apify SDK / scripted LLM transports).
+- `tests/test_keyword_bank.py` covers the Step-5 bank and its dual-supplier
+  ingestion: the fail-closed loader (missing/malformed/empty/non-list
+  payloads, non-object and non-string rows, the banned-token defence in
+  depth), and `ingest_keyword_bank` over fake extractors/evaluator/exporters
+  — both engines run for every keyword, one shared evaluator, the per-leg
+  failure skip with the other engine continuing, the all-engines-failed
+  `BankIngestionFailedError`, the empty-catalogue accounting, the per-leg
+  early stop (it uses the real `run_pipeline`, so the funnel counters and the
+  early-stop rule are inherited, not re-implemented), and the
+  cumulative-exporter-counter delta fold — including the empty-funnel leg,
+  which must fold as 0 rather than as a negative. It writes to `tmp_path` and
+  never touches the real supplier trees — see §13.6.
 - `tests/test_keyword_generator.py` covers the Step-4 gold-keyword engine:
   the template prompt (the product table is a `{PRODUCT_TABLE}` slot, never
   a hardcoded list), the table rendering (cells verbatim, `null` → `—`), the
@@ -632,7 +648,7 @@ The updated pipeline produces a **gold kernel**: a small set of
 proven-demand AU retail products (Google Shopping evidence) that drives
 keyword generation, supplier ingestion and Jev ranking, exported to
 `my-store-build/inspiration/optimal-dropship-candidates/{aliexpress,cjdropshipping}/`
-(Step 5, planned). The existing `dropship-candidates/` intake (§8) stays as
+(Step 5, §13.6). The existing `dropship-candidates/` intake (§8) stays as
 the general flow. **Jev never was a keyword gate** — its role is
 post-ingestion product ranking (Step 6).
 
@@ -642,16 +658,17 @@ post-ingestion product ranking (Step 6).
 | 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `outputs/step-2-search-keywords.{json,md}` (untracked) |
 | 3 | Apify Google Shopping AU scrape of the Step-2 keywords + LLM curation → gold-standard product list | done — §13.2 |
 | 4 | Reasoning LLM → 50–70 supplier keywords from the gold list | done — §13.3 |
-| 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | planned |
+| 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | done — §13.6 |
 | 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | planned |
 | 7–8 | Human-only: DSers/Zendrop manual supplier search; store curation | no code (deliberately) |
 
-All production deliverables live under `outputs/` — **untracked**
-(gitignored; scoping data, not repo artefacts). `plans/` now holds only
-the engineering/spec documents (the updated-pipeline plan and its
-predecessors). Future Steps 5–6 write their deliverables (ingestion results,
-Jev rankings) to `outputs/step-N-*` names in the same gitignored tree, as
-Step 4's keyword bank already does
+All research deliverables live under `outputs/` — **untracked**
+(gitignored; scoping data, not repo artefacts) — while the Step-5 gold-kernel
+packages are written into the Shopify workspace tree
+(`optimal-dropship-candidates/`, §13.6), like the general intake (§8). `plans/`
+now holds only the engineering/spec documents (the updated-pipeline plan and
+its predecessors). Step 6's Jev rankings will go to an `outputs/step-6-*` name
+in the same gitignored tree, as Step 4's keyword bank already does
 (`outputs/step-4-gold-keywords.{json,md}`).
 
 ### 13.2 Step 3 — gold-standard product research (implemented)
@@ -875,3 +892,119 @@ Four green/failed runs, each fix below coming out of a failure:
 - Deliverables written to `outputs/step-4-gold-keywords.{json,md}` on every
   green run — confirmed gitignored (`.gitignore:31` = `outputs/`). A failed
   run writes nothing.
+
+### 13.6 Step 5 — dual-supplier gold-kernel ingestion (implemented)
+
+```bash
+source .venv/bin/activate && python scripts/ingest_keyword_bank.py \
+    [--keywords outputs/step-4-gold-keywords.json] \
+    [--target-per-keyword 2] [--limit 4] \
+    [--only {both,cjdropshipping,aliexpress}] [--export-root <dir>]
+```
+
+Ingests **every** Step-4 bank keyword through **both** supplier pipelines — CJ
+MCP and the AliExpress Dropshipping Center — and exports what survives into
+the gold-kernel tree:
+
+```
+<OPTIMAL_EXPORT_DIR>/cjdropshipping/product-NN/…
+<OPTIMAL_EXPORT_DIR>/aliexpress/product-NN/…
+```
+
+`src/pipeline/keyword_bank.py` is the engine; `scripts/ingest_keyword_bank.py`
+is the runner. **This is not `run_pipeline`'s fallback chain.** Auto mode
+(§9) stops at the first engine that answers; Step 5 needs *both* engines to run
+for *every* keyword, because the point of the step is to obtain the optimal
+product from each supplier and let Step 6 (§13.1) rank them against each other.
+So each **(keyword, engine) leg** is its own call into the existing
+`run_pipeline` with a **single-engine list**, a **shared evaluator** and a
+**per-engine exporter** — the supplier core (§5–§9) is reused, never forked,
+and **no gate is relaxed**: every leg still runs CJ's commercial gate (§6.2),
+MCP payload liveness gate (§5) and mandatory freight quote (§6.3); the DS
+Center's winning-product gate (§6.1) with its AU market pin; and, for both, the
+LLM viability gate, the margin floor and the 3-image gallery gate.
+
+- **Failure is per-leg, not per-run.** An engine that is unconfigured,
+  blocked or timed out for a leg is logged at WARNING and skipped **for that
+  leg only** — the other engine still runs that keyword, and `leg_failures`
+  records the skip. Only when **every** registered engine failed **every**
+  keyword does ingestion raise `BankIngestionFailedError`, which the runner
+  renders as the intervention block.
+- **`--only` narrows without forking the engine.** The script narrows the
+  extractor-factory dict to one engine before calling `ingest_keyword_bank`;
+  the plan's signature gains no extra parameter for it.
+- **The loader is fail-closed** (plan §7.1). `load_keyword_bank` rejects a
+  missing, malformed, empty or non-list bank, a non-object or non-string row,
+  and — defence in depth on top of the Step-4 pool validator — any keyword
+  carrying a banned AICIS token, each with remediation text naming
+  `scripts/generate_gold_keywords.py`.
+- **Numbering and dedupe are per exporter, hence per supplier.** Each engine
+  gets its own `CandidateExporter` bound to its own subfolder, so the two
+  suppliers number their `product-NN` sequences independently and the same
+  product landing from both suppliers is exported **twice — intentionally, as
+  two fulfilment options** (plan §7.2). The subfolder is created on the first
+  write, so a run that exports nothing leaves no empty directory.
+- **Counters fold as deltas, read off the exporter.** `skipped_duplicate` and
+  `dropped_no_valid_images` are cumulative *instance attributes* on
+  `CandidateExporter` (the exporter is reused across an engine's legs, which is
+  what makes duplicate detection span the whole bank), and `run_pipeline`
+  copies them onto each leg's `PipelineSummary` only on its normal exit — so a
+  leg reports the running total, and an **empty-funnel leg reports zero** (the
+  early return at `src/main.py:191` precedes that copy). The bank therefore
+  snapshots the **exporter's own** attributes before each leg and folds
+  `after - before`, which sums to the exporter's real count without
+  double-counting a leg and without going negative on a leg that scraped
+  nothing — the two failure modes the leg-summary fold had. Guarded by
+  `test_ingest_folds_exporter_counters_as_deltas_not_running_totals` and
+  `test_ingest_does_not_go_negative_when_a_leg_scrapes_nothing` (§11). The
+  other counters (`candidates_scraped`, `evaluated`, `accepted`, `rejected`,
+  `dropped_llm_validation_failed`, `candidates_exported`) are per-call and fold
+  directly. `BankIngestionSummary` adds `keywords_run` and `leg_failures` per
+  engine, plus `keywords_empty` (keywords for which neither engine returned a
+  verified product) and `total_exports`.
+- **Config:** `BANK_TARGET_PER_KEYWORD` (`2`) is a **per-leg** target, so the
+  keyword count multiplies it; `OPTIMAL_EXPORT_DIR` is the gold-kernel root
+  (§10; both keys are in `.env.example` and `.env`, blank → default).
+- **Runner blocks** (same rendered shape as §9): *Step 5 Keyword Bank*,
+  *Step 5 Supplier Ingestion* (both engines down), *AliExpress Dropshipping
+  Center Session* (`DsCenterSessionExpiredError` is deliberately **not**
+  swallowed by `run_pipeline`, so it halts the bank with re-login steps),
+  *LLM Evaluation Filter Configuration* (the shared evaluator is built before
+  the first leg), and *Step 5 Funnel Exhausted* (zero exports overall). A run
+  with fewer packages than the target still prints `[STEP 5 COMPLETE]` and
+  exits 0.
+- **Deliverables stay untracked.** The two supplier trees are production
+  deliverables, not repo artefacts (plan §13.1: production deliverables live
+  under the gitignored paths).
+
+**Step-5 live evidence (2026-09-29):** three green pilots established the path
+end to end — AliExpress-only, CJ-only, and the plan's mandated
+`--limit 4 --target-per-keyword 1` both-engines pilot, which ended
+`[STEP 5 COMPLETE]` with both supplier roots populated. Two live behaviours
+were confirmed against the real suppliers on the pilot: the per-engine
+`skipped_duplicate` skip correctly re-skipped products an earlier single-keyword
+pilot had already exported (the duplicate check spans a supplier folder across
+runs), and the counter fold was found wrong *because* the pilot's `duplicate`
+count was impossible as a true total.
+
+**Full 60-keyword run (operator's go, same day, 08:31→10:45, exit 0).**
+`[STEP 5 COMPLETE]`: 60 keywords × 2 engines, **0 failed legs**, 5 keywords
+empty (no verified product from either supplier), **33 packages exported** —
+cjdropshipping 22 (`scraped=186 evaluated=174 accepted=41 rejected=133`) and
+aliexpress 11 (`scraped=67 evaluated=48 accepted=16 rejected=32`); TOTAL
+`scraped=253 evaluated=222 accepted=57 rejected=165`. All **38 packages now on
+disk** (the 33 + the 5 the earlier pilots had already written, which the full
+run re-offered and skipped as duplicates) are contract-complete: all 13
+metadata keys, a freight-itemised basis on every CJ package, an honest
+unquoted basis on every AliExpress one, `image_source=supplier_gallery`
+throughout, and every package clearing the margin floor.
+
+**The printed summary's `no_images` / `duplicate` figures were wrong on that
+run** (CJ `no_images=-8 duplicate=-43`; Ali `-50 / -200`). Cause: the bank
+folded `leg.counter - before`, and an empty-funnel leg returns from
+`run_pipeline` *before* the exporter's cumulative counters are copied onto the
+leg summary — so that leg contributed `0 - before`. The run log carries the
+truthful counts (21 duplicate skips: CJ 17, Ali 4; 3 no-image drops). Fixed as
+described above; `candidates_exported` was never affected, since it comes from
+`summary.exports`, and all 33 exports in the summary were verified against the
+`Exported` log lines.

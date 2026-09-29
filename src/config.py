@@ -29,6 +29,14 @@ DEFAULT_EXPORT_DIR = (
     "/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates"
 )
 
+# Step-5 gold-kernel intake destination (plan §7.2). One supplier subfolder
+# per engine, each numbered independently; this is the gold-kernel tree the
+# updated pipeline produces, distinct from the general `dropship-candidates/`
+# intake above.
+DEFAULT_OPTIMAL_EXPORT_DIR = (
+    "/Users/ahmadammari/PD/my-store-build/inspiration/optimal-dropship-candidates"
+)
+
 # Remote CJdropshipping MCP server (StreamableHTTP). The MCP token is
 # appended as a path segment at connect time — see cj_mcp_client.py.
 DEFAULT_CJ_MCP_BASE_URL = "https://developers.cjdropshipping.com/mcp"
@@ -188,6 +196,20 @@ class Settings:
         # untracked outputs/ tree as every other production deliverable.
         self.KEYWORD_BANK_PATH: str = (
             os.getenv("KEYWORD_BANK_PATH") or "outputs/step-4-gold-keywords.json"
+        )
+        # Step-5 export target PER ENGINE: the number of ACCEPTed packages
+        # one (keyword, engine) leg may write. It is a per-leg target, so the
+        # bank's keyword count multiplies it — 2 keeps a 60-keyword bank from
+        # turning into hundreds of packages, while still giving each keyword
+        # a real chance to contribute to both supplier folders.
+        self.BANK_TARGET_PER_KEYWORD: int = _parse_int(
+            os.getenv("BANK_TARGET_PER_KEYWORD"), default=2
+        )
+        # Step-5 gold-kernel intake root: the two supplier subfolders are
+        # created under it by the runner, each numbered independently
+        # (`cjdropshipping/product-NN`, `aliexpress/product-NN`).
+        self.OPTIMAL_EXPORT_DIR: str = (
+            os.getenv("OPTIMAL_EXPORT_DIR") or DEFAULT_OPTIMAL_EXPORT_DIR
         )
 
         # --- Margin floor (the deterministic half of gate 2) ---
