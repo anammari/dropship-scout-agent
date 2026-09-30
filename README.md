@@ -60,7 +60,7 @@ and ranks the result with Jev.
   gateway URLs are rejected at the schema level.
 - **LLM arithmetic is never trusted** — margins and markups are recomputed in
   code, and an ACCEPT that misses the margin floor (markup ≥ 2.5 OR margin
-  > AUD 20) is downgraded to REJECT.
+  > AUD 10) is downgraded to REJECT.
 - **Shipping is quoted, never assumed** — a CJ product carries its real freight
   cost to the target country, or it is dropped. Where a supplier cannot quote
   freight, the evaluator is told the landed cost is a floor rather than a
@@ -172,7 +172,7 @@ CJ_MCP_TOKEN="YOUR_COPIED_MCP_TOKEN"
 
 # Margin floor (deterministic half of evaluation gate 2)
 #MIN_MARKUP_MULTIPLIER="2.5"
-#MIN_MARGIN_AUD="20.0"
+#MIN_MARGIN_AUD="10.0"
 
 #TARGET_COUNTRY="AU"
 
@@ -214,7 +214,7 @@ OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
 #OPENROUTER_BASE_URL=""
 #JEV_MODEL=""
 #JEV_BATCH_SIZE="4"
-#JEV_SHORTLIST_MIN_SCORE="4.0"
+#JEV_SHORTLIST_MIN_SCORE="3.5"
 #JEV_REVIEW_MIN_SCORE="2.5"
 ```
 
@@ -236,7 +236,7 @@ OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
 | `CJ_FREIGHT_METHOD` | — | Pin the shipping service the CJ landed cost is based on, by CJ's own name (e.g. `CJPacket Eub`). Blank takes the cheapest method the quote offers (default) |
 | `CJ_MAX_PRODUCTS` | — | CJ products expanded (detail + gallery) per keyword (default `10`) |
 | `MIN_MARKUP_MULTIPLIER` | — | Margin floor, markup leg: an ACCEPT must clear this **or** `MIN_MARGIN_AUD` against the real landed cost (default `2.5`) |
-| `MIN_MARGIN_AUD` | — | Margin floor, gross-profit leg, in AUD per unit (default `20.0`) |
+| `MIN_MARGIN_AUD` | — | Margin floor, gross-profit leg, in AUD per unit (default `10.0`, widened from 20.0 to match the Step-3 $10 target) |
 | `TARGET_COUNTRY` | — | Extraction/evaluation target (default `AU`); also the AliExpress DS Center's ship-to market, which decides both its catalogue and its quoted price. CJ's MCP search `countryCode` is pinned to the China warehouse (`CN`) instead |
 | `APIFY_TOKEN` | for Step 3/2 research | Apify token shared by the Google Trends fallback actor (Step 2, via `scripts/mcp_headers.py`) and the Step-3 gold-research actor (`apify-client`) |
 | `APIFY_GS_ACTOR` | — | Step-3 gold-research actor id (default `damilo/google-shopping-apify`) |
@@ -252,7 +252,7 @@ OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
 | `OPENROUTER_BASE_URL` | — | OpenRouter API base; the client appends `/systemone` (default `https://openrouter.ai/api/v1`) |
 | `JEV_MODEL` | — | System One model id, pinned so a ranking is reproducible (default `typesafe/jev-1.13`) |
 | `JEV_BATCH_SIZE` | — | Packages per System One call, three questions each (default `4`, matching the documented ~13-questions-per-call envelope) |
-| `JEV_SHORTLIST_MIN_SCORE` | — | Tier floor: `rank_score` at or above this is shortlist (default `4.0`, on the 1–5 scale) |
+| `JEV_SHORTLIST_MIN_SCORE` | — | Tier floor: `rank_score` at or above this is shortlist (default `3.5`, on the 1–5 scale; widened from 4.0) |
 | `JEV_REVIEW_MIN_SCORE` | — | Tier floor: `rank_score` at or above this is review, else disregard (default `2.5`) |
 
 **Security:** secrets from `.env` are never printed or logged by the agent
@@ -384,40 +384,52 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
 
 ### 2.4 Step 4 — gold-standard keyword bank
 
-Turns the Step-3 gold list into the **50–70 supplier search keywords** Step 5
-ingests. The reasoning LLM authors the keywords; every structural rule is
-re-checked in code (broad/modifier pairing, pillar membership, the AICIS
-banned-token boundary, the 50–70 band, per-product coverage and floor), and a
-pool that breaks any rule exits non-zero with nothing written.
+Turns the Step-3 gold list into the **supplier search keyword bank** Step 5
+ingests — generated **in pool chunks**: the table is capped at 150 eligible
+products (`DEFAULT_MAX_PRODUCTS`, raiseable/lowerable via `--max-products`)
+and each `--chunk-size` 30 slice generates ONE pool validated under the
+single-pool rules, so the default run writes ~300 keywords. The reasoning LLM
+authors the keywords; every structural rule is re-checked in code
+(broad/modifier pairing, pillar membership, the AICIS banned-token boundary,
+the 50–70 band per pool, the merged bank band around the chunks' summed
+target — 250–320 at the default sizing — and per-product coverage and
+floor), and a pool that breaks any rule exits non-zero with nothing written.
 
 ```bash
 source .venv/bin/activate && python scripts/generate_gold_keywords.py \
     [--gold-products outputs/step-3-gold-standard-products.json] \
-    [--batch-size 4] [--max-products 30] \
+    [--batch-size 4] [--max-products 150] [--chunk-size 30] \
     [--output outputs/step-4-gold-keywords.json] [--markdown …]
 ```
 
 - **The prompt carries no products.** `src/keywords/gold_keyword_prompt.md` has a
   literal `{PRODUCT_TABLE}` slot filled at runtime from the live Step-3
   deliverable, so the gold products are ground truth the prompt never hardcodes.
+  Each chunk's table is exactly the slice it covers, so one prompt serves all
+  pools.
 - **Selection is bounded, type-diverse and deterministic.** The gold deliverable
-  can hold far more products than a 50–70 pool can cover, so the table is capped
-  at `DEFAULT_MAX_PRODUCTS` (`--max-products`), ranked by demand, collapsed to
-  the strongest row per duplicate name, collapsed to **one product per Step-2
-  source keyword**, then round-robined across pillars so a capped table still
-  covers every pillar.
+  can hold far more products than any single 50–70 pool can cover, so the table
+  is capped at `DEFAULT_MAX_PRODUCTS` (`--max-products`), ranked by demand,
+  collapsed to the strongest row per duplicate name, collapsed to **one product
+  per Step-2 source keyword**, then round-robined across pillars so a capped
+  table still covers every pillar.
 - **The one-per-source-keyword collapse is load-bearing.** The research is
   keyword-driven, so the strongest rows by raw demand cluster into a few
   distinct product types. Every table product must be named by its *own*
   keywords, a duplicate keyword string is fatal and brand names are banned — so
   several garlic presses cannot each own two honest keywords. One row per source
   keyword spends the table on distinct products instead.
-- **Uniqueness is enforced at both ends.** `validate_pool` treats a duplicate
-  keyword as fatal, and because each batch call is independent, every later call
-  is handed the keyword strings earlier ones already claimed as an explicit
-  do-not-repeat list.
+- **Uniqueness is enforced at three levels.** `validate_pool` treats a
+  duplicate keyword as fatal; within a pool, the neediest-first dedupe salvages
+  a contested string; and across pools a repeat is **fail-closed** — every
+  chunk's call is handed the strings earlier chunks claimed as an explicit
+  do-not-repeat list, and a chunk that re-writes one anyway fails the run
+  (a post-validation silent dedupe would void the earlier pool's validated
+  per-product floor).
 - **Deliverable**: `KEYWORD_BANK_PATH` (+ a `.md` digest with modifiers nested
   under their broad term) in the untracked `outputs/` tree — Step 5's intake.
+  The runner prints the bank plan (chunk sizes, targets, band and the LLM-call
+  estimate) before the first call.
 
 ### 2.5 Step 5 — dual-supplier ingestion (the gold kernel)
 
@@ -515,9 +527,9 @@ source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
   cheaper and 9.6× faster than separate calls, which is why the default is 4
   packages (12 questions) per call.
 - **Scoring and tiers.** `rank_score = 0.6·similarity + 0.4·value` on a 1–5
-  scale; `≥ JEV_SHORTLIST_MIN_SCORE` (4.0) is **shortlist**, `≥
-  JEV_REVIEW_MIN_SCORE` (2.5) is **review**, otherwise **disregard**. Jev's raw
-  `score` is a **0-based** level position on the criteria list (a live probe
+  scale; `≥ JEV_SHORTLIST_MIN_SCORE` (3.5, widened from 4.0) is **shortlist**,
+  `≥ JEV_REVIEW_MIN_SCORE` (2.5) is **review**, otherwise **disregard**. Jev's
+  raw `score` is a **0-based** level position on the criteria list (a live probe
   returned `3.24` for a 5-entry legend keyed `"0".."4"`), so the client shifts it
   by +1 onto 1–5 before any threshold is compared — with the shift, a shortlist
   score means "close match or better".
