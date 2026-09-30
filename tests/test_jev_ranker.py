@@ -440,15 +440,19 @@ def test_rank_batches_packages_and_shares_one_state(tmp_path):
 
 
 def test_rank_scores_and_tier_boundaries(tmp_path):
-    # Five packages, one per boundary case, all in a single batch:
+    # Seven packages, one per boundary case, all in a single batch:
     #   raw 4 / raw 4 -> 5.0 / 5.0 -> rank 5.0      shortlist
-    #   raw 3 / raw 3 -> 4.0 / 4.0 -> rank 4.0      shortlist (exactly at 4.0)
+    #   raw 3 / raw 3 -> 4.0 / 4.0 -> rank 4.0      shortlist
+    #   raw 2.5 / raw 2.5 -> 3.5 -> rank 3.5        shortlist (exactly at 3.5)
+    #   raw 2.4 / raw 2.4 -> 3.4 -> rank 3.4        review (one tick under)
     #   raw 1.5 / raw 1.5 -> 2.5   -> rank 2.5      review (exactly at 2.5)
     #   raw 1.4 / raw 1.4 -> 2.4   -> rank 2.4      disregard
     #   raw 0 / raw 0 -> 1.0 / 1.0 -> rank 1.0      disregard
     levels = {
         "product-04": (4, 4),
         "product-05": (3, 3),
+        "product-09": (2.5, 2.5),
+        "product-10": (2.4, 2.4),
         "product-06": (1.5, 1.5),
         "product-07": (1.4, 1.4),
         "product-08": (0, 0),
@@ -483,6 +487,10 @@ def test_rank_scores_and_tier_boundaries(tmp_path):
     assert by_dir["product-04"].rank_score == pytest.approx(5.0)
     assert by_dir["product-05"].tier == "shortlist"
     assert by_dir["product-05"].rank_score == pytest.approx(4.0)
+    assert by_dir["product-09"].tier == "shortlist"
+    assert by_dir["product-09"].rank_score == pytest.approx(3.5)
+    assert by_dir["product-10"].tier == "review"
+    assert by_dir["product-10"].rank_score == pytest.approx(3.4)
     assert by_dir["product-06"].tier == "review"
     assert by_dir["product-06"].rank_score == pytest.approx(2.5)
     assert by_dir["product-07"].tier == "disregard"
