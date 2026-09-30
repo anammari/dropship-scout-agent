@@ -138,7 +138,7 @@ dropship-scout-agent/
 │   ├── ingest_keyword_bank.py        # Step-5 dual-supplier ingestion runner (§13.6)
 │   ├── rank_optimal_candidates.py    # Step-6 Jev ranking runner (report only, no deletion)
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
-└── tests/                   # 530 hermetic tests, zero network (14 modules + conftest)
+└── tests/                   # 535 hermetic tests, zero network (14 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -524,7 +524,7 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 530
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 535
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes + faked Apify SDK / scripted LLM transports).
 - `tests/test_keyword_bank.py` covers the Step-5 bank and its dual-supplier
@@ -1170,6 +1170,21 @@ tier. The weights and thresholds live in `jev_client.py` (`SIMILARITY_LEVELS`,
 `REVIEW_MIN_SCORE`) — "judgement in one place", per the vendor's review
 principle.
 
+**Post-evaluation compliance gate (override, not a suggestion).** After the
+scores land, the ranker scans each package's human text — `product_title`,
+`marketing_ad_copy` and `features` (metadata.json has no description field,
+so the marketing payload is the description role) — against
+`COMPLIANCE_BANNED_TOKENS`: the keyword engine's own `BANNED_TOKENS` tuple
+(one source of truth, the AICIS boundary) plus `electric`, `usb`,
+`rechargeable`. A match forces the tier to `disregard` with an explicit
+`compliance gate: banned token '<tok>' matched in <field>` note, no matter
+the score, so contraband (mineral/stone tools like jade and quartz,
+cosmetics/consumables, battery-powered devices) never reaches shortlist or
+review. The scan is case-insensitive substring matching — the same semantics
+as every other banned-token check in the repo — so an innocent word holding
+a token (e.g. copy that explains "soak the knife in oil") is caught too; the
+note names the token and field so Step 7 can see exactly why.
+
 **Jev's raw `score` is 0-BASED, and the client shifts it onto 1–5.** The plan
 (§8.0) assumed a 1-indexed position; the live probe (2026-09-29) returned
 `score = 3.24` against a 5-entry criteria list whose `legend` keys were
@@ -1222,4 +1237,7 @@ clock**. Result at the widened floors: **shortlist 13, review 17, disregard
 The shortlist leads with self-care face tools (ice rollers, gua sha boards)
 and curated-home kitchen items (garlic press, tea-infuser glassware). The
 report does not itemize OpenRouter billing; the 25-call spend is ~$0.02 at
-the vendor's published input rate.
+the vendor's published input rate. With the compliance gate live the re-run
+demoted **43 of 100** packages to `disregard` (16 of them out of
+shortlist/review — including the then-#2 `jade` gua sha board), landing
+**shortlist 9, review 4, disregard 87**.

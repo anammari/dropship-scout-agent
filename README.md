@@ -528,11 +528,14 @@ source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
   packages (12 questions) per call.
 - **Scoring and tiers.** `rank_score = 0.6·similarity + 0.4·value` on a 1–5
   scale; `≥ JEV_SHORTLIST_MIN_SCORE` (3.5, widened from 4.0) is **shortlist**,
-  `≥ JEV_REVIEW_MIN_SCORE` (2.5) is **review**, otherwise **disregard**. Jev's
-  raw `score` is a **0-based** level position on the criteria list (a live probe
-  returned `3.24` for a 5-entry legend keyed `"0".."4"`), so the client shifts it
-  by +1 onto 1–5 before any threshold is compared — with the shift, a shortlist
-  score means "close match or better".
+  `≥ JEV_REVIEW_MIN_SCORE` (2.5) is **review**, otherwise **disregard**. A
+  post-evaluation compliance gate overrides the tier: title/marketing
+  text/features matching the AICIS banned tokens or `electric`/`usb`/
+  `rechargeable` forces **disregard** with an explicit note, whatever the
+  score. Jev's raw `score` is a **0-based** level position on the criteria list
+  (a live probe returned `3.24` for a 5-entry legend keyed `"0".."4"`), so the
+  client shifts it by +1 onto 1–5 before any threshold is compared — with the
+  shift, a shortlist score means "close match or better".
 - **A report, not a deletion.** No package directory is moved or removed — the
   ranker writes the tiered report and Step 7 (human) decides what to validate
   and link. A failed batch call retries once; if it still fails, only that
