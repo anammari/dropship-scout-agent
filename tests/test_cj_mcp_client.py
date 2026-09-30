@@ -7,6 +7,7 @@ result parsing, the `CjMcp*` error taxonomy, and the MCP Payload Liveness
 Gate (out-of-stock / delisted / ambiguous payloads strictly dropped).
 """
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -93,7 +94,7 @@ class FakeSession:
         if not script:
             return FakeCallToolResult(text=json.dumps({"data": {"list": []}}))
         entry = script.pop(0) if len(script) > 1 else script[0]
-        if isinstance(entry, Exception):
+        if isinstance(entry, BaseException):
             raise entry
         return entry
 
@@ -508,6 +509,34 @@ async def test_tool_call_exception_maps_to_tool_error():
     with pytest.raises(CjMcpToolError, match="boom"):
         async with client:
             await client.search_products("gadgets")
+
+
+async def test_transport_cancellation_maps_to_tool_error():
+    """A dead response stream maps onto the taxonomy, not a caller kill.
+
+    The StreamableHTTP response stream dying mid-call surfaces as a
+    BaseException-derived CancelledError (observed live 2026-09-29: it
+    escaped the per-candidate containment and killed the whole bank run).
+    Converted to CjMcpToolError and never retried — a dead stream cannot
+    recover inside the same session, and the next connect opens a fresh one.
+    """
+    session = FakeSession(
+        _DEFAULT_TOOLS,
+        responses={"search_products": [asyncio.CancelledError("stream cancelled")]},
+    )
+    client, factory = _client(session=session)
+    with pytest.raises(CjMcpToolError, match="transport dropped"):
+        async with client:
+            await client.search_products("gadgets")
+    assert factory.exited == 1
+
+
+async def test_transport_cancellation_at_connect_maps_to_connection_error():
+    session = FakeSession(_DEFAULT_TOOLS, list_tools_error=asyncio.CancelledError("x"))
+    client, _ = _client(session=session)
+    with pytest.raises(CjMcpConnectionError, match="cancelled mid-handshake"):
+        await client.connect()
+    assert client.connected is False
 
 
 async def test_tool_error_result_maps_to_tool_error():
