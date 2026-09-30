@@ -42,13 +42,14 @@ and its absence is never an error.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import re
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from src.config import settings
 from src.extractors.base import BaseSupplierExtractor, ExtractorBlockedException
@@ -101,6 +102,10 @@ _GALLERY_JS = """() => {
 _NAV_TIMEOUT_MS = 25000
 _MAX_GALLERY_CANDIDATES = 16
 _MIN_GALLERY = 3
+#: A shell/anti-bot PDP yields no carousel and read as "gallery has only 1"
+#: through the whole 2026-09-29 bank run; each PDP gets one fresh-page retry
+#: after a short settle delay before the candidate is dropped.
+_PDP_RETRY_DELAY_SECONDS = 2.0
 
 # --- DS Center MTOP endpoints -------------------------------------------
 # The DS Center is a React SPA over Alibaba's MTOP gateway; these are the
@@ -533,17 +538,24 @@ class AliExpressDsCenterExtractor(BaseSupplierExtractor):
                 country,
                 [c["orders"] for c in candidates[:10]],
             )
-            await self._harvest_galleries(context, candidates)
+            await self._harvest_galleries(context, candidates, keyword)
 
         products: List[RawSupplierProduct] = []
         for candidate in candidates:
             try:
                 products.append(self._build_product(candidate))
-            except Exception:
-                logger.debug(
-                    "aliexpress candidate skipped: %r",
+            except Exception as exc:
+                # Visible at WARNING so a blocked/degraded harvest stage is
+                # readable in the run log, not only under a debug probe
+                # (observed live 2026-09-30: 1,586 gate survivors died here
+                # without a single log line).
+                logger.warning(
+                    "aliexpress candidate DROPPED: %s (%s)",
                     candidate["url"],
-                    exc_info=True,
+                    exc,
+                )
+                logger.debug(
+                    "aliexpress candidate skip detail", exc_info=True
                 )
         return products
 
@@ -588,7 +600,7 @@ class AliExpressDsCenterExtractor(BaseSupplierExtractor):
         return _DsBrowserContext(self._headless, self._country)
 
     async def _harvest_galleries(
-        self, context, candidates: List[dict]
+        self, context, candidates: List[dict], keyword: str = ""
     ) -> None:
         """Upgrade each candidate in place from its own PDP.
 
@@ -596,53 +608,113 @@ class AliExpressDsCenterExtractor(BaseSupplierExtractor):
         needs the PDP pass for its gallery; the page's meta description is
         read while the probe runs. One page is used at a time and closed
         immediately.
+
+        Each URL is loaded up to TWICE: a first pass that yields fewer than
+        `_MIN_GALLERY` gallery URLs is re-tried once from a fresh page after
+        a short settle delay, and the best gallery of the two is kept. Ali's
+        anti-bot shell pages (HTTP 200 with an empty body) made the single
+        attempt read every blocked PDP as "gallery has only 1 image"; the
+        retry recovers the pages Ali serves on a second load. A candidate
+        that stays short after both attempts is dropped with a WARNING —
+        this harvest stage is exactly where a supplier block becomes
+        visible, so it must never be silent again.
         """
+        upgraded_count = 0
+        empty_count = 0
+        pages_loaded = 0
+        for candidate in candidates:
+            url = candidate["url"]
+            best_urls: List[str] = []
+            best_meta: Optional[str] = None
+            attempts = 0
+            for attempt in (1, 2):
+                if attempt == 2:
+                    await asyncio.sleep(_PDP_RETRY_DELAY_SECONDS)
+                page = await context.new_page()
+                try:
+                    attempt_urls, attempt_meta = await self._harvest_pass(
+                        page, url
+                    )
+                finally:
+                    try:
+                        await page.close()
+                    except Exception:
+                        logger.debug("PDP page close failed", exc_info=True)
+                pages_loaded += 1
+                if len(attempt_urls) > len(best_urls):
+                    best_urls = attempt_urls
+                if attempt_meta:
+                    best_meta = attempt_meta
+                if len(best_urls) >= _MIN_GALLERY:
+                    break
+                if attempt == 1:
+                    logger.debug(
+                        "PDP gallery yield short on attempt 1: %s "
+                        "(%d url(s)) — retrying from a fresh page",
+                        url,
+                        len(best_urls),
+                    )
+            # Upgrade suffixed assets: original first, as-served URL as
+            # fallback ordering (same rule the strict image protocol
+            # used for alicdn).
+            upgraded: List[str] = []
+            for img in best_urls[:_MAX_GALLERY_CANDIDATES]:
+                stripped = strip_size_suffix(img)
+                if stripped != img:
+                    upgraded.append(stripped)
+                upgraded.append(img)
+            seen = set()
+            ordered = [u for u in upgraded if not (u in seen or seen.add(u))]
+            if len(ordered) >= _MIN_GALLERY:
+                candidate["images"] = ordered
+                upgraded_count += 1
+            else:
+                empty_count += 1
+                logger.warning(
+                    "PDP gallery harvest EMPTY after %d attempt(s) "
+                    "(shell/anti-bot page?): urls=%s",
+                    1 if pages_loaded == 1 else 2,
+                    url,
+                )
+            if best_meta and best_meta.strip():
+                candidate["description"] = best_meta.strip()[:4000]
+        logger.info(
+            "PDP gallery harvest for %r: %d candidate(s), %d upgraded, "
+            "%d empty after retry, %d page load(s)",
+            keyword,
+            len(candidates),
+            upgraded_count,
+            empty_count,
+            pages_loaded,
+        )
+
+    async def _harvest_pass(
+        self, page: object, url: str
+    ) -> Tuple[List[str], Optional[str]]:
+        """One PDP load + the gallery/meta probes → (urls, meta description)."""
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-        for candidate in candidates:
-            page = await context.new_page()
-            try:
-                try:
-                    await page.goto(
-                        candidate["url"],
-                        timeout=_NAV_TIMEOUT_MS,
-                        wait_until="domcontentloaded",
-                    )
-                except PlaywrightTimeoutError:
-                    logger.debug("PDP load timed out: %s", candidate["url"])
-                    continue
-                result = await page.evaluate(_GALLERY_JS)
-                urls = (
-                    [u for u in result if isinstance(u, str) and u]
-                    if isinstance(result, list)
-                    else []
-                )
-                # Upgrade suffixed assets: original first, as-served URL as
-                # fallback ordering (same rule the strict image protocol
-                # used for alicdn).
-                upgraded: List[str] = []
-                for url in urls[:_MAX_GALLERY_CANDIDATES]:
-                    stripped = strip_size_suffix(url)
-                    if stripped != url:
-                        upgraded.append(stripped)
-                    upgraded.append(url)
-                seen = set()
-                ordered = [
-                    u for u in upgraded if not (u in seen or seen.add(u))
-                ]
-                if len(ordered) >= _MIN_GALLERY:
-                    candidate["images"] = ordered
-                try:
-                    meta = await page.evaluate(_META_DESCRIPTION_JS)
-                    if isinstance(meta, str) and meta.strip():
-                        candidate["description"] = meta.strip()[:4000]
-                except Exception:
-                    logger.debug("meta description probe failed", exc_info=True)
-            finally:
-                try:
-                    await page.close()
-                except Exception:
-                    logger.debug("PDP page close failed", exc_info=True)
+        try:
+            await page.goto(
+                url,
+                timeout=_NAV_TIMEOUT_MS,
+                wait_until="domcontentloaded",
+            )
+        except PlaywrightTimeoutError:
+            logger.debug("PDP load timed out: %s", url)
+            return [], None
+        result = await page.evaluate(_GALLERY_JS)
+        urls = (
+            [u for u in result if isinstance(u, str) and u]
+            if isinstance(result, list)
+            else []
+        )
+        try:
+            meta = await page.evaluate(_META_DESCRIPTION_JS)
+        except Exception:
+            logger.debug("meta description probe failed", exc_info=True)
+            meta = None
+        return urls, meta
 
     def _build_product(self, candidate: dict) -> RawSupplierProduct:
         images = candidate["images"]

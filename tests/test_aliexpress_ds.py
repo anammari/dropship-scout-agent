@@ -6,6 +6,8 @@ shapes mirror the live DS Center responses (`selection.search` v2.0 and
 `selection.queryByItemUrl` v1.0) captured during implementation.
 """
 
+import logging
+
 import pytest
 
 from src.config import settings
@@ -196,9 +198,10 @@ def ali(monkeypatch):
     monkeypatch.setattr(settings, "USD_TO_AUD", 1.55)
     monkeypatch.setattr(settings, "USER_AGENT", "test-agent")
     monkeypatch.setattr(settings, "ALI_DS_STATE_PATH", "nonexistent-state.json")
+    monkeypatch.setattr(ds, "_PDP_RETRY_DELAY_SECONDS", 0.01)
 
     def _install(*, records, hits=None, search_responses=None, gallery=None,
-                 meta=_META, context=None):
+                 meta=_META, context=None, extra_pages=None):
         """Script one keyword's exchange and return the recorded request journal.
 
         Every MTOP call is a priming GET (token priming, unsigned) followed
@@ -211,6 +214,8 @@ def ali(monkeypatch):
             for record in records:
                 responses.extend([{}, _item_payload(record)])
         pages = [_FakePage(gallery=gallery, meta=meta) for _ in records or [1]]
+        if extra_pages:
+            pages.extend(extra_pages)
         ctx = context or _FakeContext(request=_FakeRequest(responses), pages=pages)
         monkeypatch.setattr(
             AliExpressDsCenterExtractor,
@@ -471,10 +476,58 @@ async def test_duplicate_items_across_keywords_are_evaluated_once(ali):
     assert len(item_calls) == 2, "the repeat item should not be re-queried"
 
 
-async def test_thin_gallery_is_dropped_not_exported(ali):
-    ali["install"](records=[_record()], gallery=["https://cdn.example.com/only.jpg"])
-    products = await ali["extractor"].fetch_products(["garlic grater"], "AU")
+async def test_thin_gallery_is_dropped_not_exported(ali, caplog):
+    """Both fresh-page attempts see the same thin gallery — still dropped.
+
+    A short first pass is re-loaded once (the anti-bot shell may yield a
+    real page on a second load); a candidate thin on BOTH attempts is
+    dropped with a visible WARNING, never exported.
+    """
+    ali["install"](
+        records=[_record()],
+        gallery=["https://cdn.example.com/only.jpg"],
+        extra_pages=[_FakePage(gallery=["https://cdn.example.com/only.jpg"])],
+    )
+    with caplog.at_level(logging.WARNING, logger="src.extractors.aliexpress_ds"):
+        products = await ali["extractor"].fetch_products(["garlic grater"], "AU")
     assert products == []
+    assert "PDP gallery harvest EMPTY after 2 attempt(s)" in caplog.text
+    assert "aliexpress candidate DROPPED" in caplog.text
+
+
+async def test_pdp_retry_recovers_a_page_served_on_a_second_load(ali, caplog):
+    """A shell on the first load and a real page on the second → verified.
+
+    The record image stays at 1 until the retry; a second load that returns
+    the full gallery upgrades the candidate instead of dropping it.
+    """
+    ali["install"](
+        records=[_record()],
+        gallery=["https://cdn.example.com/only.jpg"],
+        extra_pages=[_FakePage()],
+    )
+    with caplog.at_level(logging.INFO, logger="src.extractors.aliexpress_ds"):
+        products = await ali["extractor"].fetch_products(["garlic grater"], "AU")
+    assert len(products) == 1
+    assert len(products[0].image_urls) >= 3
+    assert "PDP gallery harvest for 'garlic grater'" in caplog.text
+    assert "1 upgraded" in caplog.text
+    assert "2 page load(s)" in caplog.text
+
+
+async def test_shell_page_drop_is_counted_in_the_harvest_tally(ali, caplog):
+    """A PDP that stays empty on both loads shows up in the tally."""
+    ali["install"](
+        records=[_record()],
+        gallery=[],
+        extra_pages=[_FakePage(gallery=[])],
+    )
+    with caplog.at_level(logging.INFO, logger="src.extractors.aliexpress_ds"):
+        products = await ali["extractor"].fetch_products(["garlic grater"], "AU")
+    assert products == []
+    assert "0 upgraded" in caplog.text
+    assert "1 empty after retry" in caplog.text
+    assert "2 page load(s)" in caplog.text
 
 
 async def test_no_search_hits_yields_no_products(ali):
