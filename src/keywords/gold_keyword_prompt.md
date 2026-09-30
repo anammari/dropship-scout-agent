@@ -3,13 +3,18 @@
 The prompt `src.keywords.generator` feeds to the configured reasoning LLM
 (OpenAI-compatible `LLM_BASE_URL`, model `LLM_MODEL`) together with the
 GOLD-STANDARD winning products of the Step 3 Google Shopping research, to
-produce the 50–70 supplier search keywords (the "GOLD-STANDARD keyword
-bank") that Step 5 ingests through BOTH dropship supplier pipelines and
-that Step 6 later ranks against. This file is a tracked package resource:
-the generator renders the `{PRODUCT_TABLE}` slot from the live Step 3
-deliverable, batches the table (4 products per call against the documented
-output-limit truncation), parses each response's JSON, salvages a truncated
-tail, and validates the merged pool in code before returning it.
+produce the supplier search keywords (the "GOLD-STANDARD keyword bank") that
+Step 5 ingests through BOTH dropship supplier pipelines and that Step 6 later
+ranks against. The bank is generated in pool chunks: the table is sliced, and
+each chunk generates its own validated 50–70 pool under this same prompt —
+this file needs no chunk knowledge because each call's table is exactly the
+slice it covers. The merged bank must additionally clear the merged band in
+code (the chunks' summed target ± the bank slack). This file is a tracked
+package resource: the generator renders the `{PRODUCT_TABLE}` slot from the
+live Step 3 deliverable, batches the chunk's table (4 products per call
+against the documented output-limit truncation), parses each response's
+JSON, salvages a truncated tail, and validates each pool — then the merged
+bank — in code before returning it.
 
 ---
 
