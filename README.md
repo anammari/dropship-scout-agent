@@ -578,7 +578,8 @@ supplier, each numbering and deduping only against itself:
 
 The two trees never interleave: `dropship-candidates/` is the general intake,
 `optimal-dropship-candidates/` is the gold-kernel intake where **both** engines
-run every gold keyword.
+run every gold keyword. Each supplier subfolder is created on its **first
+export**, so an engine that verifies nothing leaves no folder behind.
 
 **Step 6 ranks that gold kernel without touching it** (§2.6): it reads the
 packages and writes its tiered report to the untracked `outputs/` tree beside
@@ -807,7 +808,9 @@ Playbook:
 - **LLM config:** verify `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL` against your
   Ollama Cloud account.
 - **CJ MCP rate limits:** tool calls return 429-style errors under load — the
-  client retries once after a 2s backoff before surfacing; space out keyword runs.
+  client retries once after a 2s backoff before surfacing; space out keyword
+  runs. A dropped transport connection mid-call surfaces as a tool error
+  (contained to the current candidate/leg, never fatal).
 
 Step 5 raises its own blocks (§2.5), all with the same rendered shape:
 
@@ -820,6 +823,14 @@ Step 5 raises its own blocks (§2.5), all with the same rendered shape:
   mid-bank (the leg raises `DsCenterSessionExpiredError`, deliberately **not**
   swallowed by `run_pipeline`); re-run `scripts/generate_ali_session.py` or
   delete `ALI_DS_STATE_PATH` and run anonymously.
+- **AliExpress PDP shells** — Ali's anti-bot can serve empty shell pages to the
+  gallery harvest while the DS Center APIs keep answering; the run stays
+  healthy and every blocked item is now a visible WARNING plus a per-keyword
+  harvest tally (`PDP gallery harvest for '<kw>': N candidate(s), X upgraded,
+  Y empty after retry, Z page load(s)`). Shells at ~100% are an Ali-side
+  block, not a code fault; they decay with time or clear on a different IP
+  (a VPN exit IP cleared them instantly in testing). A collapsed Ali yield
+  with a healthy report is what to look at first.
 - **Step 5 Funnel Exhausted** — the bank produced **zero** exported packages
   across both engines.
 - **LLM config** — the shared evaluator is built before the first leg, so a bad

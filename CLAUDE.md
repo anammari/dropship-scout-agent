@@ -631,6 +631,15 @@ only in `.env` / the real environment.
   plan's `query_sku_details` returns `[]` for catalog pids).
 - **CJ MCP rate limits:** tool calls get 429-style errors under load; the
   client retries once after a 2s backoff before surfacing `CjMcpToolError`.
+- **CJ MCP transport drops (live 2026-09-30):** the StreamableHTTP response
+  stream can die mid-call, surfacing as a `BaseException`-derived
+  `CancelledError` that escapes `except Exception` and, uncontained, killed a
+  whole bank run (first full-bank attempt, ~34 keywords in). `_call_tool`
+  converts it to `CjMcpToolError` (never retried — a dead stream cannot
+  recover in-session) and the connect handshake to `CjMcpConnectionError`, so
+  the blast radius is the current candidate/leg and the next connect opens a
+  fresh session. The subsequent full-bank run hit three such drops, all
+  contained (0 unhandled errors across ~11h).
   `CJ_MAX_PRODUCTS=10` means up to 10 detail calls per keyword, so a run
   takes minutes — that is the pacing, not a hang.
 - **Why the Apify path was retired (three failures, all costing):** an
@@ -912,6 +921,18 @@ sizing, which keeps the widened Step-5 ingestion near ~10–11h instead of 18h+.
 - The full 40-keyword production run (~$5.60 envelope, under the free-tier
   remainder) is deliberately **deferred until the operator's go**.
 
+**Widened-bank live run (2026-09-29, branch `fix/gold-funnel-bottlenecks`, operator's
+go):** the regenerated deliverable holds **320 unique keywords across 40 gold
+products** — the table is capped at 40 because the one-per-source-keyword
+collapse leaves exactly 40 distinct type groups in the whole 263-row
+deliverable (rows w/o `source_keyword`: 0; banned-name rows: 7), so
+`DEFAULT_MAX_PRODUCTS=150` selects all of them. The operator chose
+`--chunk-size 8` (5 pools × 8 products × 8 keywords/product, summed target
+320) to keep the bank inside his 250–320 intent; the merged pass validated
+against its auto-scaled band **[270, 340]** with zero cross-chunk repeats.
+~12 reasoning-LLM calls, zero Apify spend, written as
+`outputs/step-4-gold-keywords.{json,md}` (roles 159 broad / 161 modifier).
+
 **Production run (same day, operator's go):** all 40 Step-2 keywords, run
 `rP09Pk3x0nkqlSuLB`, actor usage **$4.06** (1,567 rows ≈ $0.0026/result —
 under the README rate; total Apify spend $6.76 of the $10 free tier). The
@@ -1081,6 +1102,23 @@ described above; `candidates_exported` was never affected, since it comes from
 `summary.exports`, and all 33 exports in the summary were verified against the
 `Exported` log lines.
 
+**Full 320-keyword widened run (2026-09-29 → 09-30, branch, operator's go,
+exit 0).** First attempt aborted ~1.2h in (34 keywords) on an uncontained CJ
+transport drop — the `CancelledError` containment above is the fix; the
+restart finished in ~11h20m: `[STEP 5 COMPLETE]`, 639 legs (319 CJ run +
+320 Ali, 1 failed leg), TOTAL `scraped=1061 evaluated=1048 accepted=391
+rejected=657 exported=82` — **100 CJ packages on disk** (82 new + the 18
+carried over from the crashed attempt, numbering continuous, zero
+overwrites; the contract audit on all 100 is clean: 13 keys, freight-itemised
+bases, no duplicate URLs, ≥3 images each). The margin-floor widening is
+visible in the funnel (an ACCEPT at AUD 15.47 / 1.39x that the old AUD 20
+arm auto-rejected). AliExpress contributed **0 exports**: every leg answered
+~21 search hits, but the anti-bot harvested shells (see §12's AliExpress
+note) — `scraped=6 evaluated=6 accepted=1` and the `aliexpress/` subfolder
+never created, as it is written only on its first export. The operator
+cleared the 38 PR#3-run packages before this run; the general-intake
+`dropship-candidates/` tree was untouched.
+
 ### 13.7 Step 6 — Jev product ranking (implemented)
 
 ```bash
@@ -1175,3 +1213,13 @@ presses (`aliexpress/product-09`, 4.41; `aliexpress/product-08`, 4.30;
 gold list is built on, which is the signal the similarity axis works. The
 deliverables were written to `outputs/step-6-ranked-candidates.{json,md}` and
 confirmed gitignored (`.gitignore:31` = `outputs/`).
+
+**Step-6 live re-rank (2026-09-30, branch, operator's go, exit 0):** the 100
+CJ packages of the 320-keyword widened run against the 263 gold products in
+**25 System One calls** of 4 packages each — **0 failed batches, ~65s wall
+clock**. Result at the widened floors: **shortlist 13, review 17, disregard
+70** (16.1% shortlist rate on a 2.6x wider cohort vs the old run's 12 of 38).
+The shortlist leads with self-care face tools (ice rollers, gua sha boards)
+and curated-home kitchen items (garlic press, tea-infuser glassware). The
+report does not itemize OpenRouter billing; the 25-call spend is ~$0.02 at
+the vendor's published input rate.
