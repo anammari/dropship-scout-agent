@@ -56,9 +56,23 @@ class LLMConfigError(Exception):
     """LLM endpoint configuration is missing or incomplete (`.env` keys)."""
 
 
-_SYSTEM_PROMPT = """You are an expert dropshipping evaluator for a premium \
-Australian store in the "Modern Arab-Aussie Lifestyle & Cultural Nostalgia" \
-niche — home, hospitality and everyday-ceremony products that give \
+def _build_system_prompt() -> str:
+    """The 5-point gate system prompt with the live margin floor interpolated.
+
+    The gate-2 numbers are the configured `MIN_MARKUP_MULTIPLIER` /
+    `MIN_MARGIN_AUD`, so the prompt cannot drift from the figures the code's
+    reconciliation (`_reconcile`) and the Pydantic model validator enforce —
+    they are the same settings keys the prompt describes.
+    """
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        min_markup_multiplier=f"{settings.MIN_MARKUP_MULTIPLIER:g}",
+        min_margin_aud=f"{settings.MIN_MARGIN_AUD:g}",
+    )
+
+
+_SYSTEM_PROMPT_TEMPLATE = """You are an expert dropshipping evaluator for a \
+premium Australian store in the "Modern Arab-Aussie Lifestyle & Cultural \
+Nostalgia" niche — home, hospitality and everyday-ceremony products that give \
 Arabic-speaking Australians and their families a stronger sense of home, \
 heritage, and generous hosting. Review the provided raw supplier product \
 details (title, description, and the supplier's REAL dropshipping cost in \
@@ -87,9 +101,10 @@ fixed 3x-4x multiplier to the cost. Price the product at what it \
 REALISTICALLY sells for in Australia in this niche — what a shopper would \
 happily pay for a considered, well-presented premium item, not a Kmart \
 commodity. Then check it clears the floor: `suggested_retail_aud` must be \
-at least 2.5x the landed cost OR leave at least AUD $20 gross profit per \
-unit. If the realistic Australian price cannot clear that floor, REJECT \
-the product on this gate rather than inflating the price.
+at least {min_markup_multiplier}x the landed cost OR leave at least AUD \
+${min_margin_aud} gross profit per unit. If the realistic Australian price \
+cannot clear that floor, REJECT the product on this gate rather than \
+inflating the price.
 3. AUSTRALIAN LOGISTICAL FEASIBILITY: light and durable is best (under \
 1.2 kg, no fragile untreated glass/ceramics, non-perishable, air-freight \
 compliant — no loose battery hazmat restrictions). Infer physical traits \
@@ -150,7 +165,7 @@ def _build_user_message(raw: RawSupplierProduct) -> str:
 def build_messages(raw: RawSupplierProduct) -> List[dict]:
     """Chat messages for one evaluation (system gate + product payload)."""
     return [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "system", "content": _build_system_prompt()},
         {"role": "user", "content": _build_user_message(raw)},
     ]
 

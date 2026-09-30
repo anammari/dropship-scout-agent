@@ -253,9 +253,11 @@ def test_min_markup_multiplier_env_override_is_respected(monkeypatch):
     assert load_settings().MIN_MARKUP_MULTIPLIER == 3.0
 
 
-def test_min_margin_aud_defaults_to_the_relaxed_floor(monkeypatch):
+def test_min_margin_aud_defaults_to_the_widened_floor(monkeypatch):
+    # Widened to AUD 10 on 2026-09-29 to match the operator's Step-3 $10
+    # target, which the old AUD 20 default silently overrode.
     monkeypatch.delenv("MIN_MARGIN_AUD", raising=False)
-    assert load_settings().MIN_MARGIN_AUD == 20.0
+    assert load_settings().MIN_MARGIN_AUD == 10.0
 
 
 def test_min_margin_aud_env_override_is_respected(monkeypatch):

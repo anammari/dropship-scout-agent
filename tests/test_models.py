@@ -367,8 +367,9 @@ def test_final_accept_failing_margin_floor_is_rejected_by_validator():
         _final(_provisional(suggested_retail_aud=14.00))
 
 
-def test_final_accept_passes_on_margin_over_25_even_below_3x():
-    # Retail 45.00 vs COGS 16.80: markup 2.68x but margin 28.20 > 25.
+def test_final_accept_passes_on_margin_over_the_floor_even_below_3x():
+    # Retail 45.00 vs COGS 16.80: markup 2.68x, margin 28.20 — clears the
+    # margin arm (widened to AUD 10) below 3x.
     final = _final(_provisional(suggested_retail_aud=45.00))
     assert final.verdict == "ACCEPT"
     assert final.markup_multiplier < 3.0
@@ -383,8 +384,17 @@ def test_final_accept_survives_the_relaxed_floor_below_3x():
     assert final.markup_multiplier == pytest.approx(2.75, abs=0.01)
 
 
+def test_final_accept_survives_on_the_widened_margin_below_the_markup_arm():
+    # Widened to AUD 10 on 2026-09-29: retail 27.00 vs COGS 16.80 is 1.61x
+    # (fails the markup arm) with AUD 10.20 margin — above the wide floor,
+    # where the old AUD 20 arm would have downgraded it.
+    final = _final(_provisional(suggested_retail_aud=27.00))
+    assert final.verdict == "ACCEPT"
+    assert final.markup_multiplier == pytest.approx(1.61, abs=0.01)
+
+
 def test_final_accept_below_the_relaxed_floor_is_rejected():
-    # 1.75x and AUD 3.00 margin — under both arms of the relaxed floor.
+    # 1.75x and AUD 3.00 margin — under both arms of the widened floor.
     with pytest.raises(ValidationError, match="markup_multiplier"):
         _final(_provisional(suggested_retail_aud=7.00), raw=_low_cogs())
 

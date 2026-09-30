@@ -38,7 +38,9 @@ from src.ranking.jev_client import (
     answer_noul,
     answer_score,
 )
+from src.keywords.generator import BANNED_TOKENS
 from src.ranking.jev_product_ranker import (
+    COMPLIANCE_BANNED_TOKENS,
     GOLD_REFERENCE_FIELDS,
     PRODUCT_STATE_FIELDS,
     SIMILARITY_WEIGHT,
@@ -46,6 +48,7 @@ from src.ranking.jev_product_ranker import (
     JevProductRanker,
     JevRankingError,
     RankedPackage,
+    _compliance_hit,
     packages_to_payload,
     render_markdown,
     write_reports,
@@ -101,7 +104,7 @@ def _write_gold(tmp_path, products=None, name="gold.json"):
 def _write_package(root, engine, dir_name, metadata=None, raw=None):
     """Write one `product-NN` package and return its directory."""
     package_dir = root / engine / dir_name
-    package_dir.mkdir(parents=True)
+    package_dir.mkdir(parents=True, exist_ok=True)
     text = raw if raw is not None else json.dumps(metadata or METADATA)
     (package_dir / "metadata.json").write_text(text, encoding="utf-8")
     return package_dir
@@ -440,15 +443,19 @@ def test_rank_batches_packages_and_shares_one_state(tmp_path):
 
 
 def test_rank_scores_and_tier_boundaries(tmp_path):
-    # Five packages, one per boundary case, all in a single batch:
+    # Seven packages, one per boundary case, all in a single batch:
     #   raw 4 / raw 4 -> 5.0 / 5.0 -> rank 5.0      shortlist
-    #   raw 3 / raw 3 -> 4.0 / 4.0 -> rank 4.0      shortlist (exactly at 4.0)
+    #   raw 3 / raw 3 -> 4.0 / 4.0 -> rank 4.0      shortlist
+    #   raw 2.5 / raw 2.5 -> 3.5 -> rank 3.5        shortlist (exactly at 3.5)
+    #   raw 2.4 / raw 2.4 -> 3.4 -> rank 3.4        review (one tick under)
     #   raw 1.5 / raw 1.5 -> 2.5   -> rank 2.5      review (exactly at 2.5)
     #   raw 1.4 / raw 1.4 -> 2.4   -> rank 2.4      disregard
     #   raw 0 / raw 0 -> 1.0 / 1.0 -> rank 1.0      disregard
     levels = {
         "product-04": (4, 4),
         "product-05": (3, 3),
+        "product-09": (2.5, 2.5),
+        "product-10": (2.4, 2.4),
         "product-06": (1.5, 1.5),
         "product-07": (1.4, 1.4),
         "product-08": (0, 0),
@@ -483,6 +490,10 @@ def test_rank_scores_and_tier_boundaries(tmp_path):
     assert by_dir["product-04"].rank_score == pytest.approx(5.0)
     assert by_dir["product-05"].tier == "shortlist"
     assert by_dir["product-05"].rank_score == pytest.approx(4.0)
+    assert by_dir["product-09"].tier == "shortlist"
+    assert by_dir["product-09"].rank_score == pytest.approx(3.5)
+    assert by_dir["product-10"].tier == "review"
+    assert by_dir["product-10"].rank_score == pytest.approx(3.4)
     assert by_dir["product-06"].tier == "review"
     assert by_dir["product-06"].rank_score == pytest.approx(2.5)
     assert by_dir["product-07"].tier == "disregard"
@@ -520,6 +531,106 @@ def test_rank_is_sorted_by_descending_rank_score(tmp_path):
 def test_composite_weights_are_the_configured_split():
     assert SIMILARITY_WEIGHT == 0.6
     assert VALUE_WEIGHT == 0.4
+
+
+# --- the post-evaluation compliance gate -----------------------------------
+
+
+def test_compliance_tokens_are_the_union_specified():
+    # The AICIS boundary tokens are the keyword engine's own tuple (one
+    # source of truth); the electrical/logistics terms ride on top.
+    for token in ("electric", "usb", "rechargeable", "jade", "quartz", "salt"):
+        assert token in COMPLIANCE_BANNED_TOKENS
+    assert all(token in COMPLIANCE_BANNED_TOKENS for token in BANNED_TOKENS)
+
+
+def test_compliance_hit_names_the_field_and_the_token():
+    jade = {**METADATA, "product_title": "Green Jade Roller Stone Face Tool"}
+    assert "matched in product_title" in _compliance_hit(jade)
+    assert "'jade'" in _compliance_hit(jade)
+    usb = {
+        **METADATA,
+        "marketing_ad_copy": "Charge it once with any cable — USB ready.",
+    }
+    assert "'usb'" in _compliance_hit(usb)
+    assert "matched in marketing_ad_copy" in _compliance_hit(usb)
+    rechar = {**METADATA, "features": ["Rechargeable motor", "Soft head"]}
+    assert "'rechargeable'" in _compliance_hit(rechar)
+    assert "matched in features" in _compliance_hit(rechar)
+    # The clean reference package has no hit on any scanned field.
+    assert _compliance_hit(METADATA) == ""
+
+
+def test_a_shortlisted_package_matching_a_token_is_demoted_to_disregard(tmp_path):
+    """A perfect Jev score cannot rescue a contraband package.
+
+    The gate is a deterministic override AFTER the score: title carrying
+    `jade` (a shortlisted-scoring stone tool) → tier disregard with the
+    explicit reason in notes, exactly as directed.
+    """
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-04"),))
+    _write_package(root, "cjdropshipping", "product-04", metadata={
+        **METADATA,
+        "product_title": "Jade Roller Face Massager Stone Tool",
+    })
+    client = ScriptedJevClient(
+        lambda state, questions, i: _perfect_answers(questions)
+    )
+    ranker = _ranker(tmp_path, client, export_root=root)
+    (package,) = ranker.rank()
+
+    assert package.tier == "disregard"
+    assert package.rank_score == pytest.approx(5.0)  # the score is recorded
+    assert "compliance gate: banned token 'jade' matched in product_title" in package.notes
+
+
+def test_a_review_package_with_a_usb_copy_is_demoted_too(tmp_path):
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-05"),))
+    _write_package(root, "cjdropshipping", "product-05", metadata={
+        **METADATA,
+        "marketing_ad_copy": "Recharge quickly — one USB cable included.",
+    })
+    client = ScriptedJevClient(
+        lambda state, questions, i: _perfect_answers(
+            questions, similarity=2, value=2, pillar="curated_home"
+        )
+    )
+    ranker = _ranker(tmp_path, client, export_root=root)
+    (package,) = ranker.rank()
+
+    # raw 2 -> 3.0 both questions -> rank 3.0: review, then overridden.
+    assert package.tier == "disregard"
+    assert "banned token 'usb' matched in marketing_ad_copy" in package.notes
+
+
+def test_clean_packages_keep_their_tier_and_a_discard_note_composes(tmp_path):
+    root = _export_root(
+        tmp_path, packages=(("cjdropshipping", "product-06"), ("cjdropshipping", "product-07"))
+    )
+    _write_package(root, "cjdropshipping", "product-07", metadata={
+        **METADATA,
+        "product_title": "Stainless Steel Gua Sha Board",
+        "marketing_ad_copy": "A stone-free scraping board.",
+    })
+    def answers(state, questions, i):
+        # Per-question, since one call carries both products' questions.
+        out = {}
+        for qid in questions:
+            slug, name = qid.rsplit("__", 1)
+            if name == "pillar":
+                choice = "discard" if slug.endswith("product_06") else "curated_home"
+                out[qid] = {"type": "choice", "choice": choice}
+            else:
+                out[qid] = {"type": "score", "score": 4}
+        return out
+    client = ScriptedJevClient(answers)
+    ranker = _ranker(tmp_path, client, export_root=root, batch_size=8)
+    ranked = {p.package_dir.rsplit("/", 1)[-1]: p for p in ranker.rank()}
+
+    assert ranked["product-06"].tier == "shortlist"
+    assert ranked["product-06"].notes == "Jev classified this package as discard"
+    assert ranked["product-07"].tier == "shortlist"
+    assert ranked["product-07"].notes == ""
 
 
 # --- failure handling -----------------------------------------------------

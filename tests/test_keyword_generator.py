@@ -19,6 +19,8 @@ import pytest
 
 from src.config import settings
 from src.keywords.generator import (
+    BANK_MAX_SLACK,
+    BANK_MIN_SLACK,
     BANNED_TOKENS,
     DEFAULT_MAX_PRODUCTS,
     MAX_KEYWORDS,
@@ -30,6 +32,7 @@ from src.keywords.generator import (
     KeywordGenerator,
     build_product_table,
     carries_banned_token,
+    chunk_sizes,
     dedupe_keywords,
     default_per_product_min,
     load_gold_products,
@@ -124,11 +127,16 @@ def _write_gold(tmp_path, products=None, name="gold.json"):
     return path
 
 
-def _keyword_rows(products, per_product=8, pillar="curated_home"):
-    """Build a structurally valid pool: half broad, half modifier per product."""
+def _keyword_rows(products, per_product=8, pillar="curated_home", prefix="kw"):
+    """Build a structurally valid pool: half broad, half modifier per product.
+
+    `prefix` namespaces the keyword strings — a later bank chunk passes its
+    own prefix so its keywords stay globally unique, except in the
+    cross-chunk-repeat test where the repeat is deliberate.
+    """
     rows = []
     for index, product in enumerate(products):
-        head = f"kw {index} head"
+        head = f"{prefix} {index} head"
         for i in range(per_product // 2):
             rows.append(
                 {
@@ -143,7 +151,7 @@ def _keyword_rows(products, per_product=8, pillar="curated_home"):
         for i in range(per_product // 2):
             rows.append(
                 {
-                    "keyword": f"kw {index} tight {i}",
+                    "keyword": f"{prefix} {index} tight {i}",
                     "product": product,
                     "pillar": pillar,
                     "role": "modifier",
@@ -347,26 +355,27 @@ def test_adaptive_target_and_floor_math():
 
 
 def test_target_math_stays_inside_the_pool_band():
-    # The Step-3 production run curated 263 products, so the generator trims to
-    # DEFAULT_MAX_PRODUCTS; its target math has to fit 50-70 keywords for every
-    # set size the cap can produce. 35 is the band's hard ceiling (2 each = 70
-    # exactly); past that no pool could name every product and still fit.
-    assert DEFAULT_MAX_PRODUCTS == 30
-    # 24 products is the one size with no uniform target inside the band: 2
-    # each is 48 (short of 50) and 3 each is 72 (past 70). The target takes
-    # the floor there, and only --max-products can reach that size.
-    for count in range(1, DEFAULT_MAX_PRODUCTS + 1):
+    # The widened bank (2026-09-29) caps the table at 150 products but
+    # generates it in pool chunks, so the target math only ever faces a chunk
+    # — and any single pool is bounded by the band's hard ceiling at 35
+    # products (2 each = 70 exactly); past that no pool could name every
+    # product and still fit.
+    assert DEFAULT_MAX_PRODUCTS == 150
+    for count in range(1, 36):
         target = per_product_target(count)
         assert target >= default_per_product_min(count), count
         assert target * count <= MAX_KEYWORDS, count
         if count != 24:
             assert target * count >= MIN_KEYWORDS, count
+    # 24 products is the one size with no uniform target inside the band: 2
+    # each is 48 (short of 50) and 3 each is 72 (past 70), so chunk_sizes
+    # never produces it and borrows a product for the tailing chunk instead.
     assert per_product_target(24) == 2
     assert per_product_target(30) == 2
     assert per_product_target(30) * 30 == TARGET_TOTAL
     assert per_product_target(35) == 2
     assert per_product_target(35) * 35 == MAX_KEYWORDS
-    # 36 products cannot be named individually inside the band.
+    # A whole-table single pool of 36+ cannot be named per product at all.
     assert default_per_product_min(36) * 36 > MAX_KEYWORDS
 
 
@@ -570,6 +579,154 @@ def test_dedupe_keywords_leaves_a_single_writer_alone():
     kept, dropped = dedupe_keywords(rows)
     assert kept == rows
     assert dropped == []
+
+
+# --- the chunked bank flow (the widened Step-4 run) ------------------------
+
+
+def test_chunk_sizes_sums_a_uniform_plan():
+    assert chunk_sizes(150, 30) == [30, 30, 30, 30, 30]
+
+
+def test_chunk_sizes_borrows_a_product_when_the_tailing_chunk_is_24():
+    # 24 is the one unsatisfiable size (2 each = 48 short of 50; 3 each = 72
+    # past 70): the tailing chunk takes one product from the previous chunk
+    # so both satisfy the band.
+    assert chunk_sizes(84, 30) == [30, 29, 25]
+    assert chunk_sizes(54, 30) == [29, 25]
+
+
+def test_chunk_sizes_accepts_a_single_pool_table():
+    assert chunk_sizes(30, 30) == [30]
+    assert chunk_sizes(8, 30) == [8]
+
+
+def test_chunk_sizes_rejects_an_unsatisfiable_chunk_before_any_spend():
+    # A whole-table chunk of 24 (or a chunk size like 45, whose adaptive
+    # target cannot reach the 50-keyword band) fails the plan before any
+    # LLM call spends.
+    with pytest.raises(KeywordGenerationError, match="--chunk-size"):
+        chunk_sizes(24, 30)
+    with pytest.raises(KeywordGenerationError, match="--chunk-size"):
+        chunk_sizes(90, 45)
+    with pytest.raises(KeywordGenerationError, match="empty gold table"):
+        chunk_sizes(0, 30)
+
+
+def _table_names():
+    """The table the generator builds: the gold fixture, demand-ranked."""
+    return [p["name"] for p in select_gold_products(GOLD_PRODUCTS, limit=8)]
+
+
+def _bank_bodies(per_product, second_prefix="wk"):
+    """Two 4-product chunk responses with `per_product` rows per product.
+
+    The second chunk's keywords carry their own prefix (a real bank run
+    writes globally unique strings); `second_prefix="kw"` re-uses the first
+    pool's strings for the deliberate-repeat test.
+    """
+    ranked = _table_names()
+    first = _keyword_rows(ranked[:4], per_product=per_product)
+    second = _keyword_rows(ranked[4:], per_product=per_product, prefix=second_prefix)
+    return first, second
+
+
+def test_generate_bank_concatenates_two_validated_pools_in_order(tmp_path):
+    # Two chunks of 4 (target 13/products, summed target 104, band 54-124);
+    # rows of 14 each give each pool 56 keywords — legal inside the 50-70
+    # band — and a bank of 112 inside the merged band.
+    first, second = _bank_bodies(per_product=14)
+    log = []
+    generator = _generator(
+        [_batch_json(first), _batch_json(second)], log, tmp_path, max_products=8
+    )
+
+    ranked = _table_names()
+    bank = generator.generate_bank(chunk_size=4)
+
+    assert len(bank) == 112
+    assert all(isinstance(row, CandidateKeyword) for row in bank)
+    broad = {row.keyword for row in bank if row.role == "broad"}
+    for row in bank:
+        if row.role == "modifier":
+            assert row.tightens in broad
+    # Chunk order is preserved: the first pool's products occupy the head.
+    assert [row.product for row in bank[:14]] == [ranked[0]] * 14
+    assert [row.product for row in bank[56:70]] == [ranked[4]] * 14
+    # One LLM call per chunk at the default 4-product batch size.
+    assert len(log) == 2
+
+
+def test_generate_bank_seeds_the_do_not_repeat_list_across_chunks(tmp_path):
+    first, second = _bank_bodies(per_product=14)
+    log = []
+    generator = _generator(
+        [_batch_json(first), _batch_json(second)], log, tmp_path, max_products=8
+    )
+
+    generator.generate_bank(chunk_size=4)
+
+    # The second pool's call is handed every keyword the first pool claimed.
+    second_send = log[1]["payload"]["messages"][1]["content"]
+    assert "already used these 56 strings" in second_send
+    for row in first:
+        assert f"`{row['keyword']}`" in second_send
+    # The first pool's own call has nothing to avoid yet.
+    assert "already used these" not in log[0]["payload"]["messages"][1]["content"]
+
+
+def test_generate_bank_fails_closed_on_a_cross_chunk_repeat(tmp_path):
+    """A cross-pool repeat is fatal, never silently deduped post-validation.
+
+    The second pool re-writes the first pool's keyword strings for its own
+    products ("kw" prefix re-used); every in-pool rule passes, so only the
+    cross-chunk check can catch it — a post-validation dedupe would void the
+    first pool's already validated per-product floor guarantee.
+    """
+    first, second = _bank_bodies(per_product=14, second_prefix="kw")
+    log = []
+    generator = _generator(
+        [_batch_json(first), _batch_json(second)], log, tmp_path, max_products=8
+    )
+
+    with pytest.raises(KeywordGenerationError, match="cross-chunk repeat"):
+        generator.generate_bank(chunk_size=4)
+
+
+def test_generate_bank_rejects_a_merged_bank_over_the_band(tmp_path):
+    # Both pools are legal (64 ≤ 70), but 128 exceeds the merged ceiling at
+    # this sizing (summed target 104 + BANK_MAX_SLACK = 124): the bank band
+    # is what keeps over-delivery inside the operator's envelope.
+    first, second = _bank_bodies(per_product=17)
+    log = []
+    generator = _generator(
+        [_batch_json(first), _batch_json(second)], log, tmp_path, max_products=8
+    )
+
+    summed_target = 2 * (per_product_target(4) * 4)
+    bank_max = summed_target + BANK_MAX_SLACK
+    assert len(first) + len(second) == bank_max + 4
+    with pytest.raises(KeywordGenerationError, match="merged keyword bank"):
+        generator.generate_bank(chunk_size=4)
+
+
+def test_generate_bank_band_scales_with_a_smaller_cap(tmp_path):
+    # A deliberate smaller table gets its own band around its own summed
+    # target — the operator's 250-320 band is the default sizing, not a
+    # constant that would make every smaller run fail.
+    ranked = [p["name"] for p in select_gold_products(GOLD_PRODUCTS, limit=4)]
+    first = _keyword_rows(ranked[:2], per_product=26)
+    second = _keyword_rows(ranked[2:], per_product=26, prefix="wk")
+    log = []
+    generator = _generator(
+        [_batch_json(first), _batch_json(second)], log, tmp_path, max_products=4
+    )
+
+    bank = generator.generate_bank(chunk_size=2)
+
+    summed_target = per_product_target(2) * 2 * 2
+    assert len(bank) == 104
+    assert summed_target - BANK_MIN_SLACK <= len(bank) <= summed_target + BANK_MAX_SLACK
 
 
 def test_parse_llm_keywords_reports_salvage():

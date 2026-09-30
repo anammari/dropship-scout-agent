@@ -1,9 +1,11 @@
 """Step 5 — the keyword bank and its dual-supplier ingestion (plan §7).
 
 The bank is the Step-4 deliverable (`outputs/step-4-gold-keywords.json`,
-untracked): 50–70 gold-standard supplier search keywords, each typed with the
+untracked): gold-standard supplier search keywords, each typed with the
 gold product it came from, its pillar, its role (broad/modifier) and the
-broad term a modifier tightens.
+broad term a modifier tightens. The widened Step-4 run generates the bank in
+pool chunks (~300 keywords at the default table); the loader is size-agnostic
+— it validates structure, not a bank-size band.
 
 Step 5 ingests EVERY bank keyword through BOTH supplier pipelines — the CJ
 MCP server and the AliExpress Dropshipping Center — and exports what

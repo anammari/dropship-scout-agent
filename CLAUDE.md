@@ -53,7 +53,7 @@ official **MCP server** (StreamableHTTP) — see §5.
    cost/materials/freight reasoning.
 4. **LLM arithmetic is never trusted:** margin/markup are recomputed in code,
    and an ACCEPT whose reconciled figures miss the margin floor
-   (`MIN_MARKUP_MULTIPLIER` ≥ 2.5 OR margin > `MIN_MARGIN_AUD` 20) is
+   (`MIN_MARKUP_MULTIPLIER` ≥ 2.5 OR margin > `MIN_MARGIN_AUD` 10) is
    downgraded to REJECT.
 5. **Every supplier URL must match its supplier's direct-product-page
    shape** — search/category/gateway URLs are rejected at the schema level:
@@ -78,11 +78,13 @@ Any candidate failing two or more points is marked `REJECT`:
    against the **strict landed cost** read from the supplier record: never a
    cheaper invented basis, and never a mechanical 3x–4x multiplier on cost.
    The honest price must clear `MIN_MARKUP_MULTIPLIER` (2.5x) **or** leave
-   `MIN_MARGIN_AUD` (AUD 20) gross profit per unit; a product whose realistic
-   AU price cannot clear that floor is REJECTed on this gate rather than
-   priced up to fit (enforced twice: `_reconcile` downgrade in
+   `MIN_MARGIN_AUD` (AUD 10, widened from AUD 20 on 2026-09-29 to match the
+   operator's Step-3 $10 target — the 5-point gate prompt interpolates the
+   live config values so it cannot drift) gross profit per unit; a product
+   whose realistic AU price cannot clear that floor is REJECTed on this gate
+   rather than priced up to fit (enforced twice: `_reconcile` downgrade in
    `llm_filter.py` and `_enforce_accept_gates` in `models.py`, both reading
-   the same config keys).
+   the same config keys the prompt interpolates).
 
    The prompt tells the model **which kind of cost it is judging**, via the
    payload's `shipping_quoted` flag (`RawSupplierProduct.shipping_quoted`):
@@ -136,7 +138,7 @@ dropship-scout-agent/
 │   ├── ingest_keyword_bank.py        # Step-5 dual-supplier ingestion runner (§13.6)
 │   ├── rank_optimal_candidates.py    # Step-6 Jev ranking runner (report only, no deletion)
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
-└── tests/                   # 514 hermetic tests, zero network (14 modules + conftest)
+└── tests/                   # 535 hermetic tests, zero network (14 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -494,7 +496,7 @@ requiring a login for the MTOP calls in §6.
 | `CJ_FREIGHT_METHOD` | *(blank = cheapest)* | CJ freight quote: pin a shipping service by CJ's own name |
 | `CJ_MAX_PRODUCTS` | `10` | products expanded per CJ keyword (MCP search cap) |
 | `MIN_MARKUP_MULTIPLIER` | `2.5` | margin floor (markup leg), llm_filter + models |
-| `MIN_MARGIN_AUD` | `20.0` | margin floor (gross-profit leg), llm_filter + models |
+| `MIN_MARGIN_AUD` | `10.0` | margin floor (gross-profit leg), llm_filter + models — widened from AUD 20 on 2026-09-29 to match the operator's Step-3 $10 target |
 | `TARGET_COUNTRY` | `AU` | extraction/evaluation target; also the AliExpress ship-to market |
 | `APIFY_TOKEN` | — | Apify account token, shared by TWO actors: (1) Step-2 trend-research FALLBACK `data_xplorer/google-trends-fast-scraper` via the Apify MCP (`.mcp.json`) — used only if the HasData Google Trends MCP fails or returns an info-poor schema, $2.00/1,000 results; (2) Step-3 gold-research CORE actor (§13), $3.50/1,000 results |
 | `APIFY_GS_ACTOR` | `damilo/google-shopping-apify` | Step-3 gold-research actor id (§13) |
@@ -508,7 +510,7 @@ requiring a login for the MTOP calls in §6.
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Step-6 client base; it appends `/systemone` |
 | `JEV_MODEL` | `typesafe/jev-1.13` | Step-6 System One model id (pinned so a ranking is reproducible) |
 | `JEV_BATCH_SIZE` | `4` | Step-6 packages per System One call (three questions each; ~13-question native batch) |
-| `JEV_SHORTLIST_MIN_SCORE` | `4.0` | Step-6 tier floor: `rank_score` ≥ this → shortlist (1–5 scale) |
+| `JEV_SHORTLIST_MIN_SCORE` | `3.5` | Step-6 tier floor: `rank_score` ≥ this → shortlist (1–5 scale), widened from 4.0 on 2026-09-29 |
 | `JEV_REVIEW_MIN_SCORE` | `2.5` | Step-6 tier floor: `rank_score` ≥ this → review, else disregard |
 | `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter (general intake §9) |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads, Playwright PDP harvest |
@@ -522,7 +524,7 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 514
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 535
   tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
   Playwright/MTOP fakes + faked Apify SDK / scripted LLM transports).
 - `tests/test_keyword_bank.py` covers the Step-5 bank and its dual-supplier
@@ -629,6 +631,15 @@ only in `.env` / the real environment.
   plan's `query_sku_details` returns `[]` for catalog pids).
 - **CJ MCP rate limits:** tool calls get 429-style errors under load; the
   client retries once after a 2s backoff before surfacing `CjMcpToolError`.
+- **CJ MCP transport drops (live 2026-09-30):** the StreamableHTTP response
+  stream can die mid-call, surfacing as a `BaseException`-derived
+  `CancelledError` that escapes `except Exception` and, uncontained, killed a
+  whole bank run (first full-bank attempt, ~34 keywords in). `_call_tool`
+  converts it to `CjMcpToolError` (never retried — a dead stream cannot
+  recover in-session) and the connect handshake to `CjMcpConnectionError`, so
+  the blast radius is the current candidate/leg and the next connect opens a
+  fresh session. The subsequent full-bank run hit three such drops, all
+  contained (0 unhandled errors across ~11h).
   `CJ_MAX_PRODUCTS=10` means up to 10 detail calls per keyword, so a run
   takes minutes — that is the pacing, not a hang.
 - **Why the Apify path was retired (three failures, all costing):** an
@@ -662,6 +673,21 @@ only in `.env` / the real environment.
   `ExtractorBlockedException` (the chain moves on) rather than reporting an
   empty funnel, and a session/auth refusal raises
   `DsCenterSessionExpiredError`, which halts with re-login instructions.
+- **AliExpress PDP shell pages and the harvest retry (2026-09-30).** Ali's
+  anti-bot can serve a PDP as an HTTP-200 shell (≈19 characters of body, no
+  carousel, no `runParams`) while the DS Center's own MTOP APIs keep
+  answering — the whole 320-keyword bank run harvested 1,592 gate survivors
+  under shells, silently, until the fix. The harvest now re-loads every PDP
+  once from a fresh page after a short settle delay, keeps the better
+  gallery, and both the per-candidate drops and a per-keyword tally are
+  WARNING/INFO logged (`PDP gallery harvest for '<kw>': N candidate(s), X
+  upgraded, Y empty after retry, Z page load(s)`). Refreshing the saved
+  session did NOT change the shells (tested live: anonymous == stale file);
+  the block is per-URL selective and volume/state-driven — a same-day
+  isolated probe showed one family (coffee maker) harvesting 13-image
+  galleries while others were shelled. A decay/re-probe (or a different
+  IP) is the recovery path; the visible logging is the early-warning
+  system.
 ## 13. THE UPDATED MULTI-STEP WINNING-PRODUCT PIPELINE (branch `feature/jev-keyword-gate-multistep-pipeline`)
 
 > Appended as §13 (not renumbered into §5's position) so every existing
@@ -685,7 +711,7 @@ post-ingestion product ranking (Step 6).
 | 1 | Google Trends (HasData MCP) research | done (research, `/tmp` scratch — no repo code by design). The Apify fallback `data_xplorer/google-trends-fast-scraper` ($2.00/1,000) was not needed — HasData stayed healthy |
 | 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `outputs/step-2-search-keywords.{json,md}` (untracked) |
 | 3 | Apify Google Shopping AU scrape of the Step-2 keywords + LLM curation → gold-standard product list | done — §13.2 |
-| 4 | Reasoning LLM → 50–70 supplier keywords from the gold list | done — §13.3 |
+| 4 | Reasoning LLM → a pool-chunked supplier keyword bank (~300 keywords) from the gold list | done — §13.3 |
 | 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | done — §13.6 |
 | 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | done — §13.7 |
 | 7–8 | Human-only: DSers/Zendrop manual supplier search; store curation | no code (deliberately) |
@@ -755,15 +781,25 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
 ```bash
 source .venv/bin/activate && python scripts/generate_gold_keywords.py \
     [--gold-products outputs/step-3-gold-standard-products.json] \
-    [--batch-size 4] [--max-products 12] \
+    [--batch-size 4] [--max-products 150] [--chunk-size 30] \
     [--output outputs/step-4-gold-keywords.json] [--markdown …]
 ```
 
-Turns the Step-3 gold list into the **50–70 supplier search keywords** Step 5
+Turns the Step-3 gold list into the **supplier search keyword bank** Step 5
 ingests, typed as `CandidateKeyword(keyword, product, pillar, role, tightens,
 rationale)` with `role ∈ {broad, modifier}` and
 `pillar ∈ {curated_home, self_care_rituals, other}` (`"other"` was added to
-the Literal for this step).
+the Literal for this step). The bank is generated **in pool chunks** (the
+operator's widening, 2026-09-29): the table is capped at
+`DEFAULT_MAX_PRODUCTS = 150` eligible products and sliced into
+`DEFAULT_CHUNK_SIZE = 30`-product pools, each generating ONE pool validated
+under the same rules a single-pool run always had, and the merged bank must
+sit inside its **bank band** — `[summed target − 50, summed target + 20]`,
+i.e. **250–320 keywords at the default sizing** (5 chunks × 60). The old
+uncapped-single-pool design (one 30-product table, one 50–70 pool, 60
+keywords) was the funnel's biggest bottleneck; the fixes doc's
+chunk-all-263 / ~500+-keyword version was superseded by this operator
+sizing, which keeps the widened Step-5 ingestion near ~10–11h instead of 18h+.
 
 - **Prompt** (`src/keywords/gold_keyword_prompt.md`): carries **no
   products**. Its product table is a literal `{PRODUCT_TABLE}` slot, filled
@@ -775,13 +811,17 @@ the Literal for this step).
   `validate_pool` re-checks every rule the prompt states: required fields
   (`FIELDS`), pillar and role membership, dangling/self `tightens`,
   broad-carries-`tightens`, the AICIS banned-token boundary, duplicates, the
-  50–70 band, unknown/unmentioned `product`, and the per-product floor. A
-  failing pool raises `KeywordGenerationError` and **writes nothing** —
-  same fail-closed posture as §2.
+  pool band (50–70 per chunk; the bank band on the merged set), and
+  unknown/unmentioned `product`. A failing pool raises
+  `KeywordGenerationError` and **writes nothing** — same fail-closed posture
+  as §2. The merged pass gives cross-chunk duplicate strings to the same
+  fatal duplicate rule: **a repeat across chunks is FAIL-CLOSED, never
+  silently deduped post-validation** — removing a keyword after a chunk's
+  own validation could void that chunk's per-product floor guarantee.
 - **Selection is bounded, type-diverse and deterministic.** The live Step-3
   deliverable has **263** products, while the plan's per-product target math
   assumed 8–20. `select_gold_products` therefore caps the table at
-  `DEFAULT_MAX_PRODUCTS = 30` (`--max-products`), ranked by demand
+  `DEFAULT_MAX_PRODUCTS = 150` (`--max-products`), ranked by demand
   (`-reviews, -rating, name`), collapsed to the strongest row per duplicate
   name, **collapsed to the strongest row per Step-2 `source_keyword`**, then
   **round-robined across `PILLARS`** so a capped table still covers every
@@ -800,12 +840,17 @@ the Literal for this step).
   (the live rerun selected 30 distinct types). A row with no source keyword
   falls back to its own name as the group key.
 
-  **30 is not arbitrary either:** the validator requires every table product
-  to be named inside a 50–70 pool at ≥ `default_per_product_min`, so 35
-  products is the band's hard ceiling (2 each = 70 exactly) and 30 keeps
-  headroom (60 of 70). Widening from the original 12 spreads the band across
-  more of the researched demand at no extra Step-5 ingestion cost.
+  **Why a cap at all (superseded design note kept for history):** the
+  original single-pool design capped at 30 because one 50–70 pool can
+  hard-cover at most 35 products (2 each = 70 exactly). The widening lifts
+  the table to 150, but any *single pool* is still bounded by that ceiling —
+  which is exactly what chunking preserves: each chunk faces the same
+  satisfiable target math.
 - **Boundary names are excluded from the table.** `carries_banned_token`
+  drops a gold product whose own *name* carries a banned AICIS token (7 of
+  263 measured: jade 4, quartz 2, salt 1 — gua sha tools and a salt product),
+  because its honest keyword could never clear the pool validator. They
+  remain in the Step-3 deliverable.
   drops a gold product whose own *name* carries a banned AICIS token (7 of
   263 measured: jade 4, quartz 2, salt 1 — gua sha tools and a salt product),
   because its honest keyword could never clear the pool validator. They
@@ -814,37 +859,45 @@ the Literal for this step).
   `per_product_target(n) = min(9, ceil(60/n), 70 // n)`, raised to
   `ceil(50/n)` only when that lift still fits under 70, and never below
   `default_per_product_min(n) = max(2, 50 // n - 1)`. The `70 // n` term is
-  what makes a 30-product table work at all: the plan's `[3, 9]` clamp asks
+  what makes a 30-product chunk work at all: the plan's `[3, 9]` clamp asks
   90 keywords there, past the ceiling. At 30 → **2 per product (60 total)**;
-  at 35 → 2 (70, the ceiling). One size has no uniform target: 24 products
-  (2 each = 48, 3 each = 72) — the target takes the floor there, and only
-  `--max-products` can reach it. 36+ is infeasible; the cap of 30 sits well
-  inside that.
-- **Uniqueness is enforced at both ends — in the prompt and in code.**
-  `validate_pool` treats a duplicate keyword string as fatal (Step 5 runs
-  each once), and each batch call is independent, so the model cannot infer
-  what a previous batch wrote. `generate()` therefore accumulates every
-  keyword emitted so far and `_assemble_user_message` appends them to later
-  calls as an explicit do-not-repeat list (requirement 2 says the list is
-  there). Without it the rule is unsatisfiable across batches, which is how
-  the second cap-30 run failed: three shared head terms were written by two
-  products each, and dedupe left three products with 1 of their 2 keywords.
+  at 35 → 2 (70, the ceiling). 36+ is infeasible for a single pool — which
+  is why the widened table exists only as chunks. 24 products is the one
+  unsatisfiable chunk size (2 each = 48, 3 each = 72);
+  `chunk_sizes()` never produces one — a tailing 24-chunk borrows one
+  product from the previous chunk (29+25), and a chunk size whose target
+  cannot reach 50 (e.g. `--chunk-size 45`) fails the plan before any
+  LLM call spends.
+- **Uniqueness is enforced at three levels — in the prompt, within a
+  pool, and across pools.** `validate_pool` treats a duplicate keyword
+  string as fatal (Step 5 runs each once), and each batch call is
+  independent, so the model cannot infer what a previous batch wrote.
+  `_generate_pool` accumulates every keyword emitted so far and
+  `_assemble_user_message` appends them to later calls as an explicit
+  do-not-repeat list (requirement 2 says the list is there) — seeded from
+  `generate_bank` with every earlier chunk's claims, so the list spans the
+  whole bank. In-pool repeats are still the neediest-first `dedupe_keywords`
+  salvage; **cross-chunk repeats are fatal**, caught before the merge
+  (requirement 2's unsatisfiable-without-the-list history — the second
+  cap-30 run's three shared head terms — is why the list exists).
 - **Pacing:** batches of `DEFAULT_BATCH_SIZE = 4` products per LLM call,
   `MAX_TOKENS = 16000`. The configured reasoning model shares that budget
   between its chain-of-thought and the visible content, so an oversize batch
   returns empty content with `finish_reason="length"`. `parse_llm_keywords`
   salvages a truncated fenced-JSON tail and the empty-content error names the
   finish reason. `dedupe_keywords` then collapses any repeated keyword still
-  written (logging a WARNING) before `validate_pool`, awarding a contested
-  string to the product with the fewest keywords of its own rather than to
-  the batch that answered first — first-wins always starves the later
+  written (logging a WARNING) before the pool `validate_pool`, awarding a
+  contested string to the product with the fewest keywords of its own rather
+  than to the batch that answered first — first-wins always starves the later
   batches. `validate_pool`'s duplicate check stays as the guard for
-  directly-called or hand-merged pools.
+  directly-called or hand-merged pools (and is what makes a cross-chunk
+  repeat fatal on the merged pass).
 - **Deliverable**: `outputs/step-4-gold-keywords.json` (+ `.md` digest,
-  modifiers nested under their broad term) — Step 5's keyword bank. The
-  runner prints the gold-product count, per-product target and batch size
-  before the first call, and exits non-zero on `KeywordGenerationError`
-  having written nothing.
+  modifiers nested under their broad term) — Step 5's keyword bank; the
+  payload records the chunk sizes it was generated from. The runner prints
+  the bank plan (chunk sizes, per-chunk target, summed target, bank band and
+  the LLM-call estimate) before the first call, and exits non-zero on
+  `KeywordGenerationError` having written nothing.
 
 ### 13.4 Step-3 live evidence (2026-09-28)
 
@@ -867,6 +920,18 @@ the Literal for this step).
   is covered by hermetic tests.
 - The full 40-keyword production run (~$5.60 envelope, under the free-tier
   remainder) is deliberately **deferred until the operator's go**.
+
+**Widened-bank live run (2026-09-29, branch `fix/gold-funnel-bottlenecks`, operator's
+go):** the regenerated deliverable holds **320 unique keywords across 40 gold
+products** — the table is capped at 40 because the one-per-source-keyword
+collapse leaves exactly 40 distinct type groups in the whole 263-row
+deliverable (rows w/o `source_keyword`: 0; banned-name rows: 7), so
+`DEFAULT_MAX_PRODUCTS=150` selects all of them. The operator chose
+`--chunk-size 8` (5 pools × 8 products × 8 keywords/product, summed target
+320) to keep the bank inside his 250–320 intent; the merged pass validated
+against its auto-scaled band **[270, 340]** with zero cross-chunk repeats.
+~12 reasoning-LLM calls, zero Apify spend, written as
+`outputs/step-4-gold-keywords.{json,md}` (roles 159 broad / 161 modifier).
 
 **Production run (same day, operator's go):** all 40 Step-2 keywords, run
 `rP09Pk3x0nkqlSuLB`, actor usage **$4.06** (1,567 rows ≈ $0.0026/result —
@@ -1037,6 +1102,23 @@ described above; `candidates_exported` was never affected, since it comes from
 `summary.exports`, and all 33 exports in the summary were verified against the
 `Exported` log lines.
 
+**Full 320-keyword widened run (2026-09-29 → 09-30, branch, operator's go,
+exit 0).** First attempt aborted ~1.2h in (34 keywords) on an uncontained CJ
+transport drop — the `CancelledError` containment above is the fix; the
+restart finished in ~11h20m: `[STEP 5 COMPLETE]`, 639 legs (319 CJ run +
+320 Ali, 1 failed leg), TOTAL `scraped=1061 evaluated=1048 accepted=391
+rejected=657 exported=82` — **100 CJ packages on disk** (82 new + the 18
+carried over from the crashed attempt, numbering continuous, zero
+overwrites; the contract audit on all 100 is clean: 13 keys, freight-itemised
+bases, no duplicate URLs, ≥3 images each). The margin-floor widening is
+visible in the funnel (an ACCEPT at AUD 15.47 / 1.39x that the old AUD 20
+arm auto-rejected). AliExpress contributed **0 exports**: every leg answered
+~21 search hits, but the anti-bot harvested shells (see §12's AliExpress
+note) — `scraped=6 evaluated=6 accepted=1` and the `aliexpress/` subfolder
+never created, as it is written only on its first export. The operator
+cleared the 38 PR#3-run packages before this run; the general-intake
+`dropship-candidates/` tree was untouched.
+
 ### 13.7 Step 6 — Jev product ranking (implemented)
 
 ```bash
@@ -1078,7 +1160,9 @@ collide in one state; and it never contains `__`, which the question-id
 `<slug>__<question>` scheme reserves.
 
 **Scoring and tiers.** `rank_score = 0.6·similarity + 0.4·value` on a 1–5 scale;
-`≥ JEV_SHORTLIST_MIN_SCORE` (4.0) → `shortlist`, `≥ JEV_REVIEW_MIN_SCORE` (2.5)
+`≥ JEV_SHORTLIST_MIN_SCORE` (3.5, widened from 4.0 on 2026-09-29 — the old
+floor needed near-perfect similarity and left the viable review band
+unharvested) → `shortlist`, `≥ JEV_REVIEW_MIN_SCORE` (2.5)
 → `review`, else `disregard`. A package whose answer keys are missing lands as
 `disregard` with a note; a `discard` pillar adds its own note without moving the
 tier. The weights and thresholds live in `jev_client.py` (`SIMILARITY_LEVELS`,
@@ -1086,14 +1170,29 @@ tier. The weights and thresholds live in `jev_client.py` (`SIMILARITY_LEVELS`,
 `REVIEW_MIN_SCORE`) — "judgement in one place", per the vendor's review
 principle.
 
+**Post-evaluation compliance gate (override, not a suggestion).** After the
+scores land, the ranker scans each package's human text — `product_title`,
+`marketing_ad_copy` and `features` (metadata.json has no description field,
+so the marketing payload is the description role) — against
+`COMPLIANCE_BANNED_TOKENS`: the keyword engine's own `BANNED_TOKENS` tuple
+(one source of truth, the AICIS boundary) plus `electric`, `usb`,
+`rechargeable`. A match forces the tier to `disregard` with an explicit
+`compliance gate: banned token '<tok>' matched in <field>` note, no matter
+the score, so contraband (mineral/stone tools like jade and quartz,
+cosmetics/consumables, battery-powered devices) never reaches shortlist or
+review. The scan is case-insensitive substring matching — the same semantics
+as every other banned-token check in the repo — so an innocent word holding
+a token (e.g. copy that explains "soak the knife in oil") is caught too; the
+note names the token and field so Step 7 can see exactly why.
+
 **Jev's raw `score` is 0-BASED, and the client shifts it onto 1–5.** The plan
 (§8.0) assumed a 1-indexed position; the live probe (2026-09-29) returned
 `score = 3.24` against a 5-entry criteria list whose `legend` keys were
 `"0".."4"` — i.e. the position is zero-based and may fall between levels.
 `jev_client.answer_score` therefore adds `JEV_SCORE_INDEX_SHIFT = 1.0` so 0 maps
-to 1.0 and 4 maps to 5.0, keeping the plan's config defaults verbatim
-(4.0/2.5) meaningful on the intended 1–5 scale: with the shift, a shortlist
-score means "close match or better". The finding is recorded in the
+to 1.0 and 4 maps to 5.0, keeping the config defaults (3.5/2.5 since the
+2026-09-29 shortlist widening) meaningful on the intended 1–5 scale: with the
+shift, a shortlist score means "close match or better". The finding is recorded in the
 `jev_client.py` docstring and in §12.
 
 **A failed call retries once, and only that batch degrades.** `_decide_with_retry`
@@ -1129,3 +1228,16 @@ presses (`aliexpress/product-09`, 4.41; `aliexpress/product-08`, 4.30;
 gold list is built on, which is the signal the similarity axis works. The
 deliverables were written to `outputs/step-6-ranked-candidates.{json,md}` and
 confirmed gitignored (`.gitignore:31` = `outputs/`).
+
+**Step-6 live re-rank (2026-09-30, branch, operator's go, exit 0):** the 100
+CJ packages of the 320-keyword widened run against the 263 gold products in
+**25 System One calls** of 4 packages each — **0 failed batches, ~65s wall
+clock**. Result at the widened floors: **shortlist 13, review 17, disregard
+70** (16.1% shortlist rate on a 2.6x wider cohort vs the old run's 12 of 38).
+The shortlist leads with self-care face tools (ice rollers, gua sha boards)
+and curated-home kitchen items (garlic press, tea-infuser glassware). The
+report does not itemize OpenRouter billing; the 25-call spend is ~$0.02 at
+the vendor's published input rate. With the compliance gate live the re-run
+demoted **43 of 100** packages to `disregard` (16 of them out of
+shortlist/review — including the then-#2 `jade` gua sha board), landing
+**shortlist 9, review 4, disregard 87**.

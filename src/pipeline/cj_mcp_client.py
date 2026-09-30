@@ -1089,6 +1089,15 @@ class CjMcpClient:
         except CjMcpError:
             await stack.aclose()
             raise
+        except asyncio.CancelledError as exc:
+            # Same transport-drop containment as in _call_tool: a
+            # BaseException-derived CancelledError would otherwise escape
+            # the chain's taxonomy (observed live 2026-09-29).
+            await stack.aclose()
+            raise CjMcpConnectionError(
+                f"CJ MCP session against {self.redacted_endpoint} was "
+                f"cancelled mid-handshake: {exc}"
+            ) from exc
         except Exception as exc:
             await stack.aclose()
             raise CjMcpConnectionError(
@@ -1235,6 +1244,19 @@ class CjMcpClient:
         for attempt in range(2):
             try:
                 result = await session.call_tool(name, arguments=payload)
+            except asyncio.CancelledError as exc:
+                # The StreamableHTTP response stream died mid-call (server
+                # closed the SSE stream or the network dropped): a
+                # CancelledError is BaseException-derived, so the generic
+                # catch below never sees it, and uncontained it would kill
+                # the whole bank run (observed live 2026-09-29). Convert it
+                # onto the taxonomy instead — the current leg drops or
+                # skips, and the next connect opens a fresh session. Never
+                # retried: the dead stream cannot recover in this session.
+                raise CjMcpToolError(
+                    f"CJ MCP transport dropped mid-call for tool {name!r}: "
+                    f"{exc}"
+                ) from exc
             except Exception as exc:
                 last_error = str(exc)
                 if attempt == 0 and self._is_rate_limited(last_error):

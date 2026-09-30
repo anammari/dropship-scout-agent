@@ -1,10 +1,22 @@
 """Step 4 (updated multi-step pipeline): GOLD-STANDARD keyword generation.
 
-The reasoning LLM turns the Step-3 GOLD-STANDARD product list into the 50–70
+The reasoning LLM turns the Step-3 GOLD-STANDARD product list into the
 supplier search keywords — the "gold-standard keyword bank" — that Step 5
 ingests through BOTH dropship supplier pipelines (CJdropshipping MCP and the
 AliExpress Dropshipping Center, each with its existing gates) and that Step 6
 later ranks the ingested products against.
+
+The bank is generated in **pool chunks**: the eligibility filters leave far
+more products than any one 50–70 pool can name, so the strongest
+`DEFAULT_MAX_PRODUCTS` (150) eligible products form the table and each
+`DEFAULT_CHUNK_SIZE` (30) of them generates ONE pool validated under the same
+rules a single-pool run has always had (the 50–70 band, the per-product
+floor, uniqueness). The merged bank — `generate_bank()` — must then sit
+inside the merged band derived from the chunks' summed target (250–320 at
+the operator's default sizing). Within a chunk a repeated keyword is still
+the neediest-first in-pool dedupe; **across chunks a repeat is fatal** — a
+post-validation silent dedupe would void the already-validated chunk's
+per-product floor guarantee.
 
 The prompt is a tracked package resource (`gold_keyword_prompt.md`) whose
 product table is a **template slot**: `{PRODUCT_TABLE}` is rendered at runtime
@@ -20,7 +32,7 @@ losing the batch or spending another call.
 
 Anti-hallucination posture: the LLM only authors keyword rows against the
 product table it was handed, and every structural rule — broad/modifier
-pairing, pillar membership, the AICIS banned-token boundary, the 50–70 band,
+pairing, pillar membership, the AICIS banned-token boundary, the pool band,
 per-product coverage — is re-validated in code after the call. A pool that
 fails any rule raises `KeywordGenerationError` instead of flowing on to
 Step 5.
@@ -49,17 +61,26 @@ PROMPT_PATH = Path(__file__).parent / "gold_keyword_prompt.md"
 MIN_KEYWORDS = 50
 MAX_KEYWORDS = 70
 DEFAULT_BATCH_SIZE = 4
-#: The plan's Step-3 deliverable targets 8–20 products (§5.4), sized so the
-#: 50–70 pool can cover every product at ≥3 each. The production Step-3 run
-#: curated 263, which no 50–70 pool can cover, so the generator keeps the
-#: strongest `max_products` of them (demand-ranked, pillar-balanced, deduped
-#: by name) and reports the selection. The Step-3 deliverable itself is
-#: untouched — it stays the full research record. 30 keeps the band's
-#: headroom: at the 2-keyword floor this set needs 60 of the 70 allowed,
-#: leaving 10 keywords of pool slack. The band hard-caps the set at 35
-#: products (2 each = 70 exactly); beyond that no pool could name every
-#: product and still fit.
-DEFAULT_MAX_PRODUCTS = 30
+#: The eligible products (banned-token names dropped, one strongest row per
+#: Step-2 source keyword) far exceed what any one 50–70 pool can name, so the
+#: bank is generated in chunks: the strongest `max_products` eligible
+#: products form the table (demand-ranked, pillar-balanced) and each chunk
+#: generates ONE validated pool under the same band/floor rules a single
+#: pool has always had. The Step-3 deliverable itself is untouched — it stays
+#: the full research record. 150 is the operator's sizing for the widened run
+#: (2026-09-29): 5 pools of 30 at the 2-keyword floor ≈ 300 keywords and a
+#: ~10–11h Step-5 ingestion, instead of uncapped chunking of all 263
+#: deliverable rows (~500+ keywords, an 18h+ run).
+DEFAULT_MAX_PRODUCTS = 150
+#: Products per pool chunk of a chunked bank.
+DEFAULT_CHUNK_SIZE = 30
+#: The operator's merged band for the widened bank (2026-09-29), expressed as
+#: slack around the chunks' summed target: at the default table (5 chunks of
+#: 30, target 2 per product, summed target 300) the merged bank must sit in
+#: [target-50, target+20] = 250–320; a custom `--max-products` scales the
+#: band with its own summed target so a smaller deliberate run stays valid.
+BANK_MIN_SLACK = 50
+BANK_MAX_SLACK = 20
 #: The pool size the adaptive per-product target aims at.
 TARGET_TOTAL = 60
 PER_PRODUCT_MIN_FLOOR = 2
@@ -349,11 +370,9 @@ def per_product_target(product_count: int) -> int:
     itself still fits under the 70 ceiling — so the instruction the LLM is
     given is one the code accepts.
 
-    One set size has no uniform target inside the band: 24 products (2 each =
-    48, short of 50; 3 each = 72, past 70). There the target takes the floor —
-    2 each, two short of the band — and only the debugging `--max-products`
-    flag can reach that size, since the Step-3 production run leaves far more
-    than `DEFAULT_MAX_PRODUCTS` candidates to choose from.
+    One set size inside the band has no uniform target: 24 products (2 each
+    = 48, short of 50; 3 each = 72, past 70) is unsatisfiable, and
+    `chunk_sizes` never produces a chunk of that size.
     """
     if product_count <= 0:
         return 0
@@ -376,6 +395,46 @@ def default_per_product_min(product_count: int) -> int:
     if product_count <= 0:
         return PER_PRODUCT_MIN_FLOOR
     return max(PER_PRODUCT_MIN_FLOOR, MIN_KEYWORDS // product_count - 1)
+
+
+def chunk_sizes(total: int, chunk_size: int) -> List[int]:
+    """Deterministic pool sizes summing to `total`, never an unsatisfiable one.
+
+    Every produced chunk must be able to reach the 50-keyword band at its
+    adaptive target, and exactly one size cannot: 24 products (2 each = 48
+    short of 50; 3 each = 72 past 70). When uniform slicing would end in a
+    24-product chunk, one product is stolen from the previous chunk (29+25) so
+    both satisfy the band. A table that leaves a lone unsatisfiable chunk
+    (e.g. `--max-products 24` with the default chunk size, or a chunk size
+    like 5 whose 9-keyword target cannot reach 50) fails the run here with
+    the remediation, before any LLM call spends.
+    """
+    if total <= 0:
+        raise KeywordGenerationError(
+            f"cannot chunk an empty gold table ({total} products)"
+        )
+    if chunk_size <= 0:
+        chunk_size = total
+    if total <= chunk_size:
+        sizes = [total]
+    else:
+        remainder = total % chunk_size
+        sizes = [chunk_size] * (total // chunk_size)
+        if remainder:
+            sizes.append(remainder)
+        if remainder == 24:
+            sizes[-2] -= 1
+            sizes[-1] += 1
+    for size in sizes:
+        target = per_product_target(size)
+        if target * size < MIN_KEYWORDS:
+            raise KeywordGenerationError(
+                f"chunk size {size} cannot satisfy the {MIN_KEYWORDS}-"
+                f"{MAX_KEYWORDS} band (target {target} keywords per product "
+                f"gives {target * size}); pass a different --chunk-size or "
+                "--max-products"
+            )
+    return sizes
 
 
 def _direct_candidates(text: str) -> List[str]:
@@ -657,11 +716,16 @@ class KeywordGenerator:
         return content, finish_reason
 
     def _assemble_user_message(
-        self, chunk: List[str], taken: Sequence[str] = ()
+        self,
+        chunk: List[str],
+        taken: Sequence[str] = (),
+        pool_products: Optional[Sequence[str]] = None,
+        target: Optional[int] = None,
     ) -> str:
+        pool_products = self.products if pool_products is None else pool_products
+        target = self.per_product_target if target is None else target
         count = len(chunk)
-        total = len(self.products)
-        target = self.per_product_target
+        total = len(pool_products)
         note = (
             f"\n\n**This call covers only the {count} products in the table "
             f"above**: produce **{target} keywords per product** "
@@ -690,21 +754,32 @@ class KeywordGenerator:
         body = self.prompt.user_template.replace("{PRODUCT_TABLE}", table + note)
         return f"{body}\n\n{self.prompt.requirements}"
 
-    def generate(self) -> List[CandidateKeyword]:
-        """Generate and validate the full keyword bank (plan Step 4).
+    def _generate_pool(
+        self,
+        table_lines: List[str],
+        pool_products: Sequence[str],
+        target: Optional[int] = None,
+        already_taken: Sequence[str] = (),
+    ) -> List[dict]:
+        """Generate, dedupe and validate ONE pool over a slice of the table.
 
-        Batches the gold product table through the reasoning LLM, merges the
-        batch responses (salvaging any truncated one), validates the merged
-        pool structurally, and returns the typed candidates. Raises
-        `KeywordGenerationError` when a batch fails or the pool breaks any
-        structural rule.
+        The pool covers `pool_products` (its own 50–70 band and per-product
+        floor) even when it sits inside a larger bank. `already_taken` seeds
+        the do-not-repeat note, so a pool generated inside `generate_bank`
+        knows what every earlier pool claimed. Returns the pool's raw rows;
+        raises `KeywordGenerationError` when a batch fails or the pool breaks
+        any structural rule.
         """
+        pool_target = self.per_product_target if target is None else target
+        pool_names = [str(p) for p in pool_products]
         rows: List[dict] = []
-        taken: List[str] = []
-        for start in range(0, len(self.table_lines), self.batch_size):
-            chunk = self.table_lines[start : start + self.batch_size]
+        taken: List[str] = list(dict.fromkeys(str(k) for k in already_taken))
+        for start in range(0, len(table_lines), self.batch_size):
+            chunk = table_lines[start : start + self.batch_size]
             number = start // self.batch_size + 1
-            user_message = self._assemble_user_message(chunk, taken)
+            user_message = self._assemble_user_message(
+                chunk, taken, pool_names, pool_target
+            )
             content, finish_reason = self._call_llm(user_message)
             if finish_reason == "length":
                 logger.warning(
@@ -739,7 +814,7 @@ class KeywordGenerator:
                 dropped,
             )
         problems = validate_pool(
-            rows, self.products, per_product_min=self.min_per_product
+            rows, pool_names, per_product_min=self.min_per_product
         )
         if problems:
             for problem in problems:
@@ -750,11 +825,113 @@ class KeywordGenerator:
         logger.info(
             "keyword pool accepted: %d keywords across %d gold products",
             len(rows),
-            len(self.products),
+            len(pool_names),
         )
+        return rows
+
+    @staticmethod
+    def _typed(rows: List[dict]) -> List[CandidateKeyword]:
         try:
             return [CandidateKeyword(**row) for row in rows]
         except ValidationError as exc:
             raise KeywordGenerationError(
                 f"keyword rows failed schema coercion: {exc}"
             ) from exc
+
+    def generate(self) -> List[CandidateKeyword]:
+        """Generate and validated ONE pool over the whole table (single-pool run).
+
+        See `generate_bank` for the widened chunked run: the default table is
+        now far larger than one 50–70 pool can name, so the bank runs in
+        pool chunks. This method keeps the original whole-table-in-one-pool
+        semantics for a capped table and the hermetic tests. Raises
+        `KeywordGenerationError` when a batch fails or the pool breaks any
+        structural rule.
+        """
+        rows = self._generate_pool(
+            self.table_lines, self.products, self.per_product_target
+        )
+        return self._typed(rows)
+
+    def generate_bank(
+        self, chunk_size: int = DEFAULT_CHUNK_SIZE
+    ) -> List[CandidateKeyword]:
+        """Generate the widened chunked bank (plan Step 4).
+
+        Slices the table into pool chunks (one validated pool per chunk, the
+        same rules a `generate()` run has), merges them in chunk order, and
+        validates the merged bank: every product of the whole table still
+        covered at the 2-keyword floor, and the bank inside its band around
+        the chunks' summed target (250–320 at the default 150-product table).
+        Cross-chunk duplicate keywords are fatal BEFORE the merge — the
+        in-pool dedupe cannot rescue a repeat across pools without voiding
+        the earlier pool's validated per-product floor.
+        """
+        sizes = chunk_sizes(len(self.table_lines), chunk_size)
+        summed_target = sum(per_product_target(size) * size for size in sizes)
+        bank_min = summed_target - BANK_MIN_SLACK
+        bank_max = summed_target + BANK_MAX_SLACK
+        total_chunks = len(sizes)
+        logger.info(
+            "bank plan: %d pool chunk(s), sizes %s, pool targets %s, "
+            "summed target %d, band %d-%d",
+            total_chunks,
+            sizes,
+            [per_product_target(size) * size for size in sizes],
+            summed_target,
+            bank_min,
+            bank_max,
+        )
+        merged: List[dict] = []
+        taken: List[str] = []
+        offset = 0
+        for number, size in enumerate(sizes, 1):
+            pool_lines = self.table_lines[offset : offset + size]
+            pool_products = self.products[offset : offset + size]
+            pool_target = per_product_target(size)
+            logger.info(
+                "bank chunk %d/%d: %d products (target %d keywords per product)",
+                number,
+                total_chunks,
+                size,
+                pool_target,
+            )
+            rows = self._generate_pool(pool_lines, pool_products, pool_target, taken)
+            repeats = sorted(
+                {str(row.get("keyword")) for row in rows}
+                & {str(row.get("keyword")) for row in merged}
+            )
+            if repeats:
+                raise KeywordGenerationError(
+                    "cross-chunk repeat despite the do-not-repeat list: the "
+                    f"model re-wrote {repeats}; re-run — a post-validation "
+                    "dedupe would void the earlier chunk's per-product floor"
+                )
+            merged.extend(rows)
+            taken = list(
+                dict.fromkeys(taken + [str(row.get("keyword")) for row in rows])
+            )
+            offset += size
+        problems = validate_pool(
+            merged,
+            self.products,
+            min_keywords=bank_min,
+            max_keywords=bank_max,
+            per_product_min=PER_PRODUCT_MIN_FLOOR,
+        )
+        if problems:
+            for problem in problems:
+                logger.error("keyword bank rejected: %s", problem)
+            raise KeywordGenerationError(
+                "merged keyword bank failed validation:\n- " + "\n- ".join(problems)
+            )
+        logger.info(
+            "keyword bank accepted: %d keywords across %d gold products "
+            "(summed target %d, band %d-%d)",
+            len(merged),
+            len(self.products),
+            summed_target,
+            bank_min,
+            bank_max,
+        )
+        return self._typed(merged)

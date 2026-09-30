@@ -243,12 +243,15 @@ class Settings:
         # Tier boundaries on `rank_score` (0.6*similarity + 0.4*value). Jev
         # reports a score POSITION along an ordered level list; the ranker
         # shifts Jev's 0-based position onto a 1-5 scale (§8.0 semantics), so
-        # both floors read on 1-5: >= 4.0 -> shortlist, >= 2.5 -> review,
-        # else disregard. The two score questions and the choice question live
-        # in `src/ranking/jev_client.py`, so all judgement edits are in one
+        # both floors read on 1-5: >= 3.5 -> shortlist, >= 2.5 -> review,
+        # else disregard. The shortlist floor was widened from 4.0 with the
+        # operator's 2026-09-29 calibration (the old 4.0 needed near-perfect
+        # similarity and left the viable review band unharvested). The two
+        # score questions and the choice question live in
+        # `src/ranking/jev_client.py`, so all judgement edits are in one
         # place.
         self.JEV_SHORTLIST_MIN_SCORE: float = _parse_float(
-            os.getenv("JEV_SHORTLIST_MIN_SCORE"), default=4.0
+            os.getenv("JEV_SHORTLIST_MIN_SCORE"), default=3.5
         )
         self.JEV_REVIEW_MIN_SCORE: float = _parse_float(
             os.getenv("JEV_REVIEW_MIN_SCORE"), default=2.5
@@ -261,12 +264,14 @@ class Settings:
         # 3.0x / AUD 25 so realistic premium AU pricing survives (a real DS
         # Center cost is far higher than the welcome-deal prices the retired
         # Apify path reported, so a blind 3x on true cost over-prices the
-        # store).
+        # store); the margin leg was widened again to AUD 10 on 2026-09-29 to
+        # match the operator's Step-3 $10 target, which the old AUD 20
+        # silently overrode.
         self.MIN_MARKUP_MULTIPLIER: float = _parse_float(
             os.getenv("MIN_MARKUP_MULTIPLIER"), default=2.5
         )
         self.MIN_MARGIN_AUD: float = _parse_float(
-            os.getenv("MIN_MARGIN_AUD"), default=20.0
+            os.getenv("MIN_MARGIN_AUD"), default=10.0
         )
 
     @staticmethod

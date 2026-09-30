@@ -11,6 +11,7 @@ from typing import List
 
 import pytest
 
+from src.config import settings
 from src.evaluators.llm_filter import (
     LLMConfigError,
     LLMEvaluationFilter,
@@ -111,6 +112,20 @@ def test_system_prompt_demands_margin_floor_and_forbids_urls():
     assert "REJECT" in system
 
 
+def test_system_prompt_interpolates_the_live_margin_floor(monkeypatch):
+    # The gate-2 numbers are interpolated from settings, so the prompt cannot
+    # drift from what _reconcile and the model validator enforce.
+    system = build_messages(_raw_product())[0]["content"]
+    assert f"AUD ${settings.MIN_MARGIN_AUD:g} gross profit" in system
+    assert f"{settings.MIN_MARKUP_MULTIPLIER:g}x the landed cost" in system
+    monkeypatch.setattr(settings, "MIN_MARGIN_AUD", 12.5)
+    monkeypatch.setattr(settings, "MIN_MARKUP_MULTIPLIER", 3.0)
+    system = build_messages(_raw_product())[0]["content"]
+    assert "3x the landed cost" in system
+    assert "AUD $12.5 gross profit" in system
+    assert "AUD $20" not in system
+
+
 def test_system_prompt_prices_realistically_instead_of_by_multiplier():
     # Phase 5: the model must price for the AU market in the store's niche and
     # must not mechanically apply a fixed 3x-4x multiplier to the real cost.
@@ -146,19 +161,28 @@ def test_payload_carries_the_shipping_quote_state():
 
 def test_reconcile_keeps_an_accept_clearing_the_margin_floor():
     raw = _raw_product()  # landed COGS 16.80
-    provisional = _provisional(suggested_retail_aud=49.99)  # markup ~2.98x... wait
+    provisional = _provisional(suggested_retail_aud=49.99)  # markup ~2.98x
     result = _reconcile(provisional, raw)
-    # 49.99 - 16.80 = 33.19 > 25 — passes on the margin alternative.
+    # 49.99 - 16.80 = 33.19 — clears the (widened) margin arm as well.
     assert result.verdict == "ACCEPT"
 
 
 def test_reconcile_keeps_a_realistic_price_under_the_relaxed_floor():
     # A real DS Center cost basis (COGS 4.00) priced at a realistic AU retail
-    # of 11.00 is 2.75x — below the original 3.0x arm and under the AUD 25
-    # margin arm, so the OLD floor would have downgraded it. The relaxed floor
-    # (2.5x / AUD 20) is what lets realistic premium pricing survive.
+    # of 11.00 is 2.75x — below the original 3.0x arm, so the OLD floors
+    # (3.0x / AUD 25 or AUD 20) would have downgraded it. The widened floor
+    # (2.5x / AUD 10) is what lets realistic premium pricing survive.
     raw = _raw_product(price_aud=4.00, shipping_cost_aud=0.0)
     result = _reconcile(_provisional(suggested_retail_aud=11.00), raw)
+    assert result.verdict == "ACCEPT"
+
+
+def test_reconcile_survives_on_the_widened_margin_below_the_markup_arm():
+    # Widened to AUD 10 on 2026-09-29: 27.00 vs COGS 16.80 is 1.61x (fails
+    # the markup arm) with AUD 10.20 margin — above the wide floor, where
+    # the old AUD 20 arm would have downgraded it.
+    raw = _raw_product()
+    result = _reconcile(_provisional(suggested_retail_aud=27.00), raw)
     assert result.verdict == "ACCEPT"
 
 

@@ -35,7 +35,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence
 
 from src.config import settings
-from src.keywords.generator import KeywordGenerationError, load_gold_products
+from src.keywords.generator import (
+    BANNED_TOKENS,
+    KeywordGenerationError,
+    load_gold_products,
+)
 from src.ranking.jev_client import (
     QUESTIONS,
     JevClient,
@@ -82,6 +86,44 @@ PRODUCT_STATE_FIELDS = (
     "supplier_name",
     "supplier_retail_url",
 )
+
+#: The post-evaluation compliance gate (operator directive 2026-09-30): the
+#: AICIS boundary tokens — one source of truth with the keyword engine — plus
+#: the electrical/logistics terms (`electric`, `usb`, `rechargeable`, so a
+#: battery-powered PDP's logistics burden is caught the same way). A package
+#: whose human text matches one lands `disregard` with an explicit note,
+#: regardless of its Jev score: contraband never reaches shortlist/review.
+COMPLIANCE_BANNED_TOKENS = tuple(BANNED_TOKENS) + (
+    "electric",
+    "usb",
+    "rechargeable",
+)
+
+#: The human-text fields the gate scans. `metadata.json` carries no
+#: description field, so the description role is the marketing payload.
+COMPLIANCE_SCAN_FIELDS = ("product_title", "marketing_ad_copy", "features")
+
+
+def _compliance_hit(metadata: Dict[str, Any]) -> str:
+    """`compliance gate: ...` for the first banned-token match, else ''.
+
+    Deterministic: fields are scanned in `COMPLIANCE_SCAN_FIELDS` order, a
+    field's strings left to right, tokens in tuple order — the same
+    case-insensitive substring rule every other banned-token check in the
+    repo uses, so the note names exactly where the token sits.
+    """
+    for field in COMPLIANCE_SCAN_FIELDS:
+        value = metadata.get(field)
+        texts = value if isinstance(value, list) else (value,)
+        for text in texts:
+            lowered = str(text or "").lower()
+            for token in COMPLIANCE_BANNED_TOKENS:
+                if token in lowered:
+                    return (
+                        f"compliance gate: banned token {token!r} matched "
+                        f"in {field}"
+                    )
+    return ""
 
 
 class JevRankingError(JevError):
@@ -302,6 +344,9 @@ class JevProductRanker:
             ]
             if pillar == "discard":
                 notes.append("Jev classified this package as discard")
+            compliance_note = _compliance_hit(ref.metadata)
+            if compliance_note:
+                notes.append(compliance_note)
             return RankedPackage(
                 package_dir=ref.package_dir,
                 metadata=ref.metadata,
@@ -325,6 +370,20 @@ class JevProductRanker:
         notes = ""
         if pillar == "discard":
             notes = "Jev classified this package as discard"
+        compliance_note = _compliance_hit(ref.metadata)
+        if compliance_note:
+            # Override, not a suggestion: a contraband package never reaches
+            # shortlist/review regardless of its Jev score, and its note
+            # says why.
+            if notes:
+                notes += "; "
+            notes += compliance_note
+            if tier != "disregard":
+                logger.warning(
+                    "Compliance gate demoted %s from %s to disregard: %s",
+                    ref.slug, tier, compliance_note,
+                )
+            tier = "disregard"
         logger.info(
             "Ranked %s: similarity=%.2f value=%.2f rank=%.2f tier=%s pillar=%s",
             ref.slug, similarity, value, rank_score, tier, pillar,

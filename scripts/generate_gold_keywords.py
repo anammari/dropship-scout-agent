@@ -1,21 +1,24 @@
 #!/usr/bin/env python
-"""Step 4 runner: turn the Step-3 gold-standard products into the 50–70
-supplier search keywords — the GOLD-STANDARD keyword bank.
+"""Step 4 runner: turn the Step-3 gold-standard products into the widened
+supplier-search-keyword bank — the GOLD-STANDARD keyword bank.
 
 Wraps `src.keywords.generator.KeywordGenerator` with the file outputs the
 operator reviews: the structured bank (`--output`) and a readable digest
 (`--markdown`) that nests each modifier keyword under the broad term it
 tightens. Both default under `outputs/` (git-ignored — production
 deliverables, not repo artefacts). The reasoning LLM is fed the product table
-rendered from the Step-3 deliverable in batches (default 4 products per call),
-so a run takes minutes and spends real LLM credits.
+rendered from the Step-3 deliverable in chunks of pool products (each chunk
+generates one validated 50–70 pool under the single-pool rules; the merged
+bank must clear the bank band around the chunks' summed target), and inside
+a chunk the table is batched (default 4 products per call), so a run takes
+about an hour at the default 150-product table and spends real LLM credits.
 
 Usage (from the repo root):
 
     source .venv/bin/activate && python scripts/generate_gold_keywords.py
 
-The runner exits non-zero when the pool fails validation — nothing is written
-for a rejected pool.
+The runner exits non-zero when a pool or the merged bank fails validation —
+nothing is written for a rejected run.
 """
 
 from __future__ import annotations
@@ -32,10 +35,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import settings  # noqa: E402
 from src.keywords.generator import (  # noqa: E402
+    BANK_MAX_SLACK,
+    BANK_MIN_SLACK,
     DEFAULT_BATCH_SIZE,
+    DEFAULT_CHUNK_SIZE,
     CandidateKeyword,
     KeywordGenerationError,
     KeywordGenerator,
+    chunk_sizes,
+    per_product_target,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -87,8 +95,9 @@ def write_markdown(path: Path, candidates: list[CandidateKeyword]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Step 4: generate and validate the 50-70 keyword bank from the "
-            "Step-3 gold-standard products."
+            "Step 4: generate and validate the gold-standard keyword bank "
+            "from the Step-3 gold-standard products (pool chunks merged "
+            "under the bank band)."
         ),
     )
     parser.add_argument(
@@ -108,10 +117,16 @@ def main() -> None:
         type=int,
         default=None,
         help=(
-            "cap on gold products fed to the LLM, strongest-demand first "
-            "(default: the generator's own cap; the Step-3 deliverable stays "
-            "the full record)"
+            "overall demand-ranked prefix cap on the eligible gold products "
+            "fed to the LLM (default: the generator's own cap; the Step-3 "
+            "deliverable stays the full record)"
         ),
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=DEFAULT_CHUNK_SIZE,
+        help=f"products per validated pool chunk (default {DEFAULT_CHUNK_SIZE})",
     )
     parser.add_argument(
         "--output",
@@ -134,12 +149,25 @@ def main() -> None:
         kwargs["max_products"] = args.max_products
     try:
         generator = KeywordGenerator(**kwargs)
+        sizes = chunk_sizes(len(generator.products), args.chunk_size)
+        summed_target = sum(
+            per_product_target(size) * size for size in sizes
+        )
+        calls = sum(
+            (size + args.batch_size - 1) // args.batch_size for size in sizes
+        )
         print(
             f"gold products: {len(generator.products)} of the Step-3 "
-            f"deliverable (target {generator.per_product_target} keywords per "
-            f"product, {args.batch_size} per LLM call)"
+            f"deliverable"
         )
-        candidates = generator.generate()
+        print(
+            f"bank plan: {len(sizes)} pool chunk(s), sizes {sizes}; "
+            f"target {per_product_target(sizes[0])} keywords per product "
+            f"(summed target {summed_target}, band "
+            f"{summed_target - BANK_MIN_SLACK}-{summed_target + BANK_MAX_SLACK}); "
+            f"~{calls} LLM calls at {args.batch_size} products per call"
+        )
+        candidates = generator.generate_bank(chunk_size=args.chunk_size)
     except KeywordGenerationError as exc:
         parser.exit(1, f"error: {exc}\n")
 
@@ -147,6 +175,7 @@ def main() -> None:
         "keywords": [c.model_dump() for c in candidates],
         "generated_by": settings.LLM_MODEL,
         "source_products": len(generator.products),
+        "chunks": sizes,
         "note": "GOLD-STANDARD keyword bank for Step 5 dual-supplier "
                 "ingestion; not tracked",
     }
@@ -157,7 +186,7 @@ def main() -> None:
     write_markdown(markdown_path, candidates)
 
     per_product = Counter(c.product for c in candidates)
-    print(f"bank: {len(candidates)} keywords")
+    print(f"bank: {len(candidates)} keywords across {len(per_product)} products")
     for product, count in per_product.items():
         print(f"  {count:3}  {product}")
     print(f"wrote {args.output} and {markdown_path}")
