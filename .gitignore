@@ -30,10 +30,12 @@ plans/
 # repo artefact.
 outputs/
 
-# Third-party reference kept for a later phase: the TypeSafe (Jev) API doc.
-# The Jev gate is wired through OpenRouter for now, so this stays a local
-# future reference rather than a tracked file.
+# Third-party reference docs kept for a later phase: the TypeSafe (Jev) API doc
+# and the Shopify AI-plugin doc. The Jev gate is wired through OpenRouter for
+# now and the Shopify plugin is not in use, so these stay local future
+# references rather than tracked files.
 docs/TypeSafe_agent_skill_doc.md
+docs/Shopify-ai-plugin-doc.md
 
 # Test / tooling caches
 .pytest_cache/

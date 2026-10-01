@@ -3,13 +3,13 @@
 Intake is the gold-kernel tree written by Step 5
 (`<OPTIMAL_EXPORT_DIR>/{cjdropshipping,aliexpress}/product-NN/`, each a
 `metadata.json` + `images/` package) plus the Step-3 gold-standard product list
-(`outputs/step-3-gold-standard-products.json`). Every package in both supplier
-folders is ranked; nothing is filtered on the way in.
+(`outputs/json/step-3-gold-standard-products.json`). Every package in both
+supplier folders is ranked; nothing is filtered on the way in.
 
 **Ranking is a report, not a deletion.** The ranker never moves or deletes a
 package directory — it writes a tiered report (shortlist / review / disregard)
-to `outputs/step-6-ranked-candidates.{json,md}` and lets the operator (Step 7)
-decide what to validate and link.
+to `outputs/json/step-6-ranked-candidates.json` (+ `outputs/md/…md`) and lets
+the operator (Step 7) decide what to validate and link.
 
 Batching (plan §8.2): one System One call carries a single shared state (the
 gold reference plus the batch's products) and three questions per product —

@@ -502,8 +502,8 @@ requiring a login for the MTOP calls in §6.
 | `APIFY_GS_ACTOR` | `damilo/google-shopping-apify` | Step-3 gold-research actor id (§13) |
 | `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | `10` | Step-3 results requested per keyword (actor `num`; closed set 10/20/30/40/50/100) |
 | `APIFY_GS_MAX_CHARGE_USD` | `7.5` | Step-3 hard USD spend ceiling per actor run, enforced by Apify itself; sized above the observed full-bank envelope (~$5.60) and within the free-tier remainder |
-| `GOLD_PRODUCTS_PATH` | `outputs/step-3-gold-standard-products.json` | Step-3 gold-product deliverable (untracked `outputs/` tree) |
-| `KEYWORD_BANK_PATH` | `outputs/step-4-gold-keywords.json` | Step-4 gold-keyword bank deliverable — Step 5's intake (untracked `outputs/` tree) |
+| `GOLD_PRODUCTS_PATH` | `outputs/json/step-3-gold-standard-products.json` | Step-3 gold-product deliverable (untracked `outputs/` tree) |
+| `KEYWORD_BANK_PATH` | `outputs/json/step-4-gold-keywords.json` | Step-4 gold-keyword bank deliverable — Step 5's intake (untracked `outputs/` tree) |
 | `BANK_TARGET_PER_KEYWORD` | `2` | Step-5 packages exported per **(keyword, engine)** leg — a PER-LEG target, so the bank's keyword count multiplies it (§13.6) |
 | `OPTIMAL_EXPORT_DIR` | `…/my-store-build/inspiration/optimal-dropship-candidates` | Step-5 gold-kernel root: each engine writes into its own subfolder, numbered independently (§13.6) |
 | `OPENROUTER_API_KEY` | — | Step-6 Jev ranking: Bearer token for the OpenRouter System One endpoint (never logged) |
@@ -709,7 +709,7 @@ post-ingestion product ranking (Step 6).
 | Step | What | Status on this branch |
 |---|---|---|
 | 1 | Google Trends (HasData MCP) research | done (research, `/tmp` scratch — no repo code by design). The Apify fallback `data_xplorer/google-trends-fast-scraper` ($2.00/1,000) was not needed — HasData stayed healthy |
-| 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `outputs/step-2-search-keywords.{json,md}` (untracked) |
+| 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `outputs/json/step-2-search-keywords.json` + `outputs/md/step-2-search-keywords.md` (untracked) |
 | 3 | Apify Google Shopping AU scrape of the Step-2 keywords + LLM curation → gold-standard product list | done — §13.2 |
 | 4 | Reasoning LLM → a pool-chunked supplier keyword bank (~300 keywords) from the gold list | done — §13.3 |
 | 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | done — §13.6 |
@@ -722,8 +722,17 @@ packages are written into the Shopify workspace tree
 (`optimal-dropship-candidates/`, §13.6), like the general intake (§8). `plans/`
 now holds only the engineering/spec documents (the updated-pipeline plan and
 its predecessors). Step 6's Jev rankings live under the same gitignored tree as
-`outputs/step-6-ranked-candidates.{json,md}` (§13.7), as Step 4's keyword bank
-already does there (`outputs/step-4-gold-keywords.{json,md}`).
+`outputs/json/step-6-ranked-candidates.json` + `outputs/md/step-6-ranked-candidates.md` (§13.7), as Step 4's keyword bank
+already does there (`outputs/json/step-4-gold-keywords.json` + `outputs/md/step-4-gold-keywords.md`).
+
+**The `outputs/` tree is split by file kind.** Structured deliverables go to
+`outputs/json/`, their readable digests to `outputs/md/`, and run logs to
+`outputs/logs/` (stamped `…-YYYY-MM-DD-HHMM.log` from the log's own first
+timestamp). Every runner's `--output` default sits in `json/` and its digest
+default is `config.digest_path(output)`, which resolves to the sibling `md/`
+folder — a plain `with_suffix(".md")` would drop the digest back into `json/`
+and undo the split. A custom `--output` outside `json/` keeps its digest
+beside it, so an off-tree destination is never silently relocated.
 
 ### 13.2 Step 3 — gold-standard product research (implemented)
 
@@ -731,7 +740,7 @@ already does there (`outputs/step-4-gold-keywords.{json,md}`).
 source .venv/bin/activate && python scripts/run_gold_standard_research.py \
     [--limit 2] [--num 10] [--dump-raw /tmp/step3_raw_rows.json] \
     [--from-raw /tmp/step3_raw_rows.json] \
-    [--output outputs/step-3-gold-standard-products.json]
+    [--output outputs/json/step-3-gold-standard-products.json]
 ```
 
 - **Scrape** (`src/extractors/google_shopping.py`): ONE batched run of the
@@ -758,7 +767,7 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   `not_available_from_source` never reaches the deliverable — a gold
   product must carry on-page demand evidence, and the Step-2 Trends
   evidence stays in the keyword file where it belongs.
-- **Deliverable**: `outputs/step-3-gold-standard-products.json` (+ `.md`
+- **Deliverable**: `outputs/json/step-3-gold-standard-products.json` (+ `.md`
   digest) — the reference set Steps 4 and 6 measure against. The runner
   prints the planned spend envelope before the first call, exits non-zero
   when nothing usable comes back, and `--from-raw` replays curation over a
@@ -780,9 +789,9 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
 
 ```bash
 source .venv/bin/activate && python scripts/generate_gold_keywords.py \
-    [--gold-products outputs/step-3-gold-standard-products.json] \
+    [--gold-products outputs/json/step-3-gold-standard-products.json] \
     [--batch-size 4] [--max-products 150] [--chunk-size 30] \
-    [--output outputs/step-4-gold-keywords.json] [--markdown …]
+    [--output outputs/json/step-4-gold-keywords.json] [--markdown …]
 ```
 
 Turns the Step-3 gold list into the **supplier search keyword bank** Step 5
@@ -892,7 +901,7 @@ sizing, which keeps the widened Step-5 ingestion near ~10–11h instead of 18h+.
   batches. `validate_pool`'s duplicate check stays as the guard for
   directly-called or hand-merged pools (and is what makes a cross-chunk
   repeat fatal on the merged pass).
-- **Deliverable**: `outputs/step-4-gold-keywords.json` (+ `.md` digest,
+- **Deliverable**: `outputs/json/step-4-gold-keywords.json` (+ `.md` digest,
   modifiers nested under their broad term) — Step 5's keyword bank; the
   payload records the chunk sizes it was generated from. The runner prints
   the bank plan (chunk sizes, per-chunk target, summed target, bank band and
@@ -931,7 +940,7 @@ deliverable (rows w/o `source_keyword`: 0; banned-name rows: 7), so
 320) to keep the bank inside his 250–320 intent; the merged pass validated
 against its auto-scaled band **[270, 340]** with zero cross-chunk repeats.
 ~12 reasoning-LLM calls, zero Apify spend, written as
-`outputs/step-4-gold-keywords.{json,md}` (roles 159 broad / 161 modifier).
+`outputs/json/step-4-gold-keywords.json` + `outputs/md/step-4-gold-keywords.md` (roles 159 broad / 161 modifier).
 
 **Production run (same day, operator's go):** all 40 Step-2 keywords, run
 `rP09Pk3x0nkqlSuLB`, actor usage **$4.06** (1,567 rows ≈ $0.0026/result —
@@ -943,8 +952,8 @@ rating+review-count evidence and a price, and the anti-hallucination join
 verified all 263 urls verbatim against the raw rows with zero join drops.
 The one-retry guard fired exactly once (one flaky empty-content batch,
 retried, run continued) — it earned its keep on the first production run.
-Deliverables: `outputs/step-3-gold-standard-products.{json,md}` plus the
-raw rows at `outputs/step-3-gold-raw-rows.json` (any future re-curation
+Deliverables: `outputs/json/step-3-gold-standard-products.json` + `outputs/md/step-3-gold-standard-products.md` plus the
+raw rows at `outputs/json/step-3-gold-raw-rows.json` (any future re-curation
 replays
 from that dump at zero Apify spend).
 
@@ -982,7 +991,7 @@ Four green/failed runs, each fix below coming out of a failure:
   foot file` / `pumice foot tool` / `pumice stone`; `stainless steel gua sha`
   / `scalp massage tool` / `gua sha facial tool` / `gua sha set`; `dry body
   brush` / `body brush with handle`.
-- Deliverables written to `outputs/step-4-gold-keywords.{json,md}` on every
+- Deliverables written to `outputs/json/step-4-gold-keywords.json` + `outputs/md/step-4-gold-keywords.md` on every
   green run — confirmed gitignored (`.gitignore:31` = `outputs/`). A failed
   run writes nothing.
 
@@ -990,7 +999,7 @@ Four green/failed runs, each fix below coming out of a failure:
 
 ```bash
 source .venv/bin/activate && python scripts/ingest_keyword_bank.py \
-    [--keywords outputs/step-4-gold-keywords.json] \
+    [--keywords outputs/json/step-4-gold-keywords.json] \
     [--target-per-keyword 2] [--limit 4] \
     [--only {both,cjdropshipping,aliexpress}] [--export-root <dir>]
 ```
@@ -1123,9 +1132,9 @@ cleared the 38 PR#3-run packages before this run; the general-intake
 
 ```bash
 source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
-    [--gold-products outputs/step-3-gold-standard-products.json] \
+    [--gold-products outputs/json/step-3-gold-standard-products.json] \
     [--export-root <OPTIMAL_EXPORT_DIR>] [--batch-size 4] \
-    [--output outputs/step-6-ranked-candidates.json] [--markdown …]
+    [--output outputs/json/step-6-ranked-candidates.json] [--markdown …]
 ```
 
 Ranks **every** Step-5 gold-kernel package against the Step-3 gold-standard
@@ -1206,7 +1215,7 @@ decide what to validate and link. Jev authors no product fact either: it returns
 only a similarity score, a winning-value score and a pillar; every field in the
 report is copied verbatim from the package's `metadata.json`.
 
-**Deliverables**: `outputs/step-6-ranked-candidates.json` (per-package verdicts
+**Deliverables**: `outputs/json/step-6-ranked-candidates.json` (per-package verdicts
 plus a `summary` and a `tiers` grouping) and `.md` (tier-grouped digest) — the
 **untracked** `outputs/` tree (plan §11.8: production deliverables live in the
 gitignored tree, not `plans/`).
@@ -1226,7 +1235,7 @@ presses (`aliexpress/product-09`, 4.41; `aliexpress/product-08`, 4.30;
 `cjdropshipping/product-06`, 4.25) plus gua sha boards (`aliexpress/product-10`,
 4.36; `cjdropshipping/product-25`, 4.33) — exactly the Step-3/Step-4 pillars the
 gold list is built on, which is the signal the similarity axis works. The
-deliverables were written to `outputs/step-6-ranked-candidates.{json,md}` and
+deliverables were written to `outputs/json/step-6-ranked-candidates.json` + `outputs/md/step-6-ranked-candidates.md` and
 confirmed gitignored (`.gitignore:31` = `outputs/`).
 
 **Step-6 live re-rank (2026-09-30, branch, operator's go, exit 0):** the 100

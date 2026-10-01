@@ -39,7 +39,7 @@ from pathlib import Path
 # Allow `python scripts/run_gold_standard_research.py` (script dir is sys.path[0]).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import settings  # noqa: E402
+from src.config import digest_path, settings  # noqa: E402
 from src.evaluators.gold_curator import (  # noqa: E402
     GoldCurationError,
     GoldProductCurator,
@@ -112,7 +112,7 @@ def main() -> None:
     parser.add_argument(
         "--keywords",
         type=Path,
-        default=REPO / "outputs" / "step-2-search-keywords.json",
+        default=REPO / "outputs" / "json" / "step-2-search-keywords.json",
         help="Step-2 deliverable to seed from",
     )
     parser.add_argument(
@@ -140,7 +140,7 @@ def main() -> None:
         "--markdown",
         type=Path,
         default=None,
-        help="readable digest destination (default: --output with .md)",
+        help="readable digest destination (default: outputs/md/ beside --output)",
     )
     parser.add_argument(
         "--dump-raw",
@@ -183,7 +183,7 @@ def main() -> None:
             f"at ${EST_USD_PER_RESULT:.4f}/result"
         )
 
-    markdown_path = args.markdown or args.output.with_suffix(".md")
+    markdown_path = args.markdown or digest_path(args.output)
     try:
         scraper = None
         if args.from_raw:

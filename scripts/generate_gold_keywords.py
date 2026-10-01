@@ -33,7 +33,7 @@ from pathlib import Path
 # Allow `python scripts/generate_gold_keywords.py` (script dir is sys.path[0]).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import settings  # noqa: E402
+from src.config import digest_path, settings  # noqa: E402
 from src.keywords.generator import (  # noqa: E402
     BANK_MAX_SLACK,
     BANK_MIN_SLACK,
@@ -138,12 +138,12 @@ def main() -> None:
         "--markdown",
         type=Path,
         default=None,
-        help="readable digest destination (default: --output with .md)",
+        help="readable digest destination (default: outputs/md/ beside --output)",
     )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    markdown_path = args.markdown or args.output.with_suffix(".md")
+    markdown_path = args.markdown or digest_path(args.output)
     kwargs = {"batch_size": args.batch_size, "gold_products_path": args.gold_products}
     if args.max_products is not None:
         kwargs["max_products"] = args.max_products

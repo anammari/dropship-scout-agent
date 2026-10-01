@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from src.config import load_settings
+from src.config import digest_path, load_settings
 
 
 # ----------------------------------------------------------------------
@@ -274,13 +274,16 @@ def test_gold_products_path_defaults_to_the_step_3_deliverable(monkeypatch):
     monkeypatch.delenv("GOLD_PRODUCTS_PATH", raising=False)
     assert (
         load_settings().GOLD_PRODUCTS_PATH
-        == "outputs/step-3-gold-standard-products.json"
+        == "outputs/json/step-3-gold-standard-products.json"
     )
 
 
 def test_keyword_bank_path_defaults_to_the_step_4_deliverable(monkeypatch):
     monkeypatch.delenv("KEYWORD_BANK_PATH", raising=False)
-    assert load_settings().KEYWORD_BANK_PATH == "outputs/step-4-gold-keywords.json"
+    assert (
+        load_settings().KEYWORD_BANK_PATH
+        == "outputs/json/step-4-gold-keywords.json"
+    )
 
 
 def test_keyword_bank_path_env_override_is_respected(monkeypatch):
@@ -290,7 +293,25 @@ def test_keyword_bank_path_env_override_is_respected(monkeypatch):
 
 def test_keyword_bank_path_blank_falls_back_to_the_default(monkeypatch):
     monkeypatch.setenv("KEYWORD_BANK_PATH", "")
-    assert load_settings().KEYWORD_BANK_PATH == "outputs/step-4-gold-keywords.json"
+    assert (
+        load_settings().KEYWORD_BANK_PATH
+        == "outputs/json/step-4-gold-keywords.json"
+    )
+
+
+def test_digest_path_moves_the_markdown_out_of_the_json_folder():
+    # The split is only real if a default run honours it: with_suffix would
+    # write the digest back into outputs/json/ beside its source.
+    assert (
+        digest_path(Path("outputs/json/step-4-gold-keywords.json"))
+        == Path("outputs/md/step-4-gold-keywords.md")
+    )
+
+
+def test_digest_path_keeps_a_custom_destination_beside_its_source():
+    # A --output outside the organised tree must not be silently relocated
+    # into outputs/md/.
+    assert digest_path(Path("/tmp/bank.json")) == Path("/tmp/bank.md")
 
 
 def test_bank_target_per_keyword_defaults_to_two(monkeypatch):

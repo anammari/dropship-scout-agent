@@ -7,13 +7,13 @@ Reads the gold-kernel tree Step 5 wrote —
     <OPTIMAL_EXPORT_DIR>/cjdropshipping/product-NN/…
     <OPTIMAL_EXPORT_DIR>/aliexpress/product-NN/…
 
-— and the Step-3 deliverable (`outputs/step-3-gold-standard-products.json`),
+— and the Step-3 deliverable (`outputs/json/step-3-gold-standard-products.json`),
 asks Jev for a similarity score, a winning-value score and a pillar per
 package in batches (default 4 packages per System One call), and writes a
 tiered report:
 
-    outputs/step-6-ranked-candidates.json   (the structured ranking)
-    outputs/step-6-ranked-candidates.md     (the tier-grouped digest)
+    outputs/json/step-6-ranked-candidates.json   (the structured ranking)
+    outputs/md/step-6-ranked-candidates.md       (the tier-grouped digest)
 
 `rank_score = 0.6*similarity + 0.4*value` on a 1–5 scale; shortlist ≥
 `JEV_SHORTLIST_MIN_SCORE`, review ≥ `JEV_REVIEW_MIN_SCORE`, else disregard.
@@ -24,9 +24,9 @@ removed — Step 7 (human) decides what to validate and link.
 Usage (from the repo root):
 
     source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
-        [--gold-products outputs/step-3-gold-standard-products.json] \
+        [--gold-products outputs/json/step-3-gold-standard-products.json] \
         [--export-root <OPTIMAL_EXPORT_DIR>] [--batch-size 4] \
-        [--output outputs/step-6-ranked-candidates.json]
+        [--output outputs/json/step-6-ranked-candidates.json]
 
 Exit codes: 0 complete, 1 requires human intervention, 2 unexpected error.
 """
@@ -43,7 +43,7 @@ from typing import Dict, List
 # Allow `python scripts/rank_optimal_candidates.py` (script dir is sys.path[0]).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import settings  # noqa: E402
+from src.config import OUTPUTS_JSON_DIR, digest_path, settings  # noqa: E402
 from src.main import render_intervention_block  # noqa: E402
 from src.ranking.jev_client import JevConfigError  # noqa: E402
 from src.ranking.jev_product_ranker import (  # noqa: E402
@@ -55,7 +55,7 @@ from src.ranking.jev_product_ranker import (  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 
-DEFAULT_OUTPUT = Path("outputs/step-6-ranked-candidates.json")
+DEFAULT_OUTPUT = OUTPUTS_JSON_DIR / "step-6-ranked-candidates.json"
 
 
 def _engine_of(package_dir: str) -> str:
@@ -123,14 +123,14 @@ def main(argv: List[str] | None = None) -> int:
         "--markdown",
         type=Path,
         default=None,
-        help="tiered digest destination (default: --output with .md)",
+        help="tiered digest destination (default: outputs/md/ beside --output)",
     )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
-    markdown_path = args.markdown or args.output.with_suffix(".md")
+    markdown_path = args.markdown or digest_path(args.output)
 
     try:
         ranker = JevProductRanker(
@@ -163,7 +163,7 @@ def main(argv: List[str] | None = None) -> int:
                 reason=str(exc),
                 instructions=[
                     "Confirm the Step-3 deliverable exists and holds products: "
-                    "outputs/step-3-gold-standard-products.json (re-run "
+                    "outputs/json/step-3-gold-standard-products.json (re-run "
                     "scripts/run_gold_standard_research.py if not)",
                     "Confirm the Step-5 gold-kernel tree holds product-NN "
                     "packages: <OPTIMAL_EXPORT_DIR>/{cjdropshipping,"

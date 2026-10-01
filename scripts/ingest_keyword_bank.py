@@ -22,7 +22,7 @@ long run. Pilot with `--limit 4 --target-per-keyword 1 --only aliexpress`.
 Usage (from the repo root):
 
     source .venv/bin/activate && python scripts/ingest_keyword_bank.py \
-        [--keywords outputs/step-4-gold-keywords.json] \
+        [--keywords outputs/json/step-4-gold-keywords.json] \
         [--target-per-keyword 2] [--limit 4] \
         [--only {cjdropshipping,aliexpress}] [--export-root <dir>]
 

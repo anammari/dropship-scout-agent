@@ -20,7 +20,7 @@ per-product floor guarantee.
 
 The prompt is a tracked package resource (`gold_keyword_prompt.md`) whose
 product table is a **template slot**: `{PRODUCT_TABLE}` is rendered at runtime
-from the live Step-3 deliverable (`outputs/step-3-gold-standard-products.json`,
+from the live Step-3 deliverable (`outputs/json/step-3-gold-standard-products.json`,
 path from `settings.GOLD_PRODUCTS_PATH`), so the gold products are ground truth
 the prompt file never hardcodes. The generator then runs the table in batches
 (default 4 products per call). Batching exists because the endpoint truncates
