@@ -728,11 +728,16 @@ already does there (`outputs/json/step-4-gold-keywords.json` + `outputs/md/step-
 **The `outputs/` tree is split by file kind.** Structured deliverables go to
 `outputs/json/`, their readable digests to `outputs/md/`, and run logs to
 `outputs/logs/` (stamped `…-YYYY-MM-DD-HHMM.log` from the log's own first
-timestamp). Every runner's `--output` default sits in `json/` and its digest
-default is `config.digest_path(output)`, which resolves to the sibling `md/`
-folder — a plain `with_suffix(".md")` would drop the digest back into `json/`
-and undo the split. A custom `--output` outside `json/` keeps its digest
-beside it, so an off-tree destination is never silently relocated.
+timestamp). The log folder is **hand-filled**: no runner installs a file
+handler — they log to stderr and the operator tees the stream in (README
+§"Where the log lines go"), so `logs/` is a capture convention, not a
+runner behaviour. Every runner's `--output` default sits in `json/` and its
+digest default is `config.digest_path(output)`, which resolves to the sibling
+`md/` folder — a plain `with_suffix(".md")` would drop the digest back into
+`json/` and undo the split. `digest_path` specialises the `outputs/json` pair
+only: a custom `--output` anywhere else (including a folder that merely
+shares the name `json`) keeps its digest beside it, so an off-tree
+destination is never silently relocated.
 
 ### 13.2 Step 3 — gold-standard product research (implemented)
 

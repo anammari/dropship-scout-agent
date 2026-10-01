@@ -314,6 +314,20 @@ def test_digest_path_keeps_a_custom_destination_beside_its_source():
     assert digest_path(Path("/tmp/bank.json")) == Path("/tmp/bank.md")
 
 
+def test_digest_path_ignores_a_json_folder_outside_the_outputs_tree():
+    # Only the `outputs/json` pair is specialised: a folder that merely shares
+    # the name `json` is not the organised tree.
+    assert digest_path(Path("/tmp/json/report.json")) == Path("/tmp/json/report.md")
+
+
+def test_digest_path_specialises_an_absolute_outputs_json_path():
+    # An absolute --output pointing into the real tree still gets the split.
+    assert (
+        digest_path(Path("/repo/outputs/json/step-4-gold-keywords.json"))
+        == Path("/repo/outputs/md/step-4-gold-keywords.md")
+    )
+
+
 def test_bank_target_per_keyword_defaults_to_two(monkeypatch):
     # Per (keyword, engine) leg: the bank's keyword count multiplies it, so
     # the default has to stay small for a 60-keyword bank to stay tractable.

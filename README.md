@@ -749,15 +749,18 @@ own: `keywords_run` (legs that reached the supplier without a configuration or
 block error) and `leg_failures` (legs skipped because that engine was
 unconfigured, blocked or timed out — the leg is skipped, the keyword is not).
 
-**Where the log lines go.** No log file is written: `main()` calls
+**Where the log lines go.** No runner writes a log file: `main()` calls
 `logging.basicConfig(level=INFO, …)` with no handler, so everything goes to
-**stderr**. Capture a run with:
+**stderr**, and the `outputs/logs/` tree is filled by hand-capturing that
+stream. The runners do not create the folder either — make it once with
+`mkdir -p outputs/logs` — and the convention is to stamp the file with the
+run's own first timestamp:
 
 ```bash
-python -m src.main --keyword "coffee accessories" --target-count 2 --extractor cjdropshipping 2>&1 | tee run.log
+mkdir -p outputs/logs && python -m src.main --keyword "coffee accessories" --target-count 2 --extractor cjdropshipping 2>&1 | tee "outputs/logs/general-intake-run-$(date +%Y-%m-%d-%H%M).log"
 ```
 
-`*.log` is git-ignored, so `run.log` stays local.
+`*.log` is git-ignored, so the capture stays local.
 
 Each gate announces itself in that stream. The CJ commercial gate, for example,
 logs every gated-out hit at WARNING and each keyword's survivors once at INFO in

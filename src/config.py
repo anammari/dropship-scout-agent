@@ -55,7 +55,13 @@ def digest_path(structured_path: Path) -> Path:
     the split. For any other destination the digest still sits beside its
     JSON, so a custom `--output` is never silently relocated.
     """
-    if structured_path.parent.name == OUTPUTS_JSON_DIR.name:
+    # Match the trailing `outputs/json` pair, not a bare `json` folder name:
+    # `--output /tmp/json/report.json` is outside the organised tree and must
+    # keep its digest beside it.
+    if (
+        structured_path.parent.name == OUTPUTS_JSON_DIR.name
+        and structured_path.parent.parent.name == OUTPUTS_DIR.name
+    ):
         return structured_path.parent.parent / OUTPUTS_MD_DIR.name / (
             f"{structured_path.stem}.md"
         )
