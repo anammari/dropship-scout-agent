@@ -1,6 +1,6 @@
 """Step 5 — the keyword bank and its dual-supplier ingestion (plan §7).
 
-The bank is the Step-4 deliverable (`outputs/step-4-gold-keywords.json`,
+The bank is the Step-4 deliverable (`outputs/json/step-4-gold-keywords.json`,
 untracked): gold-standard supplier search keywords, each typed with the
 gold product it came from, its pillar, its role (broad/modifier) and the
 broad term a modifier tightens. The widened Step-4 run generates the bank in

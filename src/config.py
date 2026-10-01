@@ -11,6 +11,7 @@ field values, so an accidental `repr(settings)` can never leak
 """
 
 import os
+from pathlib import Path
 from typing import List, Optional
 
 from dotenv import load_dotenv
@@ -36,6 +37,36 @@ DEFAULT_EXPORT_DIR = (
 DEFAULT_OPTIMAL_EXPORT_DIR = (
     "/Users/ahmadammari/PD/my-store-build/inspiration/optimal-dropship-candidates"
 )
+
+# Deliverable layout of the untracked `outputs/` tree. A run writes three
+# kinds of artefact and each gets its own folder, so a run's output stays
+# findable instead of piling up flat: structured deliverables in `json/`,
+# their readable digests in `md/`, run logs in `logs/`.
+OUTPUTS_DIR = Path("outputs")
+OUTPUTS_JSON_DIR = OUTPUTS_DIR / "json"
+OUTPUTS_MD_DIR = OUTPUTS_DIR / "md"
+
+
+def digest_path(structured_path: Path) -> Path:
+    """Where a structured deliverable's readable `.md` digest belongs.
+
+    Inside the organised tree the digest goes to the sibling `md/` folder —
+    a plain `with_suffix(".md")` would drop it back into `json/`, undoing
+    the split. For any other destination the digest still sits beside its
+    JSON, so a custom `--output` is never silently relocated.
+    """
+    # Match the trailing `outputs/json` pair, not a bare `json` folder name:
+    # `--output /tmp/json/report.json` is outside the organised tree and must
+    # keep its digest beside it.
+    if (
+        structured_path.parent.name == OUTPUTS_JSON_DIR.name
+        and structured_path.parent.parent.name == OUTPUTS_DIR.name
+    ):
+        return structured_path.parent.parent / OUTPUTS_MD_DIR.name / (
+            f"{structured_path.stem}.md"
+        )
+    return structured_path.with_suffix(".md")
+
 
 # Remote CJdropshipping MCP server (StreamableHTTP). The MCP token is
 # appended as a path segment at connect time — see cj_mcp_client.py.
@@ -187,7 +218,7 @@ class Settings:
         # artefact); Steps 4 and 6 read the gold product list from here.
         self.GOLD_PRODUCTS_PATH: str = (
             os.getenv("GOLD_PRODUCTS_PATH")
-            or "outputs/step-3-gold-standard-products.json"
+            or "outputs/json/step-3-gold-standard-products.json"
         )
         # Step-4 deliverable path — the Step-5 "keyword bank": the 50-70
         # supplier search keywords Step 4 generated from the gold products,
@@ -195,7 +226,8 @@ class Settings:
         # AliExpress DS Center) and Step 6 ranks against the gold list. Same
         # untracked outputs/ tree as every other production deliverable.
         self.KEYWORD_BANK_PATH: str = (
-            os.getenv("KEYWORD_BANK_PATH") or "outputs/step-4-gold-keywords.json"
+            os.getenv("KEYWORD_BANK_PATH")
+            or "outputs/json/step-4-gold-keywords.json"
         )
         # Step-5 export target PER ENGINE: the number of ACCEPTed packages
         # one (keyword, engine) leg may write. It is a per-leg target, so the

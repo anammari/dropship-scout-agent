@@ -192,10 +192,10 @@ APIFY_TOKEN="YOUR_APIFY_API_TOKEN"
 #APIFY_GS_ACTOR=""
 #APIFY_GS_MAX_RESULTS_PER_KEYWORD="10"
 #APIFY_GS_MAX_CHARGE_USD="7.5"
-#GOLD_PRODUCTS_PATH="outputs/step-3-gold-standard-products.json"
+#GOLD_PRODUCTS_PATH="outputs/json/step-3-gold-standard-products.json"
 
 # --- Step 4 gold-standard keyword bank ---
-#KEYWORD_BANK_PATH="outputs/step-4-gold-keywords.json"
+#KEYWORD_BANK_PATH="outputs/json/step-4-gold-keywords.json"
 
 # --- Step 5 dual-supplier ingestion (CJ MCP + AliExpress DS Center) ---
 #BANK_TARGET_PER_KEYWORD="2"
@@ -242,8 +242,8 @@ OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
 | `APIFY_GS_ACTOR` | — | Step-3 gold-research actor id (default `damilo/google-shopping-apify`) |
 | `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | — | Step-3 results requested per keyword; the actor's closed set is 10/20/30/40/50/100 (default `10`) |
 | `APIFY_GS_MAX_CHARGE_USD` | — | Step-3 hard USD spend ceiling per run, enforced by Apify itself (default `7.5`) |
-| `GOLD_PRODUCTS_PATH` | — | Step-3 gold-product deliverable Steps 4 and 6 read (default `outputs/step-3-gold-standard-products.json`) |
-| `KEYWORD_BANK_PATH` | — | Step-4 deliverable — the Step-5 keyword bank (default `outputs/step-4-gold-keywords.json`) |
+| `GOLD_PRODUCTS_PATH` | — | Step-3 gold-product deliverable Steps 4 and 6 read (default `outputs/json/step-3-gold-standard-products.json`) |
+| `KEYWORD_BANK_PATH` | — | Step-4 deliverable — the Step-5 keyword bank (default `outputs/json/step-4-gold-keywords.json`) |
 | `BANK_TARGET_PER_KEYWORD` | — | Step-5 packages exported per **(keyword, engine)** leg — the bank's keyword count multiplies it (default `2`) |
 | `OPTIMAL_EXPORT_DIR` | — | Step-5 gold-kernel destination root; each engine writes into its own subfolder (default `…/my-store-build/inspiration/optimal-dropship-candidates`) |
 | `EXPORT_DIR` | — | Destination workspace for the general intake §2.1 (defaults to the Shopify path below) |
@@ -357,10 +357,10 @@ reasoning LLM.
 
 ```bash
 source .venv/bin/activate && python scripts/run_gold_standard_research.py \
-    [--keywords outputs/step-2-search-keywords.json] \
+    [--keywords outputs/json/step-2-search-keywords.json] \
     [--limit 2] [--num 10] [--dump-raw /tmp/step3_raw_rows.json] \
     [--from-raw /tmp/step3_raw_rows.json] \
-    [--output outputs/step-3-gold-standard-products.json]
+    [--output outputs/json/step-3-gold-standard-products.json]
 ```
 
 - **Scrape** (`src/extractors/google_shopping.py`): ONE batched run of the
@@ -397,9 +397,9 @@ floor), and a pool that breaks any rule exits non-zero with nothing written.
 
 ```bash
 source .venv/bin/activate && python scripts/generate_gold_keywords.py \
-    [--gold-products outputs/step-3-gold-standard-products.json] \
+    [--gold-products outputs/json/step-3-gold-standard-products.json] \
     [--batch-size 4] [--max-products 150] [--chunk-size 30] \
-    [--output outputs/step-4-gold-keywords.json] [--markdown …]
+    [--output outputs/json/step-4-gold-keywords.json] [--markdown …]
 ```
 
 - **The prompt carries no products.** `src/keywords/gold_keyword_prompt.md` has a
@@ -461,7 +461,7 @@ two fulfilment options.
 
 ```bash
 source .venv/bin/activate && python scripts/ingest_keyword_bank.py \
-    [--keywords outputs/step-4-gold-keywords.json] \
+    [--keywords outputs/json/step-4-gold-keywords.json] \
     [--target-per-keyword 2] [--limit 4] \
     [--only {both,cjdropshipping,aliexpress}] [--export-root <dir>]
 ```
@@ -504,15 +504,15 @@ Ranks **every** Step-5 package against the Step-3 gold-standard product list wit
 Jev (TypeSafe **System One** via OpenRouter) and writes a tiered report:
 
 ```
-outputs/step-6-ranked-candidates.json   # the structured ranking
-outputs/step-6-ranked-candidates.md     # the tier-grouped digest
+outputs/json/step-6-ranked-candidates.json   # the structured ranking
+outputs/md/step-6-ranked-candidates.md     # the tier-grouped digest
 ```
 
 ```bash
 source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
-    [--gold-products outputs/step-3-gold-standard-products.json] \
+    [--gold-products outputs/json/step-3-gold-standard-products.json] \
     [--export-root <OPTIMAL_EXPORT_DIR>] [--batch-size 4] \
-    [--output outputs/step-6-ranked-candidates.json]
+    [--output outputs/json/step-6-ranked-candidates.json]
 ```
 
 - **Intake is both supplier trees plus the gold list.** Every
@@ -590,11 +590,23 @@ the other research deliverables —
 
 ```
 outputs/
-├── step-2-search-keywords.{json,md}
-├── step-3-gold-standard-products.{json,md}   # the gold reference Step 6 measures against
-├── step-4-gold-keywords.{json,md}            # the Step-5 keyword bank
-└── step-6-ranked-candidates.{json,md}        # Step 6's tiered ranking (shortlist/review/disregard)
+├── json/                                     # structured deliverables
+│   ├── step-2-search-keywords.json
+│   ├── step-3-gold-raw-rows.json             # the Apify scrape dump (--dump-raw)
+│   ├── step-3-gold-standard-products.json    # the gold reference Step 6 measures against
+│   ├── step-4-gold-keywords.json             # the Step-5 keyword bank
+│   └── step-6-ranked-candidates.json         # Step 6's tiered ranking
+├── md/                                       # the readable digests of the above
+│   ├── step-2-search-keywords.md
+│   ├── step-3-gold-standard-products.md
+│   ├── step-4-gold-keywords.md
+│   └── step-6-ranked-candidates.md
+└── logs/                                     # run logs, stamped with the run date-time
 ```
+
+Each runner's `--output` defaults into `json/` and its digest is written to the
+sibling `md/` folder (`config.digest_path`), so the split survives a default
+run — a custom `--output` keeps its digest beside it instead.
 
 The `outputs/` tree is git-ignored (scoping data, not repo artefacts), and Step
 6 never moves or deletes a package — it only reports.
@@ -737,15 +749,18 @@ own: `keywords_run` (legs that reached the supplier without a configuration or
 block error) and `leg_failures` (legs skipped because that engine was
 unconfigured, blocked or timed out — the leg is skipped, the keyword is not).
 
-**Where the log lines go.** No log file is written: `main()` calls
+**Where the log lines go.** No runner writes a log file: `main()` calls
 `logging.basicConfig(level=INFO, …)` with no handler, so everything goes to
-**stderr**. Capture a run with:
+**stderr**, and the `outputs/logs/` tree is filled by hand-capturing that
+stream. The runners do not create the folder either — make it once with
+`mkdir -p outputs/logs` — and the convention is to stamp the file with the
+run's own first timestamp:
 
 ```bash
-python -m src.main --keyword "coffee accessories" --target-count 2 --extractor cjdropshipping 2>&1 | tee run.log
+mkdir -p outputs/logs && python -m src.main --keyword "coffee accessories" --target-count 2 --extractor cjdropshipping 2>&1 | tee "outputs/logs/general-intake-run-$(date +%Y-%m-%d-%H%M).log"
 ```
 
-`*.log` is git-ignored, so `run.log` stays local.
+`*.log` is git-ignored, so the capture stays local.
 
 Each gate announces itself in that stream. The CJ commercial gate, for example,
 logs every gated-out hit at WARNING and each keyword's survivors once at INFO in
