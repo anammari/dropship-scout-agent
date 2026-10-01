@@ -1255,3 +1255,123 @@ the vendor's published input rate. With the compliance gate live the re-run
 demoted **43 of 100** packages to `disregard` (16 of them out of
 shortlist/review — including the then-#2 `jade` gua sha board), landing
 **shortlist 9, review 4, disregard 87**.
+
+## 14. SHOPIFY TOOLING FOR THE STORE SIDE (Claude-facing, MANDATORY)
+
+> Appended as §14 so every §1–§13 cross-reference stays valid — the same
+> convention §13 used. This section governs how a session talks to the
+> **Shopify store** that the exports of §8 and §13.6 feed. It changes no
+> pipeline behaviour; it retires a broken MCP path and names the three routes
+> that actually work.
+
+Target store: **Sabaah Goods**, domain `2giusj-zm.myshopify.com` (shop
+`gid://shopify/Shop/83810844888`, org `233715106`, AUD,
+Australia/Melbourne). `shopify store list -j` is what settles the domain —
+the `balawalashi.myshopify.com` spelling that appears in some operator task
+text is **not** the canonical FQDN.
+
+### 14.1 Ignore the small-business Shopify MCP outright
+
+**`plugin:small-business:shopify` is retired here and must not be used for
+anything.** It is not connected on this machine: every tool call answers
+
+```
+Incompatible auth server: does not support dynamic client registration
+```
+
+even though `claude mcp list` reports it `✓ Connected` — the CLI health check
+probes the endpoint rather than completing the MCP handshake, so it is
+systematically misleading. The server can also vanish from a session entirely
+between restarts (observed 2026-10-01). Its instructions may still be
+injected into a session before it disconnects.
+
+Do not diagnose it, do not try to re-authenticate it, and never report a
+store task as blocked on it. Use the three routes below instead — each is
+already proven end to end.
+
+### 14.2 Dev MCP — developer docs and schema validation
+
+Installed as `shopify-dev-mcp` (stdio, **no authentication**, runs locally):
+
+```bash
+claude mcp add --transport stdio shopify-dev-mcp -- npx -y @shopify/dev-mcp@latest
+```
+
+Five tools. **`learn_shopify_api` must be called first** — it resolves the API
+surface and version and returns a `conversationId` that every other Shopify
+tool call requires:
+
+| Tool | Use |
+|---|---|
+| `learn_shopify_api` | Mandatory first call; resolves surface + version, returns the `conversationId` |
+| `search_docs_chunks` | Search shopify.dev docs/schema for the operation or field needed |
+| `validate` | Validate a GraphQL operation or UI component against the schema before it runs |
+| `validate_theme` | Validate Liquid / theme files |
+| `feedback` | Report a toolkit scorecard; call once, at the end of the turn |
+
+**This MCP is context and validation only — it has no store read/write
+tools.** Never ask it to fetch a product, list orders, or write anything; it
+cannot. It also does not validate `shopify.app.toml` /
+`shopify.extension.toml` (use `shopify app config validate --json` for
+that). For Admin work, pass `api_name: "admin"` to `search_docs_chunks` and
+ALWAYS run generated GraphQL through `validate` with `api: "admin"` — that
+call is what removes field hallucination from an Admin API operation.
+
+### 14.3 The 21 Shopify AI Toolkit skills — context and validation
+
+The toolkit's skills are installed and appear to the Skill tool under the
+`shopify-plugin:` prefix. Each carries the current guidance for one surface;
+read the one matching the surface being touched rather than working from
+model memory.
+
+| Area | Skills (all `shopify-plugin:`-prefixed) |
+|---|---|
+| Admin / data | `shopify-admin`, `shopify-custom-data`, `shopify-shopifyql`, `shopify-storefront-graphql`, `shopify-customer` |
+| CLI / dev | `shopify-use-shopify-cli`, `shopify-dev` |
+| Apps | `shopify-functions`, `shopify-payments-apps`, `shopify-app-store-review` |
+| Extensions (Polaris) | `shopify-polaris-admin-extensions`, `shopify-polaris-app-home`, `shopify-polaris-checkout-extensions`, `shopify-polaris-customer-account-extensions`, `shopify-pos-ui` |
+| Storefront / themes | `shopify-liquid`, `shopify-hydrogen` |
+| Onboarding / partner | `shopify-onboarding-dev`, `shopify-onboarding-merchant`, `shopify-partner`, `ucp` |
+
+Newer toolkit releases consolidate this set toward a single `shopify` skill
+(see the doc's "Migrate from individual skills"); if a
+`shopify-plugin:shopify` skill appears, prefer it.
+
+### 14.4 Execution — Shopify CLI
+
+```bash
+shopify store execute -s 2giusj-zm.myshopify.com -q '<graphql>'
+```
+
+- Read-only queries run as-is; **mutations require `--allow-mutations`**.
+- One-time auth per store and scope set:
+  `shopify store auth --store 2giusj-zm.myshopify.com --scopes write_products,read_products,write_files,read_files`
+  — the OAuth click is the operator's. Without it: "No stored app
+  authentication found".
+
+For batch writes the programmatic route is preferred: the CLI parks the
+offline Admin token in
+`~/Library/Preferences/shopify-cli-store-nodejs/config.json`, under
+`<clientId>::<store>/sessionsByUserId/<uid>/accessToken` (`shpat_…`, ~24h
+validity), POSTed as `X-Shopify-Access-Token` to
+`https://<store>/admin/api/<version>/graphql.json`. Store-mutation utilities
+live in `my-store-build/scripts/` (`shopify_admin.py`, whose `delete` is
+`--yes`-gated because it is irreversible) — written untracked, never
+committed.
+
+**Never print, log, echo or embed the Admin token in an exception message.**
+Credentials live only in `.env` / the real environment. Re-run the
+`shopify store auth` flow when it 401s; do not try to exchange the refresh
+token programmatically.
+
+### 14.5 Repair notes
+
+- The toolkit's own install paths — and the plugin-vs-skills-vs-MCP choice —
+  are documented in the operator-local, gitignored
+  `docs/Shopify-ai-plugin-doc.md`.
+- If `shopify-dev-mcp` fails to connect, the usual cause is a **corrupt npx
+  cache**, not the package: `Cannot find module '@shopify/liquid-html-parser'`
+  means the cached tree under `~/.npm/_npx/<hash>/` is incomplete. Delete that
+  one hash directory and it reinstalls clean — a clean `npm install` in a temp
+  dir proves the package itself is fine.
+- Requires Node.js 18+.
