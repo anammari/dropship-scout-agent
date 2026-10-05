@@ -714,7 +714,7 @@ post-ingestion product ranking (Step 6).
 | 4 | Reasoning LLM → a pool-chunked supplier keyword bank (~300 keywords) from the gold list | done — §13.3 |
 | 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | done — §13.6 |
 | 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | done — §13.7 |
-| 7–8 | Human-only: DSers/Zendrop manual supplier search; store curation | no code (deliberately) |
+| 7–8 | Human-only: DSers manual supplier search; store curation | no code (deliberately) |
 
 All research deliverables live under `outputs/` — **untracked**
 (gitignored; scoping data, not repo artefacts) — while the Step-5 gold-kernel
@@ -1261,8 +1261,8 @@ shortlist/review — including the then-#2 `jade` gua sha board), landing
 > Appended as §14 so every §1–§13 cross-reference stays valid — the same
 > convention §13 used. This section governs how a session talks to the
 > **Shopify store** that the exports of §8 and §13.6 feed. It changes no
-> pipeline behaviour; it retires a broken MCP path, names the routes that
-> actually work, and inventories the Claude-facing MCP servers (§14.6).
+> pipeline behaviour; it retires a broken MCP path and names the three routes
+> that actually work.
 
 Target store: **Sabaah Goods**, domain `2giusj-zm.myshopify.com` (shop
 `gid://shopify/Shop/83810844888`, org `233715106`, AUD,
@@ -1375,53 +1375,3 @@ token programmatically.
   one hash directory and it reinstalls clean — a clean `npm install` in a temp
   dir proves the package itself is fine.
 - Requires Node.js 18+.
-
-### 14.6 The Claude-facing MCP inventory — and the Zendrop MCP
-
-A session reaches this project's tooling through four MCP servers. The first
-three are declared in the repo (`.mcp.json`, committed); `shopify-dev-mcp` is
-a **local** (project-path) server in the operator's `~/.claude.json`, so it
-does not travel with the repository.
-
-| Server | Declared in | Transport / auth | What it is for |
-|---|---|---|---|
-| `google-trends` | `.mcp.json` | HTTP; `HASDATA_API_KEY` via `scripts/mcp_headers.py hasdata` | Step-2 trend research, the default source (§13.1) |
-| `apify-trends` | `.mcp.json` | HTTP; `APIFY_TOKEN` via `scripts/mcp_headers.py apify` | Step-2 trend research, the fallback actor |
-| `zendrop` | `.mcp.json` | HTTP; **OAuth 2.1 + dynamic client registration** | Merchant-side store, product, order and issue operations |
-| `shopify-dev-mcp` | local, `~/.claude.json` | stdio (`npx @shopify/dev-mcp`) | Developer docs + schema validation only (§14.2) |
-
-`plugin:small-business:shopify` is deliberately absent from the list — it is
-retired and must not be used (§14.1).
-
-**`zendrop` — merchant-side store operations.** The Zendrop MCP
-(`https://app.zendrop.com/mcp/v1`) gives a session the merchant dashboard's
-capabilities: read the connected stores, browse the supplier catalog and the
-account's own imported products, read orders and their issues, and — behind a
-two-step preview-then-confirm — fulfil or cancel orders, update a shipping
-address, and change store settings. Its OAuth server advertises the scopes
-`catalog:read`, `my_products:read|write`, `orders:read|write`,
-`order_issues:read|write`, `stores:read|write`, `billing:read`, `users:read`
-and `reporting:read`; the endpoint rate-limits at 120 requests/minute.
-
-Two properties separate it from every other server here:
-
-- **It authenticates by OAuth, not a static header.** Where
-  `google-trends`/`apify-trends` take a static API key supplied by a
-  `headersHelper`, Zendrop needs the native OAuth flow — so its `.mcp.json`
-  entry is a bare `type`+`url` with **no** `headersHelper`, and attaching one
-  would break it. It supports **dynamic client registration**, the exact
-  capability the retired `plugin:small-business:shopify` lacks (§14.1), so no
-  `--client-id` is needed and Claude Code self-registers. Authenticate with
-  `/mcp` → `zendrop` → authenticate (the browser consent click is the
-  operator's, like every OAuth flow here), or the desktop app's connect
-  prompt.
-- **Its writes touch real merchant data.** `fulfill_order` and `cancel_order`
-  are two-step (preview, then confirm) and irreversible once confirmed; treat
-  every mutating call as needing the operator's explicit go-ahead, exactly as
-  §14.4 treats `shopify_admin.py delete`.
-
-**Zendrop is Claude-facing only.** It is not wired into the pipeline, and
-Step 7–8 remain human-only (§13.1) — the server gives a session the same reach
-as the merchant dashboard, not a new source for the automated funnel. Nothing
-in this section relaxes a supplier gate, and the MCP surface has no config key
-of its own (OAuth stores its credential outside `.env`).

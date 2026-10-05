@@ -9,10 +9,6 @@
       "type": "http",
       "url": "https://mcp.apify.com/?tools=data_xplorer/google-trends-fast-scraper",
       "headersHelper": "python3 scripts/mcp_headers.py apify"
-    },
-    "zendrop": {
-      "type": "http",
-      "url": "https://app.zendrop.com/mcp/v1"
     }
   }
 }
