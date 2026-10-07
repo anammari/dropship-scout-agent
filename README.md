@@ -440,17 +440,21 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   curation over a prior dump at **zero scrape spend** (the debugging path, and
   it is source-agnostic: a HasData dump replays with no HasData charge).
 
-**Why the HasData source is an HTTP client, not MCP.** Step 2 reaches HasData
-through an MCP server, so the same route was the first choice here — but the
-gateway (`https://mcp.hasdata.com/mcp?apis=…`) enumerates 27 API groups and
-`google_shopping` is **not** among them (a `tools/list` probe answers
-`"No HasData tools match ?apis=google_shopping"`, listing `google_serp`,
-`google_images`, `google_travel`, `walmart`, `amazon` and others). The official
-HasData agent skill covers the same surface and likewise has no Google Shopping
-entry, and neither agent-side route can drive a headless runner anyway. The
-reference guide's own fallback therefore applies — *"If unsupported, standard
-HTTP client integration is preferred"* — so the source calls
-`GET /scrape/google/shopping` directly with the `x-api-key` header.
+**Why the HasData source is an HTTP client, not MCP or a skill.** Step 2 reaches
+HasData through an MCP server, so the same route was the first choice here — but
+the gateway (`https://mcp.hasdata.com/mcp?apis=…`) enumerates 27 API groups and
+`google_shopping` is **not** among them (a `tools/list` probe answers `"No
+HasData tools match ?apis=google_shopping"`).
+
+The HasData skills *do* cover Google Shopping — the `hasdata` skill lists
+`/scrape/google/shopping`, and the `hasdata-cli` skill drives
+`hasdata google-shopping` (10 credits/call) — but a skill is an agent-facing
+instruction bundle, not something a Python runner can import, and shelling out
+to the CLI would add a per-machine binary to a pipeline whose tests are
+hermetic and network-free. So the module calls the REST endpoint directly with
+the `x-api-key` header; the official CLI builds the identical URL, which
+cross-checks the request shape. The skills stay installed for agent-side
+research (`.agents/skills/`, §5).
 
 ### 2.4 Step 4 — gold-standard keyword bank
 
@@ -958,6 +962,9 @@ dropship-scout-agent/
 ├── .env.example               # Template for runtime configuration
 ├── .env                       # Actual credentials — never committed
 ├── .mcp.json                  # Trend-research MCP servers (Step 2)
+├── skills-lock.json           # Pinned HasData agent skills (`.agents/skills/`, §2.3)
+├── .agents/skills/            # hasdata + hasdata-cli agent skills (.claude/skills/ symlinks in)
+├── docs/                      # Operator-local reference notes — git-ignored, never committed
 ├── src/
 │   ├── config.py              # Env-driven settings singleton
 │   ├── models.py              # Pydantic schemas + sourcing/anti-hallucination validators

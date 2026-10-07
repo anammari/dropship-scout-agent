@@ -799,19 +799,44 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   gallery, so they can never become `RawSupplierProduct` without fabricating
   sourcing fields — neither module is registered in the extractor chain.
 
-  **Why the HasData source is an HTTP client and not MCP** (finding, 2026-10-07
-  — the route Step 2 uses was the first choice, and it does not reach this API):
-  the HasData MCP gateway (`https://mcp.hasdata.com/mcp?apis=…`) enumerates 27
-  API groups and **`google_shopping` is not one of them** — a `tools/list` probe
-  against `?apis=google_shopping` answers `No HasData tools match
-  ?apis=google_shopping` and lists `google_serp`, `google_images`,
-  `google_travel`, `walmart`, `amazon` and others. The official HasData agent
-  skill covers the same surface and also carries **no** Google Shopping entry,
-  and neither agent-side route can drive a headless runner regardless. The
-  reference guide's own fallback therefore applies — *"If unsupported, standard
-  HTTP client integration is preferred"* — so the module calls
-  `GET /scrape/google/shopping` directly with the `x-api-key` header. **Do not
-  re-attempt the MCP or skill route for this endpoint.**
+  **Why the HasData source is a Python HTTP client** (route finding, revised
+  2026-10-07 after installing the skills — the first pass got half of this
+  wrong, so both halves are recorded):
+
+  * **The MCP route is closed.** The HasData MCP gateway
+    (`https://mcp.hasdata.com/mcp?apis=…`) enumerates 27 API groups and
+    `google_shopping` is **not** one of them — a live `tools/list` probe
+    against `?apis=google_shopping` answers `No HasData tools match
+    ?apis=google_shopping`, listing `google_serp`, `google_images`,
+    `google_travel`, `walmart`, `amazon` and others. The endpoint is reachable
+    only as REST.
+  * **The skill/CLI route DOES cover Google Shopping** (an earlier draft of
+    this section claimed otherwise — that was wrong, and the correction is
+    deliberately kept visible so the mistake is not re-made): the installed
+    `hasdata` skill lists `/scrape/google/shopping` in `references/search.md`
+    ("Shopping carousel") with a Python recipe in `references/ecommerce.md`,
+    and the installed `hasdata-cli` skill documents `google-shopping` as a
+    first-class subcommand (`hasdata google-shopping --q … --gl au`, 10
+    credits/call).
+
+    So why not the skill? Because a skill is an **agent-facing instruction
+    bundle, not an importable dependency** — it cannot be called by
+    `scripts/run_gold_standard_research.py`. The CLI could be shelled out to,
+    but that buys a per-machine binary (`~/.local/bin/hasdata`, plus an
+    interactive `hasdata configure`) that a hermetic, CI-runnable, zero-network
+    test suite cannot exercise, in exchange for nothing the REST call does not
+    already give.
+
+  The reference guide's own rule for code integration therefore applies —
+  *"standard HTTP client integration is preferred"* — and the module calls
+  `GET /scrape/google/shopping` directly with the `x-api-key` header. The
+  request shape is independently confirmed by the official CLI, whose
+  `--verbose` output builds the identical URL:
+  `https://api.hasdata.com/scrape/google/shopping?domain=google.com.au&gl=au&q=…`.
+
+  The skills remain installed and useful **for agent-side research** (ad-hoc
+  `google-shopping` lookups while scoping keywords, for instance) — they are
+  just not the pipeline's transport. See §15.
 
   **Schema note (live 2026-10-07) — the live payload is NOT the guide's
   example.** The guide documents `link`, `productLink`, `seller` and
@@ -1452,3 +1477,44 @@ token programmatically.
   one hash directory and it reinstalls clean — a clean `npm install` in a temp
   dir proves the package itself is fine.
 - Requires Node.js 18+.
+
+## 15. HASDATA AGENT SKILLS (Claude-facing, installed)
+
+> Appended as §15 for the same reason §13 and §14 were: every existing
+> §1–§14 cross-reference stays valid. This section covers the agent-facing
+> HasData skills; it changes no pipeline behaviour.
+
+Installed at project scope with the `skills` CLI (2026-10-07):
+
+```bash
+npx skills add hasdata/agent-skills -y
+```
+
+| Where | What |
+|---|---|
+| `.agents/skills/hasdata/` | The REST-API skill: `SKILL.md` + 10 `references/` (search, ecommerce, web-scraping, scraper-jobs, code-recipes, …). Documents `/scrape/google/shopping` and carries a Python recipe for it. |
+| `.agents/skills/hasdata-cli/` | The CLI skill: `SKILL.md` + 10 `references/`. Drives `hasdata <subcommand>`; documents `google-shopping` at 10 credits/call. |
+| `.claude/skills/{hasdata,hasdata-cli}` | Relative symlinks into `.agents/skills/`, which is how Claude Code discovers them. |
+| `skills-lock.json` | Source + `SKILL.md` content hash per skill, so `skills experimental_install` can restore the set. **Committed.** |
+
+**The CLI prerequisite lives outside the repo.** The `hasdata-cli` skill drives
+the operator's own install (`~/.local/bin/hasdata`, v0.2.2) with the key at
+`~/.hasdata/config.yaml` (mode 0600), written by an interactive
+`hasdata configure`. Neither path is in this repo and neither is a pipeline
+dependency — the Step-3 pipeline (§13.2) reaches HasData over HTTP from
+Python, never through the CLI.
+
+**These skills need a session restart to appear.** Claude Code registers its
+skill list at startup, so a skill installed mid-session is on disk and
+symlinked but **not invokable** until the session restarts (`Skill(…)` answers
+`Unknown skill`). That is expected, not a broken install — to verify an install
+without restarting, check the symlink resolves and that the `SKILL.md`
+frontmatter `name:` matches its directory name.
+
+**Scope of use.** The skills are for *agent-side research* — ad-hoc
+`google-shopping` lookups while scoping keywords, market checks, one-off price
+reads — and never for the pipeline's own ingestion, which stays hermetic and
+repo-native. Every skill/CLI call spends real HasData credits on the same
+monthly balance as the Step-2 Trends server and the §13.2 HasData source
+(Trends 5/call, Shopping 10/call), so treat a `google-shopping` call as a
+whole smoke-test budget and prefer replaying saved payloads over re-querying.
