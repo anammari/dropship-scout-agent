@@ -115,7 +115,8 @@ dropship-scout-agent/
 │   │   ├── base.py          # BaseSupplierExtractor + shared exceptions
 │   │   ├── cj_mcp_extractor.py      # CJdropshipping MCP: commercial gate, liveness gate, freight quote
 │   │   ├── aliexpress_ds.py         # native DS Center ingestion + winner gate
-│   │   └── google_shopping.py        # Step-3 gold-research Apify actor wrapper (§13; NOT a supplier extractor)
+│   │   ├── google_shopping.py        # Step-3 gold-research Apify actor wrapper (§13; NOT a supplier extractor)
+│   │   └── google_shopping_hasdata.py # Step-3 HasData shopping source (§13.2; optional Apify alternative)
 │   ├── evaluators/
 │   │   ├── llm_filter.py    # instructor + ProvisionalProductEvaluation
 │   │   └── gold_curator.py  # Step-3 LLM curation: select-by-url, facts code-assembled (§13)
@@ -138,7 +139,7 @@ dropship-scout-agent/
 │   ├── ingest_keyword_bank.py        # Step-5 dual-supplier ingestion runner (§13.6)
 │   ├── rank_optimal_candidates.py    # Step-6 Jev ranking runner (report only, no deletion)
 │   └── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
-└── tests/                   # 535 hermetic tests, zero network (14 modules + conftest)
+└── tests/                   # 579 hermetic tests, zero network (15 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -498,10 +499,13 @@ requiring a login for the MTOP calls in §6.
 | `MIN_MARKUP_MULTIPLIER` | `2.5` | margin floor (markup leg), llm_filter + models |
 | `MIN_MARGIN_AUD` | `10.0` | margin floor (gross-profit leg), llm_filter + models — widened from AUD 20 on 2026-09-29 to match the operator's Step-3 $10 target |
 | `TARGET_COUNTRY` | `AU` | extraction/evaluation target; also the AliExpress ship-to market |
+| `HASDATA_API_KEY` | — | HasData key on one shared credit balance, used by TWO things: (1) the Step-2 Google Trends MCP server, read from `.env` by `scripts/mcp_headers.py` for `.mcp.json` (NOT by `src/config.py`); (2) the Step-3 HasData Google Shopping source (`--source hasdata`, §13.2), read by `src/config.py` to call the REST API directly. Free tier 1,000 credits/month; a Trends call is 5 credits, a Shopping call 10 |
 | `APIFY_TOKEN` | — | Apify account token, shared by TWO actors: (1) Step-2 trend-research FALLBACK `data_xplorer/google-trends-fast-scraper` via the Apify MCP (`.mcp.json`) — used only if the HasData Google Trends MCP fails or returns an info-poor schema, $2.00/1,000 results; (2) Step-3 gold-research CORE actor (§13), $3.50/1,000 results |
 | `APIFY_GS_ACTOR` | `damilo/google-shopping-apify` | Step-3 gold-research actor id (§13) |
 | `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | `10` | Step-3 results requested per keyword (actor `num`; closed set 10/20/30/40/50/100) |
 | `APIFY_GS_MAX_CHARGE_USD` | `7.5` | Step-3 hard USD spend ceiling per actor run, enforced by Apify itself; sized above the observed full-bank envelope (~$5.60) and within the free-tier remainder |
+| `HASDATA_GS_BASE_URL` | `https://api.hasdata.com` | Step-3 HasData source (`--source hasdata`, §13.2): REST base; the client appends `/scrape/google/shopping` |
+| `HASDATA_GS_MAX_RESULTS_PER_KEYWORD` | `40` | Step-3 HasData source: **local** cap on rows kept per keyword. NOT an API parameter — one request returns the whole grid (~65 rows observed) for a flat 10 credits, so this bounds downstream LLM curation only, never HasData spend (§13.2) |
 | `GOLD_PRODUCTS_PATH` | `outputs/json/step-3-gold-standard-products.json` | Step-3 gold-product deliverable (untracked `outputs/` tree) |
 | `KEYWORD_BANK_PATH` | `outputs/json/step-4-gold-keywords.json` | Step-4 gold-keyword bank deliverable — Step 5's intake (untracked `outputs/` tree) |
 | `BANK_TARGET_PER_KEYWORD` | `2` | Step-5 packages exported per **(keyword, engine)** leg — a PER-LEG target, so the bank's keyword count multiplies it (§13.6) |
@@ -557,6 +561,20 @@ only in `.env` / the real environment.
   invented-URL join drop, pillar/boundary enforcement, dedupe, fenced and
   truncated-response salvage, the reasoning-model empty-content failure,
   batching, transport/HTTP/config errors) — see §13.
+- `tests/test_google_shopping_hasdata.py` covers the Step-3 HasData source
+  (§13.2): the request shape (the AU market pin — `gl`/`domain` — the
+  `x-api-key` header, one request per keyword), row parsing against **both**
+  the live payload shape (`source`/`reviews`, pinned by a verbatim row from
+  the 2026-10-07 probe) and the reference guide's documented shape
+  (`link`/`seller`/`ratingCount`), the canonical-`productId` URL fallback and
+  the shared-identity collapse, the local row cap touching curation but never
+  the request count, the credit telemetry, every fail-closed path (missing
+  key, non-200 with the key absent from the logs, transport error, non-JSON,
+  error `requestMetadata.status`, empty grid, a later keyword failing the
+  run), the shared-`ShoppingRow` round-trip, the downstream curator
+  compatibility (a parsed high-rating row clears the demand-evidence filter),
+  and the runner's `--source` selection, spend banner per source, and
+  `apify`-stays-the-default guarantee.
 - `tests/test_aliexpress_ds.py` covers the payload decoding (plain and
   JSONP), order/rating parsing, the currency guard and AUD conversion, the
   §6.1 gate and each documented drop log, the MTOP priming-then-signed
@@ -710,7 +728,7 @@ post-ingestion product ranking (Step 6).
 |---|---|---|
 | 1 | Google Trends (HasData MCP) research | done (research, `/tmp` scratch — no repo code by design). The Apify fallback `data_xplorer/google-trends-fast-scraper` ($2.00/1,000) was not needed — HasData stayed healthy |
 | 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `outputs/json/step-2-search-keywords.json` + `outputs/md/step-2-search-keywords.md` (untracked) |
-| 3 | Apify Google Shopping AU scrape of the Step-2 keywords + LLM curation → gold-standard product list | done — §13.2 |
+| 3 | Google Shopping AU scrape of the Step-2 keywords (Apify actor **or** HasData REST, `--source`) + LLM curation → gold-standard product list | done — §13.2 |
 | 4 | Reasoning LLM → a pool-chunked supplier keyword bank (~300 keywords) from the gold list | done — §13.3 |
 | 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | done — §13.6 |
 | 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | done — §13.7 |
@@ -743,22 +761,77 @@ destination is never silently relocated.
 
 ```bash
 source .venv/bin/activate && python scripts/run_gold_standard_research.py \
+    [--source {apify,hasdata}] \
     [--limit 2] [--num 10] [--dump-raw /tmp/step3_raw_rows.json] \
     [--from-raw /tmp/step3_raw_rows.json] \
     [--output outputs/json/step-3-gold-standard-products.json]
 ```
 
-- **Scrape** (`src/extractors/google_shopping.py`): ONE batched run of the
-  `damilo/google-shopping-apify` actor (pay-per-result, ~$3.50/1,000
-  results) carries every keyword (`queries` input), `country="au"`,
-  `max_pages=1`. Spend is governed three ways: the actor's closed-set `num`
-  is validated before any money moves; a hard `max_total_charge_usd`
-  ceiling (`APIFY_GS_MAX_CHARGE_USD`) rides the run options and is enforced
-  by Apify itself; `--limit N` pilots on the first N keywords. It is
-  **extractor-shaped but deliberately NOT a `BaseSupplierExtractor`**: these
-  are marketplace retail listings with no supplier PDP, freight quote or
+- **Scrape — two interchangeable sources, selected by `--source`.** Both are
+  drop-in peers: same `scrape_keywords(keywords) -> List[ShoppingRow]`
+  contract, the same `ShoppingRow` dataclass, the same downstream curator and
+  the same source-agnostic `--dump-raw` / `--from-raw` replay, so a deliverable
+  is equivalent whichever free tier paid for it. `apify` stays the default, so
+  an existing invocation is unchanged by the second source existing.
+
+  * `src/extractors/google_shopping.py` (`apify`, default): ONE batched run
+    of the `damilo/google-shopping-apify` actor (pay-per-result, ~$3.50/1,000
+    results) carries every keyword (`queries` input), `country="au"`,
+    `max_pages=1`. Spend is governed three ways: the actor's closed-set `num`
+    is validated before any money moves; a hard `max_total_charge_usd`
+    ceiling (`APIFY_GS_MAX_CHARGE_USD`) rides the run options and is enforced
+    by Apify itself; `--limit N` pilots on the first N keywords.
+  * `src/extractors/google_shopping_hasdata.py` (`hasdata`): one HasData
+    Google Shopping **request per keyword** (10 credits each, the published
+    rate) for operators spending HasData's free tier rather than Apify
+    credit. One request returns the whole grid for a query (~65 rows observed
+    live 2026-10-07), so `--num` is a **local** slice
+    (`HASDATA_GS_MAX_RESULTS_PER_KEYWORD`, default 40 — parity with the Apify
+    path's ~40-row SERP page) that bounds LLM curation cost only: **the
+    request count is the keyword count, and the keyword count is the spend**.
+    Fail-closed: a non-200, a non-JSON body, an error `requestMetadata.status`,
+    an empty grid, or any keyword with no usable rows fails the run rather
+    than yielding a half-scraped gold list that silently under-represents the
+    Step-2 keywords.
+
+  Both are **extractor-shaped but deliberately NOT a `BaseSupplierExtractor`**:
+  these are marketplace retail listings with no supplier PDP, freight quote or
   gallery, so they can never become `RawSupplierProduct` without fabricating
-  sourcing fields — the module is never registered in the extractor chain.
+  sourcing fields — neither module is registered in the extractor chain.
+
+  **Why the HasData source is an HTTP client and not MCP** (finding, 2026-10-07
+  — the route Step 2 uses was the first choice, and it does not reach this API):
+  the HasData MCP gateway (`https://mcp.hasdata.com/mcp?apis=…`) enumerates 27
+  API groups and **`google_shopping` is not one of them** — a `tools/list` probe
+  against `?apis=google_shopping` answers `No HasData tools match
+  ?apis=google_shopping` and lists `google_serp`, `google_images`,
+  `google_travel`, `walmart`, `amazon` and others. The official HasData agent
+  skill covers the same surface and also carries **no** Google Shopping entry,
+  and neither agent-side route can drive a headless runner regardless. The
+  reference guide's own fallback therefore applies — *"If unsupported, standard
+  HTTP client integration is preferred"* — so the module calls
+  `GET /scrape/google/shopping` directly with the `x-api-key` header. **Do not
+  re-attempt the MCP or skill route for this endpoint.**
+
+  **Schema note (live 2026-10-07) — the live payload is NOT the guide's
+  example.** The guide documents `link`, `productLink`, `seller` and
+  `ratingCount`; **none of those four appear live**. The real fields are
+  `title`, `category`, `productId`, `price`, `extractedPrice`, `rating`,
+  `reviews` (the review count), `source` (the seller), `thumbnail`,
+  `delivery`, `immersiveProductPageToken`, `hasdataLink`. The parser reads both
+  the documented and the live spellings rather than trusting either alone, and
+  prefers a real `link`/`productLink` when one is supplied. Absent both (the
+  live case), the row identity is derived from its own `productId` as
+  `https://www.google.com.au/shopping/product/<productId>` — the same
+  derived-not-invented shape as the CJ extractor's canonical
+  `/product/{pid}.html` fallback (§6). `url` is the anti-hallucination join key
+  and a human pointer only: Steps 4 and 6 never read it (Step 4 uses `name`,
+  Step 6's `gold_reference` uses `name`/`description`/`retail_price_text`/
+  `demand_evidence`), which is why a compact derived identity beats the
+  per-row `hasdataLink` — that one is a ~2 KB opaque token pointing at
+  HasData's own API, and a 2 KB exact-echo join key would be fragile and
+  waste curation tokens. Rows sharing a `productId` share an identity, which is
+  what lets the curator collapse the same product listed by several merchants.
 - **Curate** (`src/evaluators/gold_curator.py`): the reasoning LLM only
   **selects by verbatim `url`** and annotates `pillar` /
   `compliance_note` / `unit_economics_note` (one of
@@ -774,9 +847,13 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   evidence stays in the keyword file where it belongs.
 - **Deliverable**: `outputs/json/step-3-gold-standard-products.json` (+ `.md`
   digest) — the reference set Steps 4 and 6 measure against. The runner
-  prints the planned spend envelope before the first call, exits non-zero
-  when nothing usable comes back, and `--from-raw` replays curation over a
-  prior `--dump-raw` dump at **zero Apify spend** (the debugging path).
+  prints the planned spend envelope **in the active source's own cost unit**
+  (USD for Apify, credits for HasData — a shared cost model would misstate one
+  of them), exits non-zero when nothing usable comes back, and `--from-raw`
+  replays curation over a prior `--dump-raw` dump at **zero scrape spend** (the
+  debugging path; the dump is source-agnostic, so a HasData dump replays free).
+  The payload records the source it was scraped with (`source`, plus `actor`
+  naming the actor or the HasData source).
 - **Pacing:** the curation batches at `ROWS_PER_CALL=10` rows per LLM call
   — the configured model is a *reasoning* model whose chain-of-thought
   shares the completion budget with the answer, and a larger batch makes it

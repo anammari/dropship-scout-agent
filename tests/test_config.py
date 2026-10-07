@@ -278,6 +278,53 @@ def test_gold_products_path_defaults_to_the_step_3_deliverable(monkeypatch):
     )
 
 
+def test_hasdata_api_key_is_none_when_unset(monkeypatch):
+    monkeypatch.delenv("HASDATA_API_KEY", raising=False)
+    assert load_settings().HASDATA_API_KEY is None
+
+
+def test_hasdata_api_key_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("HASDATA_API_KEY", "hd-test")
+    assert load_settings().HASDATA_API_KEY == "hd-test"
+
+
+def test_hasdata_api_key_empty_string_normalises_to_none(monkeypatch):
+    monkeypatch.setenv("HASDATA_API_KEY", "")
+    assert load_settings().HASDATA_API_KEY is None
+
+
+def test_hasdata_gs_base_url_defaults_to_the_rest_api(monkeypatch):
+    monkeypatch.delenv("HASDATA_GS_BASE_URL", raising=False)
+    assert load_settings().HASDATA_GS_BASE_URL == "https://api.hasdata.com"
+
+
+def test_hasdata_gs_base_url_blank_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("HASDATA_GS_BASE_URL", "")
+    assert load_settings().HASDATA_GS_BASE_URL == "https://api.hasdata.com"
+
+
+def test_hasdata_gs_base_url_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("HASDATA_GS_BASE_URL", "https://proxy.test")
+    assert load_settings().HASDATA_GS_BASE_URL == "https://proxy.test"
+
+
+def test_hasdata_gs_max_results_defaults_to_forty(monkeypatch):
+    # The local grid cap, NOT an API parameter (one request = 10 credits
+    # whatever the slice); 40 mirrors the Apify path's ~40-row SERP page.
+    monkeypatch.delenv("HASDATA_GS_MAX_RESULTS_PER_KEYWORD", raising=False)
+    assert load_settings().HASDATA_GS_MAX_RESULTS_PER_KEYWORD == 40
+
+
+def test_hasdata_gs_max_results_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("HASDATA_GS_MAX_RESULTS_PER_KEYWORD", "65")
+    assert load_settings().HASDATA_GS_MAX_RESULTS_PER_KEYWORD == 65
+
+
+def test_hasdata_gs_max_results_blank_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("HASDATA_GS_MAX_RESULTS_PER_KEYWORD", "")
+    assert load_settings().HASDATA_GS_MAX_RESULTS_PER_KEYWORD == 40
+
+
 def test_keyword_bank_path_defaults_to_the_step_4_deliverable(monkeypatch):
     monkeypatch.delenv("KEYWORD_BANK_PATH", raising=False)
     assert (

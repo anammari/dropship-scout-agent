@@ -213,6 +213,28 @@ class Settings:
         self.APIFY_GS_MAX_CHARGE_USD: float = _parse_float(
             os.getenv("APIFY_GS_MAX_CHARGE_USD"), default=7.5
         )
+        # --- Step 3, HasData source (the optional Apify alternative,
+        # src/extractors/google_shopping_hasdata.py) ---
+        # The same credential the Step-2 Google Trends MCP server uses
+        # (`.mcp.json` reads it through scripts/mcp_headers.py; the Step-3
+        # source reads it here to call the REST API directly). Optional — a
+        # missing key makes the HasData source raise
+        # HasDataNotConfiguredError, and the Apify source is unaffected.
+        self.HASDATA_API_KEY: Optional[str] = os.getenv("HASDATA_API_KEY") or None
+        # HasData REST base; the client appends `/scrape/google/shopping`.
+        self.HASDATA_GS_BASE_URL: str = (
+            os.getenv("HASDATA_GS_BASE_URL") or "https://api.hasdata.com"
+        )
+        # LOCAL cap on rows kept per keyword. Unlike the Apify actor's `num`,
+        # this is NOT an API parameter: one HasData request returns the whole
+        # shopping grid for a query (~65 rows observed live 2026-10-07) and
+        # costs 10 credits whatever the slice. The cap therefore bounds
+        # downstream LLM curation cost, never HasData spend; 40 mirrors the
+        # ~40-row SERP page the Apify path yields, so the two sources hand
+        # the curator a comparable pool.
+        self.HASDATA_GS_MAX_RESULTS_PER_KEYWORD: int = _parse_int(
+            os.getenv("HASDATA_GS_MAX_RESULTS_PER_KEYWORD"), default=40
+        )
         # Step-3 deliverable path (untracked outputs/ tree — all production
         # deliverables of the updated pipeline live there, never a repo
         # artefact); Steps 4 and 6 read the gold product list from here.
