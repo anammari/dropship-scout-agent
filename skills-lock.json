@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "hasdata": {
+      "source": "hasdata/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/hasdata/SKILL.md",
+      "computedHash": "c3f69d0ff498a702ed6f8fb14e46d7a0f25bc43985433d6d66b1ae556f5bf810"
+    },
+    "hasdata-cli": {
+      "source": "hasdata/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/hasdata-cli/SKILL.md",
+      "computedHash": "11bc79c89c3a32aa1300a62ff6d99f0ba1872a50b9ec6c7d6e3b1b23e980ce1b"
+    }
+  }
+}

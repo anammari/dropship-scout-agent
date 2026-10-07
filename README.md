@@ -85,11 +85,12 @@ and ranks the result with Jev.
 - An **Ollama Cloud** account (the LLM evaluation endpoint)
 - A supplier credential: `CJ_MCP_TOKEN`. The AliExpress Dropshipping Center
   engine needs no credential — it reads the DS Center's own APIs anonymously.
-- Research credentials for the updated multi-step pipeline: `APIFY_TOKEN` for
-  the Step-3 Google Shopping scrape, `HASDATA_API_KEY` for Step-2 trend
-  research, and `OPENROUTER_API_KEY` for the Step-6 Jev ranking. All three are
+- Research credentials for the updated multi-step pipeline: `HASDATA_API_KEY`
+  for Step-2 trend research **and** for Step 3 when it runs on the HasData
+  source (`--source hasdata`), `APIFY_TOKEN` for the Step-3 Apify source,
+  and `OPENROUTER_API_KEY` for the Step-6 Jev ranking. All three are
   optional for the general intake (§2.1) — only the Steps that use them need
-  them.
+  them, and Step 3 needs exactly one of its two sources.
 - Internet access to `cjdropshipping.com`, `aliexpress.com`, `ollama.com`,
   `apify.com`, `openrouter.ai`, and supplier CDN hosts (`cdn.alibabaimg.com`,
   etc.)
@@ -182,16 +183,59 @@ LLM_API_KEY="your_ollama_cloud_api_token"
 LLM_MODEL="deepseek-v4-flash:cloud"
 
 # --- Trend research (keyword brainstorming; MCP servers) ---
-# HasData is consumed by the project MCP config (.mcp.json) via
-# scripts/mcp_headers.py, not by src/config.py; APIFY_TOKEN is also read by
-# src/config.py for the Step-3 scrape.
+# The Google Trends MCP servers are authenticated by the project MCP config
+# (.mcp.json + scripts/mcp_headers.py). Both credentials are free-tier.
+#
+# HasData API key — used by TWO things, on one shared credit balance:
+# (1) Step 2's Google Trends MCP server, sent as its `x-api-key` header, via
+#     scripts/mcp_headers.py (NOT read by src/config.py).
+# (2) Step 3's OPTIONAL HasData Google Shopping source
+#     (src/extractors/google_shopping_hasdata.py), which src/config.py reads
+#     to call the REST API directly — see the Step 3 block below.
+# Free tier: 1,000 credits/month; a Trends call costs 5 credits and a Google
+# Shopping call costs 10 (one request returns the whole grid for a query).
+# Failed calls are not billed.
 HASDATA_API_KEY="YOUR_HASDATA_API_KEY"
+# Apify API token — shared by two actors on the same Apify account:
+# (1) Step 2's FALLBACK trend source — data_xplorer/google-trends-fast-scraper,
+#     driven via the Apify MCP (Bearer auth) and used ONLY when the primary
+#     HasData Google Trends MCP is unavailable, rate-limited, or returns an
+#     info-poor schema. It bills $2.00 per 1,000 results.
+# (2) Step 3's CORE gold-research actor — damilo/google-shopping-apify
+#     (apify-client auth; see the Step 3 block below), which bills $3.50 per
+#     1,000 results.
+# Apify's free plan includes $10 of credit; failed calls are not billed.
 APIFY_TOKEN="YOUR_APIFY_API_TOKEN"
 
-# --- Step 3 gold-standard research (Apify Google Shopping actor) ---
-#APIFY_GS_ACTOR=""
+# --- Step 3 gold-standard research (Google Shopping AU) ---
+# Two interchangeable sources; the runner picks one with --source (default
+# apify). Both hand the SAME rows to the same curator, so a deliverable is
+# equivalent whichever paid for it.
+
+# Source `apify` (default) — the damilo/google-shopping-apify actor.
+# Actor id for the gold-product scrape.
+#APIFY_GS_ACTOR="damilo/google-shopping-apify"
+# Results requested per keyword per run — the Apify spend ceiling (pay-per-result).
 #APIFY_GS_MAX_RESULTS_PER_KEYWORD="10"
+# Hard USD spend ceiling per run, enforced by Apify itself. Default 7.5: sized
+# above the observed full-bank envelope (~$5.60 — the actor returns ~40 rows
+# per keyword regardless of num) and within the free-tier remainder, so the
+# production run is never aborted by its own safety net.
 #APIFY_GS_MAX_CHARGE_USD="7.5"
+
+# Source `hasdata` — the HasData Google Shopping API, spending the same free
+# credits as Step 2's Trends research. Requires HASDATA_API_KEY above.
+# HasData REST base; the client appends /scrape/google/shopping.
+#HASDATA_GS_BASE_URL="https://api.hasdata.com"
+# LOCAL cap on rows kept per keyword. NOT an API parameter: one request
+# returns the whole shopping grid for a query (~65 rows observed 2026-10-07)
+# and costs 10 credits whatever the slice, so this bounds LLM curation cost
+# only, never HasData spend. 40 mirrors the ~40-row SERP page the Apify path
+# yields, so both sources hand the curator a comparable pool.
+#HASDATA_GS_MAX_RESULTS_PER_KEYWORD="40"
+
+# Step-3 gold product deliverable (untracked outputs/ tree — production
+# deliverables of the updated pipeline live there).
 #GOLD_PRODUCTS_PATH="outputs/json/step-3-gold-standard-products.json"
 
 # --- Step 4 gold-standard keyword bank ---
@@ -225,7 +269,7 @@ OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
 | `LLM_BASE_URL` | ✅ | OpenAI-compatible chat-completions endpoint (Ollama Cloud: `https://ollama.com/v1`) |
 | `LLM_API_KEY` | ✅ | Ollama Cloud API token |
 | `LLM_MODEL` | — | Defaults to `deepseek-v4-flash:cloud` |
-| `HASDATA_API_KEY` | for trend research | HasData Google Trends MCP key — the default trend source for Step 2 keyword brainstorming. Read from `.env` by `scripts/mcp_headers.py` for the `.mcp.json` servers, not by `src/config.py` |
+| `HASDATA_API_KEY` | for trend research / Step 3 (`--source hasdata`) | HasData key on one shared credit balance, used by two things: the Step-2 Google Trends MCP server (read from `.env` by `scripts/mcp_headers.py` for `.mcp.json`, not by `src/config.py`) **and** the Step-3 HasData Google Shopping source (`src/config.py` reads it to call the REST API directly) |
 | `ALI_DS_STATE_PATH` | — | Optional saved AliExpress login (`storage_state`), injected only when the file exists; the DS Center answers anonymously, so it is never required. Refresh with `python scripts/generate_ali_session.py` |
 | `ALI_DS_MAX_PRODUCTS` | — | DS Center search page size / per-keyword expansion cap (default `20`) |
 | `MIN_DS_ORDER_COUNT` | — | AliExpress winning-product gate: minimum historical orders (default `500`) |
@@ -242,6 +286,8 @@ OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
 | `APIFY_GS_ACTOR` | — | Step-3 gold-research actor id (default `damilo/google-shopping-apify`) |
 | `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | — | Step-3 results requested per keyword; the actor's closed set is 10/20/30/40/50/100 (default `10`) |
 | `APIFY_GS_MAX_CHARGE_USD` | — | Step-3 hard USD spend ceiling per run, enforced by Apify itself (default `7.5`) |
+| `HASDATA_GS_BASE_URL` | — | Step-3 HasData source REST base; the client appends `/scrape/google/shopping` (default `https://api.hasdata.com`) |
+| `HASDATA_GS_MAX_RESULTS_PER_KEYWORD` | — | Step-3 HasData source: **local** cap on rows kept per keyword. Not an API parameter — one request returns the whole grid (~65 rows observed) and costs 10 credits whatever the slice, so this bounds LLM curation cost only (default `40`) |
 | `GOLD_PRODUCTS_PATH` | — | Step-3 gold-product deliverable Steps 4 and 6 read (default `outputs/json/step-3-gold-standard-products.json`) |
 | `KEYWORD_BANK_PATH` | — | Step-4 deliverable — the Step-5 keyword bank (default `outputs/json/step-4-gold-keywords.json`) |
 | `BANK_TARGET_PER_KEYWORD` | — | Step-5 packages exported per **(keyword, engine)** leg — the bank's keyword count multiplies it (default `2`) |
@@ -357,30 +403,58 @@ reasoning LLM.
 
 ```bash
 source .venv/bin/activate && python scripts/run_gold_standard_research.py \
+    [--source {apify,hasdata}] \
     [--keywords outputs/json/step-2-search-keywords.json] \
     [--limit 2] [--num 10] [--dump-raw /tmp/step3_raw_rows.json] \
     [--from-raw /tmp/step3_raw_rows.json] \
     [--output outputs/json/step-3-gold-standard-products.json]
 ```
 
-- **Scrape** (`src/extractors/google_shopping.py`): ONE batched run of the
-  `damilo/google-shopping-apify` actor (pay-per-result) carries every keyword,
-  `country="au"`, `max_pages=1`. Spend is governed three ways: the actor's
-  closed-set `num` is validated before any money moves; a hard
-  `max_total_charge_usd` ceiling rides the run options and is enforced by Apify
-  itself; `--limit N` pilots on the first N keywords. It is extractor-shaped but
-  deliberately **not** a `BaseSupplierExtractor` — these are marketplace retail
-  listings with no supplier PDP, freight quote or gallery, so they can never
-  become `RawSupplierProduct` without fabricating sourcing fields.
+- **Scrape — two interchangeable sources.** `--source` picks which free tier
+  pays; both hand the *same* `ShoppingRow` list to the same curator, so a
+  deliverable is equivalent whichever bought it.
+
+  | `--source` | Backing | Billing | `--num` means |
+  |---|---|---|---|
+  | `apify` (default) | `src/extractors/google_shopping.py` — ONE batched `damilo/google-shopping-apify` actor run, `country="au"`, `max_pages=1` | per **result** (~$3.50/1,000) | the actor's closed-set `num` (10/20/30/40/50/100), validated before any money moves |
+  | `hasdata` | `src/extractors/google_shopping_hasdata.py` — one HasData Google Shopping **request per keyword** | per **request**, 10 credits each | a **local** cap on the returned grid; no API effect |
+
+  Spend is bounded differently on each path for the same reason: the Apify
+  actor over-delivers a ~40-row SERP page whatever `num` says, so `--limit N`
+  plus a hard `max_total_charge_usd` ceiling (enforced by Apify itself) govern
+  it; a HasData request returns the whole grid (~65 rows observed) for a flat
+  10 credits, so the **keyword count is the spend** and `--limit N` is exactly
+  N requests. Both modules are extractor-shaped but deliberately **not** a
+  `BaseSupplierExtractor` — these are marketplace retail listings with no
+  supplier PDP, freight quote or gallery, so they can never become
+  `RawSupplierProduct` without fabricating sourcing fields.
 - **Curate** (`src/evaluators/gold_curator.py`): the LLM only **selects by
   verbatim `url`** and annotates pillar/compliance/economics. Every product fact
   is **code-assembled from the scraped rows**, so a hallucinated or edited url
   can never become a product. Rows carrying no rating/review KPI are filtered
   out before the LLM — a gold product must carry on-page demand evidence.
 - **Deliverable**: `GOLD_PRODUCTS_PATH` (+ a `.md` digest) in the untracked
-  `outputs/` tree. The runner prints the planned spend envelope before the first
-  call and exits non-zero when nothing usable comes back; `--from-raw` replays
-  curation over a prior dump at **zero Apify spend** (the debugging path).
+  `outputs/` tree. The runner prints the planned spend envelope — in the active
+  source's own cost unit (USD for Apify, credits for HasData) — before the first
+  call, and exits non-zero when nothing usable comes back; `--from-raw` replays
+  curation over a prior dump at **zero scrape spend** (the debugging path, and
+  it is source-agnostic: a HasData dump replays with no HasData charge).
+
+**Why the HasData source is an HTTP client, not MCP or a skill.** Step 2 reaches
+HasData through an MCP server, so the same route was the first choice here — but
+the gateway (`https://mcp.hasdata.com/mcp?apis=…`) enumerates 27 API groups and
+`google_shopping` is **not** among them (a `tools/list` probe answers `"No
+HasData tools match ?apis=google_shopping"`).
+
+The HasData skills *do* cover Google Shopping — the `hasdata` skill lists
+`/scrape/google/shopping`, and the `hasdata-cli` skill drives
+`hasdata google-shopping` (10 credits/call) — but a skill is an agent-facing
+instruction bundle, not something a Python runner can import, and shelling out
+to the CLI would add a per-machine binary to a pipeline whose tests are
+hermetic and network-free. So the module calls the REST endpoint directly with
+the `x-api-key` header; the official CLI builds the identical URL, which
+cross-checks the request shape. The skills stay installed for agent-side
+research (`.agents/skills/`, §5).
 
 ### 2.4 Step 4 — gold-standard keyword bank
 
@@ -888,6 +962,9 @@ dropship-scout-agent/
 ├── .env.example               # Template for runtime configuration
 ├── .env                       # Actual credentials — never committed
 ├── .mcp.json                  # Trend-research MCP servers (Step 2)
+├── skills-lock.json           # Pinned HasData agent skills (`.agents/skills/`, §2.3)
+├── .agents/skills/            # hasdata + hasdata-cli agent skills (.claude/skills/ symlinks in)
+├── docs/                      # Operator-local reference notes — git-ignored, never committed
 ├── src/
 │   ├── config.py              # Env-driven settings singleton
 │   ├── models.py              # Pydantic schemas + sourcing/anti-hallucination validators
@@ -900,7 +977,8 @@ dropship-scout-agent/
 │   │   ├── base.py            # Extractor ABC + block/timeout/not-configured exceptions
 │   │   ├── cj_mcp_extractor.py    # CJdropshipping MCP + commercial gate + liveness gate
 │   │   ├── aliexpress_ds.py       # Native Dropshipping Center ingestion + winner gate
-│   │   └── google_shopping.py     # Step-3 gold-research Apify actor wrapper (not a supplier extractor)
+│   │   ├── google_shopping.py     # Step-3 gold-research Apify actor wrapper (not a supplier extractor)
+│   │   └── google_shopping_hasdata.py  # Step-3 HasData shopping source (optional Apify alternative)
 │   ├── keywords/              # Step-4 gold-standard keyword engine
 │   │   ├── gold_keyword_prompt.md  # Step-4 prompt resource ({PRODUCT_TABLE} slot)
 │   │   └── generator.py       # Batched generation + code-side pool validation

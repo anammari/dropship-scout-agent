@@ -54,3 +54,7 @@ dist/
 
 # OS noise
 .DS_Store
+
+# Operator-local reference notes (CLAUDE.md §14.5): API guides and vendor
+# docs kept for a session to read, never repo artefacts. Untracked by design.
+docs/
