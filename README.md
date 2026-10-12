@@ -75,7 +75,7 @@ the result with Jev.
   transit window.
 - **No incomplete packages** — a candidate with fewer than 3 validated images
   is dropped entirely; an `images/`-less directory is never written.
-- **Ranking is a report, not a deletion** — Step 6 ranks the gold kernel against
+- **Ranking reports; Step 7 deletes.** Step 6 ranks the gold kernel against
   the gold products and writes a tiered shortlist/review/disregard report. It
   never moves or removes a package, and it cannot author or edit a product fact:
   Jev only scores similarity and winning value and picks a pillar.
@@ -516,7 +516,9 @@ source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
   (a live probe returned `3.24` for a 5-entry legend keyed `"0".."4"`), so the
   client shifts it by +1 onto 1–5 before any threshold is compared — with the
   shift, a shortlist score means "close match or better".
-- **A report, not a deletion.** No package directory is moved or removed — the
+- **A report, not a deletion — by the ranker.** No package directory is moved or
+  removed *by Step 6*; the separate Step-7 cleanup (dry run by default) is what
+  acts on the report and deletes. The
   ranker writes the tiered report and Step 7 (human) decides what to validate
   and link. A failed batch call retries once; if it still fails, only that
   batch's packages become `disregard` with a note, and the run continues.
@@ -526,6 +528,33 @@ source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
   value, rank score and pillar.
 
 ---
+
+### 2.8 Step 7 — cleanup (deletes the rejected packages)
+
+**The only step that deletes, and it is irreversible.** It reads the Step-6
+report and keeps the tree to what is still in play: every `shortlist` package is
+kept, the top `CLEANUP_REVIEW_KEEP` (**10**) `review` packages by `rank_score` are
+kept and the rest go, and every `disregard` package is deleted.
+
+```bash
+# 1. see exactly what would go (nothing is touched)
+source .venv/bin/activate && python scripts/cleanup_candidates.py
+
+# 2. delete, once the plan looks right
+source .venv/bin/activate && python scripts/cleanup_candidates.py --apply
+```
+
+**Dry run by default.** `--apply` is what deletes — the same posture as
+`my-store-build/scripts/shopify_admin.py`, whose `delete` is `--yes`-gated. A
+package holds images from the supplier's CDN and a `metadata.json` bought with
+HasData credits, CJ round trips and LLM calls, and the tier floors have never been
+calibrated on a live run, so the first pass should be read before it is trusted.
+
+Every candidate path is resolved and must sit strictly inside
+`<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/` and be named `product-NN` — checked
+twice, in the plan and again at the moment of deletion. An unrecognised tier or a
+refused path is **kept** and reported, so a report shape the cleanup does not know
+can never become a mass deletion.
 
 ## 3. Data Contract & Output Structure
 

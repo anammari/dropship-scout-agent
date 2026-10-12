@@ -267,6 +267,20 @@ class Settings:
         self.BANK_TARGET_PER_PRODUCT: int = _parse_int(
             os.getenv("BANK_TARGET_PER_PRODUCT"), default=2
         )
+        # Step-6 ranking report — Step 7's cleanup intake, and the record of
+        # what was ranked (including what cleanup later deleted).
+        self.MORNING_ANTHEM_RANKED_CANDIDATES_PATH: str = (
+            os.getenv("MORNING_ANTHEM_RANKED_CANDIDATES_PATH")
+            or "outputs/json/morning-anthem-step-6-ranked-candidates.json"
+        )
+        # Step-7 cleanup: how many `review` packages survive the cut. Shortlist
+        # packages are never deleted and `disregard` packages always are, so
+        # this is the only number that decides a borderline case — and deleting
+        # wrongly costs the HasData credits, CJ round trips and LLM calls that
+        # bought the package, which is why the runner is a dry run by default.
+        self.CLEANUP_REVIEW_KEEP: int = _parse_int(
+            os.getenv("CLEANUP_REVIEW_KEEP"), default=10
+        )
         # Step-5 Morning Anthem gold-kernel intake root: the supplier
         # subfolder is created under it by the runner, numbered independently
         # (`cjdropshipping/product-NN`).

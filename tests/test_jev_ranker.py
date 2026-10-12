@@ -439,10 +439,13 @@ def test_rank_batches_packages_and_shares_one_state(tmp_path):
         "cjdropshipping_product_04",
         "cjdropshipping_product_05",
     ]
-    # The per-product state carries the contract fields, and nothing else.
-    assert set(first["state"]["products"]["cjdropshipping_product_04"]) == set(
-        PRODUCT_STATE_FIELDS
-    )
+    # The per-product state carries the contract fields plus the code-derived
+    # markup — structured data the model reads, rather than prose it parses.
+    entry = first["state"]["products"]["cjdropshipping_product_04"]
+    assert set(entry) == set(PRODUCT_STATE_FIELDS) | {"markup_multiplier"}
+    assert set(entry) >= {
+        "suggested_price_aud", "estimated_cogs_aud", "projected_margin_aud",
+    }
     assert set(client.question_ids(0)) == {
         "cjdropshipping_product_04__similarity",
         "cjdropshipping_product_04__winning_value",
@@ -924,3 +927,45 @@ def test_the_ranker_writes_under_the_morning_anthem_deliverable_name():
     spec.loader.exec_module(runner)
     assert runner.DEFAULT_OUTPUT.name == "morning-anthem-step-6-ranked-candidates.json"
     assert runner.DEFAULT_OUTPUT.parent.name == "json"
+
+
+def test_the_state_carries_the_aud_figures_as_numbers_not_prose(tmp_path):
+    """The value judgement reads structured AUD figures, not a sentence.
+
+    The instruction names the fields; the numbers themselves ride in the state,
+    so the model is never asked to parse them out of text.
+    """
+    root = _export_root(tmp_path)
+    package = root / "cjdropshipping" / "product-04" / "metadata.json"
+    package.write_text(
+        json.dumps(
+            {
+                **METADATA,
+                "suggested_price_aud": 49.95,
+                "estimated_cogs_aud": 19.98,
+                "projected_margin_aud": 29.97,
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = ScriptedJevClient(lambda state, questions, i: _perfect_answers(questions))
+    _ranker(tmp_path, client, export_root=root).rank()
+
+    entry = client.calls[0]["state"]["products"]["cjdropshipping_product_04"]
+    assert entry["suggested_price_aud"] == pytest.approx(49.95)
+    assert entry["estimated_cogs_aud"] == pytest.approx(19.98)
+    assert entry["projected_margin_aud"] == pytest.approx(29.97)
+    # The markup is derived in code — the model must not do the division.
+    assert entry["markup_multiplier"] == pytest.approx(2.5)
+
+
+def test_a_missing_or_zero_cost_yields_no_markup_rather_than_a_crash():
+    from src.ranking.jev_product_ranker import _markup_multiplier
+
+    assert _markup_multiplier({"suggested_price_aud": 10, "estimated_cogs_aud": 0}) is None
+    assert _markup_multiplier({"suggested_price_aud": 10}) is None
+    assert _markup_multiplier({"estimated_cogs_aud": 4}) is None
+    assert _markup_multiplier({"suggested_price_aud": "x", "estimated_cogs_aud": 4}) is None
+    assert _markup_multiplier(
+        {"suggested_price_aud": 12.0, "estimated_cogs_aud": 4.0}
+    ) == pytest.approx(3.0)

@@ -368,6 +368,12 @@ outputs/json/morning-anthem-step-4-keyword-bank.json
               │
               ▼  Step 6: Jev ranks packages vs the gold list (global appeal)
 outputs/json/morning-anthem-step-6-ranked-candidates.{json,md}
+              │
+              ▼  Step 7: cleanup — delete the rejected packages (dry run by
+                 default; --apply deletes). shortlist kept, review capped at 10,
+                 disregard removed (§7.9)
+  my-store-build/inspiration/morning-anthem-candidates/cjdropshipping/product-NN/
+  (only the packages still in play)
 ```
 
 **Export root rename:** the gold-kernel tree moves from
@@ -802,6 +808,47 @@ rewritten for Morning Anthem:
 **Runner:** `scripts/rank_optimal_candidates.py` rewritten in place
 (`--gold-products`, `--export-root`, `--batch-size`, `--output` defaults
 from the renamed settings).
+
+---
+
+## 7.9 (inserted above §8) — Step 7: automated cleanup (operator override 2026-10-12)
+
+**This overrides the earlier "ranking is a report, not a deletion" rule.** The
+ranker still writes a report and still moves nothing itself, but a separate,
+explicit step now acts on that report so the workspace holds only what is still
+in play:
+
+| Tier | Action |
+|---|---|
+| `shortlist` | **keep** every package |
+| `review` | keep the top `CLEANUP_REVIEW_KEEP` (**10**) by `rank_score`; **delete** the rest |
+| `disregard` | **delete** every package |
+
+Implemented as `src/pipeline/cleanup.py` (the logic) +
+`scripts/cleanup_candidates.py` (the runner) + `tests/test_cleanup.py`.
+
+**Safety, because deletion is irreversible and re-creating a package costs HasData
+credits, CJ round trips and LLM calls:**
+
+* **Dry run by default.** Without `--apply` the step prints exactly what it would
+  delete and deletes nothing — the repo's existing precedent for irreversible
+  operations is `my-store-build/scripts/shopify_admin.py`, whose `delete` is
+  `--yes`-gated. This matters especially here: the tier floors (3.5 / 2.5) have
+  never been calibrated against a live run, so the first pass should be reviewed
+  before it is allowed to destroy anything.
+* **Path containment.** Each candidate path is resolved and must sit strictly
+  inside `<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/`, be named `product-NN`, and
+  not be the supplier folder itself. A report naming anything else is refused and
+  nothing is deleted.
+* **Only what the report names.** A package the ranking skipped (unreadable
+  metadata) never reaches the report, so cleanup cannot touch it.
+* **Idempotent and logged.** An already-absent package is reported as absent, not
+  as an error, and every kept and deleted directory is named in the output.
+
+**A safer alternative, if the operator ever wants it:** a quarantine flag that
+*moves* rejected packages to `_disregarded/` instead of deleting them, so a
+mistaken threshold costs a rename rather than the HasData credits that bought the
+package. Off by default; deletion is what the override asked for.
 
 ---
 

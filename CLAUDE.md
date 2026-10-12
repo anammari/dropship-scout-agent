@@ -1406,7 +1406,11 @@ retries one `JevError`; if the second attempt fails, only that batch's packages
 become `disregard` with `Jev batch call failed: <exc>` — the run never aborts on
 one bad call and later batches still rank.
 
-**Ranking is a report, not a deletion (plan §8.3).** No package directory is
+**Ranking is a report, not a deletion (plan §8.3) — SUPERSEDED in part:** the
+ranker still deletes nothing, but the operator's 2026-10-12 override added an
+automated **Step 7 cleanup** that acts on this report and does delete (see
+§13.8). The paragraph below describes the ranker itself, which is unchanged. No
+package directory is
 moved or removed — the ranker writes the tiered report and lets Step 7 (human)
 decide what to validate and link. Jev authors no product fact either: it returns
 only a similarity score, a winning-value score and a pillar; every field in the
@@ -1848,7 +1852,8 @@ projected margin weighed against the gold reference's demand evidence) and
 `rank_score = 0.6·similarity + 0.4·value` ≥ `JEV_SHORTLIST_MIN_SCORE` (3.5) →
 shortlist, ≥ `JEV_REVIEW_MIN_SCORE` (2.5) → review, else disregard.
 
-**Ranking is a report, not a deletion**: no package is moved or removed, and Jev
+**Ranking deletes nothing** — the ranker writes a report and touches no package
+directory (the Step-7 cleanup is the only step that deletes; see below), and Jev
 authors no product fact — every field in the report is copied verbatim from the
 package's `metadata.json`. A post-evaluation compliance gate then forces any
 package whose own text carries a banned token to `disregard` regardless of score.

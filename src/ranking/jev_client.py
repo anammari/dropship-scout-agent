@@ -153,13 +153,14 @@ QUESTIONS: Dict[str, Dict[str, Any]] = {
     "winning_value": {
         "type": "score",
         "instructions": (
-            "Judge the commercial value of `products.{slug}` from its own "
-            "suggested retail price, landed cost and projected gross margin "
-            "in AUD, weighed against the demand evidence recorded for "
-            "comparable gold-standard products in `gold_reference`. Strong "
-            "margin alone is not demand: a product with no demand evidence for "
-            "its type scores low however healthy its margin, and a healthy "
-            "margin on a price Australian shoppers would not pay is not value."
+            "Judge the commercial value of `products.{slug}` from the AUD "
+            "figures it carries — `suggested_price_aud`, `estimated_cogs_aud`, "
+            "`projected_margin_aud` and the pre-computed `markup_multiplier` — "
+            "weighed against the demand evidence recorded for comparable "
+            "gold-standard products in `gold_reference`. Strong margin alone is "
+            "not demand: a product with no demand evidence for its type scores "
+            "low however healthy its margin, and a healthy margin on a price "
+            "Australian shoppers would not pay is not value."
         ),
         "criteria": VALUE_LEVELS,
     },

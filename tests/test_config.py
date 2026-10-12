@@ -341,6 +341,26 @@ def test_bank_target_per_keyword_blank_falls_back_to_the_default(monkeypatch):
     assert load_settings().BANK_TARGET_PER_PRODUCT == 2
 
 
+def test_cleanup_review_keep_defaults_to_ten(monkeypatch):
+    # The only number that decides a borderline deletion: shortlist is always
+    # kept, disregard always deleted.
+    monkeypatch.delenv("CLEANUP_REVIEW_KEEP", raising=False)
+    assert load_settings().CLEANUP_REVIEW_KEEP == 10
+
+
+def test_cleanup_review_keep_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("CLEANUP_REVIEW_KEEP", "4")
+    assert load_settings().CLEANUP_REVIEW_KEEP == 4
+
+
+def test_ranked_candidates_path_defaults_to_the_step_6_report(monkeypatch):
+    monkeypatch.delenv("MORNING_ANTHEM_RANKED_CANDIDATES_PATH", raising=False)
+    assert (
+        load_settings().MORNING_ANTHEM_RANKED_CANDIDATES_PATH
+        == "outputs/json/morning-anthem-step-6-ranked-candidates.json"
+    )
+
+
 def test_morning_anthem_export_dir_defaults_to_the_gold_kernel_tree(monkeypatch):
     # Distinct from EXPORT_DIR: the gold-kernel intake is its own tree, with
     # the CJdropshipping supplier subfolder under it.

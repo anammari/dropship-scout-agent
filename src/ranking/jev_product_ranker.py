@@ -7,7 +7,8 @@ sole supplier) plus the Step-3 gold-standard product list
 (`outputs/json/morning-anthem-step-3-gold-products.json`). Every package in
 the supplier folder is ranked; nothing is filtered on the way in.
 
-**Ranking is a report, not a deletion.** The ranker never moves or deletes a
+**Ranking writes a report and deletes nothing.** The ranker itself never moves
+or deletes a
 package directory — it writes a tiered report (shortlist / review / disregard)
 to `outputs/json/morning-anthem-step-6-ranked-candidates.json` (+
 `outputs/md/…md`) and lets the operator (Step 7) decide what to validate and
@@ -75,7 +76,11 @@ GOLD_REFERENCE_FIELDS = (
     "demand_evidence",
 )
 
-#: Package `metadata.json` fields projected into a call's per product state.
+#: Package `metadata.json` fields projected into a call's per product state, so
+#: the model reads the AUD figures as structured data rather than parsing prose.
+#: `markup_multiplier` is NOT one of them: the export contract has no such key,
+#: and it is derived in code (below) because the model must not do the division —
+#: the repo's rule is that LLM arithmetic is never trusted.
 PRODUCT_STATE_FIELDS = (
     "product_title",
     "category",
@@ -88,6 +93,31 @@ PRODUCT_STATE_FIELDS = (
     "supplier_name",
     "supplier_retail_url",
 )
+
+
+def _markup_multiplier(metadata: Dict[str, Any]) -> Optional[float]:
+    """Suggested retail ÷ landed cost, to two places, or None.
+
+    Supplied because the margin floor is an OR — 2.5x markup OR AUD 10 gross —
+    and a model judging "winning value" should see both legs without dividing. A
+    zero or missing cost yields None rather than a division error or an infinite
+    markup.
+    """
+    retail = metadata.get("suggested_price_aud")
+    cogs = metadata.get("estimated_cogs_aud")
+    for value in (retail, cogs):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+    if cogs <= 0:
+        return None
+    return round(retail / cogs, 2)
+
+
+def _product_state(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """The per-product state entry: the projected fields plus the derived markup."""
+    state = {field: metadata.get(field) for field in PRODUCT_STATE_FIELDS}
+    state["markup_multiplier"] = _markup_multiplier(metadata)
+    return state
 
 #: The post-evaluation compliance gate (operator directive 2026-09-30): the
 #: AICIS boundary tokens — one source of truth with the keyword engine — plus
@@ -296,12 +326,9 @@ class JevProductRanker:
     ) -> List[RankedPackage]:
         state = {
             "gold_reference": gold_reference,
-            "products": {
-                ref.slug: {
-                    key: ref.metadata.get(key) for key in PRODUCT_STATE_FIELDS
-                }
-                for ref in batch
-            },
+            # Structured data, not prose: the AUD figures and the derived markup
+            # ride here so the model reads them rather than parsing a sentence.
+            "products": {ref.slug: _product_state(ref.metadata) for ref in batch},
         }
         questions: Dict[str, Dict[str, Any]] = {}
         for ref in batch:
