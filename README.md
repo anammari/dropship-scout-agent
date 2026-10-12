@@ -277,12 +277,17 @@ source .venv/bin/activate && python scripts/gate_trend_keywords.py \
   **code** cuts the best `TREND_SELECT_TARGET` (30). The state hands the model
   everything it can use: each query, its pillar, its Trends evidence verbatim
   and the kind of figure it is (a 5-year mean and a rising query are different
-  claims), plus the brand line and all five pillar descriptions. A per-pillar
-  floor (`TREND_SELECT_MIN_PER_PILLAR`, 2) is applied before the score fill, so
-  a crowded pillar cannot consume every paid slot. Scoring is batched at 12 per
-  call; a failed batch retries once, then its rows rank last — and if *nothing*
-  scored, nothing is selected and the runner halts, because scraping an unranked
-  pool would spend the budget on no basis.
+  claims), plus the brand line and all five pillar descriptions. **Code then
+  owns representation**: each pillar's quota is its proportional share of the
+  target (floor `TREND_SELECT_MIN_PER_PILLAR`, 2; never more than the pool
+  holds), reconciled to the target by largest remainder, and within each pillar
+  the best rows take the quota. So a pillar supplying 40 of 60 candidates takes
+  ~20 of 30 slots rather than all 30 — the cut mirrors the researched demand
+  instead of the loudest pillar's scores. `--no-pillar-quota` reverts to a pure
+  best-of. Scoring is batched at 12 per call; a failed batch retries once, then
+  its rows rank last — and if *nothing* scored, nothing is selected and the
+  runner halts, because scraping an unranked pool would spend the budget on no
+  basis.
 - **Deliverables**: the **selected** keywords go to
   `MORNING_ANTHEM_TREND_KEYWORDS_PATH` (Step 3's intake, so its credit envelope
   is exactly that list); the full gated pool goes beside it as `…-gated.json`

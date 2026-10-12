@@ -18,14 +18,31 @@ demand evidence verbatim and the *kind* of evidence it is (a 5-year mean vs a
 rising/related-query figure); once per call the brand line, the task, how many
 are being selected and the five pillar descriptions.
 
+**Two objectives, and only the first belongs to Jev.**
+
+1. *Filter out non-products and irrelevant Trends* — that is the **gate**
+   (`trend_gate.py`), which runs before this pass.
+2. *Take the best N while still representing the researched pool* — this pass.
+   A per-candidate score cannot see the pool, so **balance is not a judgement
+   for the model**; it is structural, and imposed by code. Asking Jev to balance
+   would also make the outcome depend on how candidates happen to fall into
+   batches.
+
 **The cut is deterministic code:**
 
-1. sort by Jev's score, descending;
-2. break ties by whether the candidate carries demand evidence, then by the
-   keyword string — so the same pool always yields the same selection;
-3. apply a per-pillar floor first (`TREND_SELECT_MIN_PER_PILLAR`), so a strong
-   pillar cannot crowd a weaker one out of the launch entirely;
-4. fill the remaining slots by score until `TREND_SELECT_TARGET` is reached.
+1. work out each pillar's **quota** from the pool's own distribution
+   (`_quotas`): the pillar's proportional share of the target, given a floor of
+   `TREND_SELECT_MIN_PER_PILLAR` and never more than the pool actually holds, and
+   reconciled to the target by largest remainder;
+2. within each pillar, take the best-scoring candidates up to that quota;
+3. fill any shortfall (a pillar the pool could not fill, or a failed batch) by
+   score across the whole pool;
+4. ties break by whether the candidate carries demand evidence, then by the
+   keyword string — so the same pool always yields the same selection.
+
+The result mirrors the researched demand: a pillar that supplied 40 of 60
+candidates takes about 20 of the 30 slots rather than all 30, and no pillar that
+supplied candidates is dropped. `--no-pillar-quota` restores a pure best-of.
 
 A candidate whose batch failed twice scores as unclassified and ranks last, so
 it is taken only if slots remain — the same containment the other Jev passes
@@ -51,6 +68,7 @@ from src.ranking.jev_client import (
     answer_score,
 )
 from src.research.trend_gate import GatedKeyword, TrendGateError
+from collections import Counter  # noqa: F401  (kept for callers importing it)
 
 #: The question name each candidate carries; the batch fan-in keys off
 #: `<index>__keyword_quality`.
@@ -118,6 +136,7 @@ class TrendKeywordSelector:
         batch_size: Optional[int] = None,
         target: Optional[int] = None,
         min_per_pillar: Optional[int] = None,
+        pillar_quota: bool = True,
     ) -> None:
         self.batch_size = (
             batch_size
@@ -142,6 +161,9 @@ class TrendKeywordSelector:
             raise TrendGateError(
                 f"min_per_pillar must be >= 0 (got {self.min_per_pillar})"
             )
+        #: Proportional representation by default; False restores a pure
+        #: best-of cut (an escape hatch, not the recommended shape).
+        self.pillar_quota = pillar_quota
         # The client last: with an injected client this never touches `.env`.
         self.client = client if client is not None else JevClient()
 
@@ -241,7 +263,12 @@ class TrendKeywordSelector:
                     )
                 )
 
-        picked = _cut(scored, self.target, self.min_per_pillar)
+        picked = _cut(
+            scored,
+            self.target,
+            self.min_per_pillar,
+            pillar_quota=self.pillar_quota,
+        )
 
         # Inverted tolerance, the same rule §5/§6.2/§6.3 apply to stock,
         # seller proof and freight: if Jev scored NOTHING, "we couldn't tell"
@@ -274,10 +301,81 @@ def _evidence_kind(evidence: str) -> str:
     return "other Trends figure"
 
 
+def pillar_quotas(
+    counts: Dict[str, int], target: int, min_per_pillar: int
+) -> Dict[str, int]:
+    """How many slots each pillar gets, in the pool's own proportions.
+
+    Proportional representation, not a score race: a pillar that supplied 40 of
+    60 candidates takes about 20 of 30 slots rather than all 30, and every
+    pillar that supplied candidates keeps at least ``min_per_pillar`` of them
+    (capped by what the pool holds). Shares are floored, the floor is applied,
+    then the remaining slots go out by largest remainder — so the quotas sum to
+    exactly ``target`` whenever the pool can fill it, and the same pool always
+    yields the same quotas.
+    """
+    pillars = [p for p in PILLARS if counts.get(p, 0) > 0]
+    if not pillars or target <= 0:
+        return {}
+
+    total = sum(counts[p] for p in pillars)
+    ideal = {p: target * counts[p] / total for p in pillars}
+    # Never promise a pillar more slots than it actually holds: when the target
+    # is wider than the pool the proportional share overshoots the candidates.
+    quota = {
+        p: min(
+            counts[p],
+            max(int(ideal[p]), min(min_per_pillar, counts[p])),
+        )
+        for p in pillars
+    }
+
+    def headroom(p: str) -> int:
+        return quota[p] - min(min_per_pillar, counts[p])
+
+    # Trim over-allocation (the floor can overshoot a small target) from the
+    # pillars not already at their own floor, largest first.
+    while sum(quota.values()) > target:
+        room = [p for p in pillars if headroom(p) > 0]
+        if not room:
+            break
+        victim = max(room, key=lambda p: (quota[p], counts[p], -pillars.index(p)))
+        quota[victim] -= 1
+
+    # Hand the remaining slots out by largest fractional remainder, then by the
+    # bigger pool, then in PILLARS order — a total order, so it is reproducible.
+    while sum(quota.values()) < target:
+        room = [p for p in pillars if quota[p] < counts[p]]
+        if not room:
+            break
+        winner = max(
+            room,
+            key=lambda p: (ideal[p] - quota[p], counts[p], -pillars.index(p)),
+        )
+        quota[winner] += 1
+
+    if sum(quota.values()) > target:
+        # The floor is unreachable: min_per_pillar x pillars exceeds the target
+        # and no pillar has candidates above its floor to trim from. Silently
+        # exceeding the target would spend more Step-3 credits than budgeted,
+        # and silently dropping the floor would break the representation
+        # promise — so say so instead.
+        raise TrendGateError(
+            f"cannot select {target} keyword(s) with min_per_pillar="
+            f"{min_per_pillar} across {len(pillars)} pillar(s) holding "
+            f"candidates: the floor alone needs {sum(quota.values())} slot(s). "
+            f"Lower min_per_pillar or raise the target."
+        )
+    return quota
+
+
 def _cut(
-    scored: List[ScoredKeyword], target: int, min_per_pillar: int
+    scored: List[ScoredKeyword],
+    target: int,
+    min_per_pillar: int,
+    pillar_quota: bool = True,
 ) -> List[ScoredKeyword]:
-    """Deterministically pick ``target`` rows, honouring the pillar floor.
+    """Deterministically pick ``target`` rows, representing every pillar.
 
     Sorting is stable and total: score descending, then has-evidence before
     no-evidence, then the keyword string — so the same pool and the same scores
@@ -295,20 +393,22 @@ def _cut(
     picked: List[ScoredKeyword] = []
     seen: set[int] = set()
 
-    # 1) the per-pillar floor, in PILLARS order so the result is stable.
-    if min_per_pillar:
-        for pillar in PILLARS:
-            taken = 0
-            for row in ordered:
-                if taken >= min_per_pillar or len(picked) >= target:
-                    break
-                if id(row) in seen or row.pillar != pillar:
-                    continue
-                picked.append(row)
-                seen.add(id(row))
-                taken += 1
+    if pillar_quota:
+        # 1) each pillar's share, taking its best rows up to the quota.
+        counts: Dict[str, int] = {}
+        for row in ordered:
+            counts[row.pillar] = counts.get(row.pillar, 0) + 1
+        quotas = pillar_quotas(counts, target, min_per_pillar)
+        taken: Dict[str, int] = {}
+        for row in ordered:
+            if taken.get(row.pillar, 0) >= quotas.get(row.pillar, 0):
+                continue
+            picked.append(row)
+            seen.add(id(row))
+            taken[row.pillar] = taken.get(row.pillar, 0) + 1
 
-    # 2) the rest by score order.
+    # 2) any shortfall by score across the whole pool — a pillar the pool could
+    # not fill its quota for, a failed batch, or a pure best-of run.
     for row in ordered:
         if len(picked) >= target:
             break

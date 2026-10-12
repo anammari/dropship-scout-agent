@@ -265,13 +265,32 @@ def test_the_pillar_floor_lifts_a_weak_pillar_into_the_selection():
     assert len(picked) == 2
 
 
-def test_a_pure_best_of_cut_ignores_pillars():
+def test_the_default_cut_is_proportional_not_a_score_race():
+    # Two brew rows outscore the only sunrise_move row, but a score race would
+    # hand both brew slots over and leave that pillar unrepresented in the
+    # launch. Proportional quotas give brew its share and sunrise_move its one.
     pool = [
         _kept("brew a", "brew_fuel"),
         _kept("brew b", "brew_fuel"),
         _kept("move a", "sunrise_move"),
     ]
     selected = _selector([_scores([5, 4, 1])], target=2, min_per_pillar=0).select(pool)
+    assert [row.keyword for row in selected if row.selected] == ["brew a", "move a"]
+
+
+def test_a_pure_best_of_cut_is_still_available():
+    pool = [
+        _kept("brew a", "brew_fuel"),
+        _kept("brew b", "brew_fuel"),
+        _kept("move a", "sunrise_move"),
+    ]
+    selector = TrendKeywordSelector(
+        client=ScriptedJevClient([_scores([5, 4, 1])]),
+        target=2,
+        min_per_pillar=0,
+        pillar_quota=False,
+    )
+    selected = selector.select(pool)
     assert [row.keyword for row in selected if row.selected] == ["brew a", "brew b"]
 
 
@@ -287,7 +306,10 @@ def test_the_floor_never_exceeds_what_a_pillar_has():
     }
 
 
-def test_the_floor_cannot_overshoot_the_target():
+def test_a_floor_that_cannot_fit_the_target_fails_loudly():
+    # Five pillars x floor 2 = 10 slots for a target of 2. Overspending the
+    # Step-3 budget silently would be worse than stopping, and ignoring the
+    # floor would break the representation promise — so it raises.
     pool = [
         _kept("a", "brew_fuel"),
         _kept("b", "sunrise_move"),
@@ -295,10 +317,97 @@ def test_the_floor_cannot_overshoot_the_target():
         _kept("d", "restful_reset"),
         _kept("e", "morning_table"),
     ]
+    with pytest.raises(TrendGateError, match="min_per_pillar"):
+        _selector([_scores([5, 5, 5, 5, 5])], target=2, min_per_pillar=2).select(pool)
+
+
+def test_quotas_are_proportional_to_the_pool():
+    from src.research.trend_select import pillar_quotas
+
+    # A pool shaped like the researched demand: one pillar dominates.
+    quotas = pillar_quotas(
+        {"brew_fuel": 40, "sunrise_move": 8, "mindful_awakening": 6,
+         "restful_reset": 4, "morning_table": 2},
+        target=30,
+        min_per_pillar=2,
+    )
+    assert sum(quotas.values()) == 30
+    # Roughly the pool's proportions — not all 30 to the loudest pillar. The
+    # dominant pillar lands at 19, not its ideal 20: the floor lifts the
+    # smallest pillar from 1 to 2 and that slot comes off the biggest one.
+    assert quotas["brew_fuel"] == 19
+    assert quotas["sunrise_move"] == 4
+    assert quotas["mindful_awakening"] == 3
+    assert quotas["morning_table"] == 2
+
+
+def test_quotas_sum_to_the_target_whenever_the_pool_can_fill_it():
+    from src.research.trend_select import pillar_quotas
+
+    for counts in (
+        {"brew_fuel": 9, "restful_reset": 1, "morning_table": 1, "mindful_awakening": 1},
+        {"brew_fuel": 40, "sunrise_move": 8, "morning_table": 2},
+        {"brew_fuel": 1},
+        {"brew_fuel": 6, "morning_table": 6},
+    ):
+        quotas = pillar_quotas(counts, target=20, min_per_pillar=2)
+        assert sum(quotas.values()) == min(20, sum(counts.values()))
+
+
+def test_an_infeasible_floor_raises_rather_than_overspending():
+    from src.research.trend_select import pillar_quotas
+
+    # 3 pillars x floor 2 cannot fit a target of 5, and no pillar holds more
+    # than its floor to trim from. Overspending the budget silently is the
+    # failure mode this guard exists to prevent.
+    with pytest.raises(TrendGateError, match="floor alone needs"):
+        pillar_quotas(
+            {"brew_fuel": 7, "sunrise_move": 7, "morning_table": 6},
+            target=5,
+            min_per_pillar=2,
+        )
+
+
+def test_quotas_never_exceed_what_a_pillar_actually_holds():
+    from src.research.trend_select import pillar_quotas
+
+    quotas = pillar_quotas({"brew_fuel": 30, "morning_table": 1}, target=20, min_per_pillar=2)
+    assert quotas["morning_table"] == 1
+    assert quotas["brew_fuel"] == 19
+
+
+def test_every_pillar_holding_candidates_is_represented():
+    from src.research.trend_select import pillar_quotas
+
+    # The floor is what stops a pillar being crowded out entirely.
+    quotas = pillar_quotas(
+        {"brew_fuel": 50, "sunrise_move": 3, "mindful_awakening": 3,
+         "restful_reset": 2, "morning_table": 2},
+        target=30,
+        min_per_pillar=2,
+    )
+    assert all(count >= 2 for count in quotas.values())
+
+
+def test_the_cut_selects_each_pillars_best_up_to_its_quota():
+    # Within a pillar the best rows win; across pillars the quotas decide.
+    pool = [
+        _kept("brew top", "brew_fuel"),
+        _kept("brew mid", "brew_fuel"),
+        _kept("brew low", "brew_fuel"),
+        _kept("brew lowest", "brew_fuel"),
+        _kept("move only", "sunrise_move"),
+        _kept("mind only", "mindful_awakening"),
+    ]
     selected = _selector(
-        [_scores([5, 5, 5, 5, 5])], target=2, min_per_pillar=2
+        [_scores([5, 4, 3, 2, 1, 1])], target=4, min_per_pillar=1
     ).select(pool)
-    assert sum(1 for row in selected if row.selected) == 2
+    picked = [row.keyword for row in selected if row.selected]
+    # brew's quota is 2 of 4 (its proportional share) so its two best go in...
+    assert picked[:2] == ["brew top", "brew mid"]
+    # ...and each of the other pillars takes its floor slot.
+    assert set(picked) == {"brew top", "brew mid", "move only", "mind only"}
+    assert "brew low" not in picked
 
 
 # ---------------------------------------------------------------------------

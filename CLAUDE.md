@@ -537,7 +537,7 @@ with the AliExpress extractor (§1). CJ's MCP server needs only its token.
 | `TREND_GATE_BATCH_SIZE` | `8` | Step-2 Jev product-intent gate: candidate strings per System One call |
 | `TREND_SELECT_BATCH_SIZE` | `12` | Step-2 Jev **selection** pass: candidates per System One call |
 | `TREND_SELECT_TARGET` | `30` | how many keywords the selection picks for the Step-3 scrape — **this IS the Step-3 budget** (10 credits each) |
-| `TREND_SELECT_MIN_PER_PILLAR` | `2` | per-pillar floor in the selection cut, so a crowded pillar cannot consume every paid slot (0 = pure best-of) |
+| `TREND_SELECT_MIN_PER_PILLAR` | `2` | per-pillar floor inside each pillar's proportional selection quota, so a crowded pillar cannot consume every paid slot |
 | `PILLAR_GATE_BATCH_SIZE` | `4` | Step-3 Jev pillar gate: candidate products per System One call |
 | `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter (general intake §9) |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads |
@@ -1646,7 +1646,17 @@ so every drop is auditable.
 
 The gated pool is wider than the Step-3 scrape can afford (one Google Shopping
 request per keyword, 10 HasData credits each), so the narrowing is a **decision
-made by Jev**, not a hand-pick — the same call shape the Step-6 ranker uses:
+made by Jev**, not a hand-pick — the same call shape the Step-6 ranker uses.
+
+**Jev's two Step-2 objectives:** **(A)** filter out non-products and irrelevant
+Trends — the **gate** pass enforces it (four-way intent verdict + banned-token
+screen); **(B)** pick the best 30 of the ~60 usable candidates across all five
+pillars, **representing the researched pool so the outcome is as close to
+pillar-unbiased as the data allows** — shared between the selection pass and
+code. The split is the design: Jev judges one candidate at a time (a
+per-candidate score cannot see the pool, so balance is not a judgement it can
+make, and asking it to balance would make the outcome depend on batching), and
+**code owns representation**.
 
 * **One score question per candidate**, `<i>__keyword_quality`, over five
   ordered levels measuring one axis: how good the string is as a
@@ -1656,11 +1666,17 @@ made by Jev**, not a hand-pick — the same call shape the Step-6 ranker uses:
   (5-year mean vs rising/related-query figure — not the same claim); once per
   call the brand line, the task, the selection size and the five pillar
   descriptions.
-* **The cut is code**: sort by score, tie-break on evidence-then-string (so the
-  selection is reproducible), take the top `TREND_SELECT_TARGET` (30) with a
-  per-pillar floor (`TREND_SELECT_MIN_PER_PILLAR`, 2) applied first, so a
-  crowded pillar cannot consume every paid slot. Batched at
+* **The cut is code, and representative by construction**: each pillar gets a
+  **quota** — its proportional share of the target, given a floor of
+  `TREND_SELECT_MIN_PER_PILLAR` (2) and never more than the pool holds,
+  reconciled to `TREND_SELECT_TARGET` (30) by largest remainder; within each
+  pillar the best rows take the quota, and a shortfall fills by score across the
+  pool. A pillar supplying 40 of 60 candidates takes ~20 of 30 slots rather than
+  all 30, and no pillar that supplied candidates is dropped. Ties break on
+  evidence-then-string, so a selection is reproducible. Batched at
   `TREND_SELECT_BATCH_SIZE` (12), inside the vendor's ~13-question envelope.
+  `--no-pillar-quota` reverts to a pure best-of, and a floor that cannot fit the
+  target **raises** rather than silently overspending the budget.
 * **Fail-closed**: a failed batch retries once, then its candidates are
   unclassified and rank last. If **nothing** scored, **nothing is selected** and
   the runner raises `Step 2 Selection Failed` — spending the Step-3 budget on an
