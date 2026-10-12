@@ -17,7 +17,7 @@ from src.research.pillar_gate import (
     GatedProduct,
     PillarCandidate,
     PillarGate,
-    attach_pillars,
+    to_gold_products,
 )
 from src.research.trend_gate import (
     INTENT_OPTIONS,
@@ -37,7 +37,7 @@ __all__ = [
     "GatedProduct",
     "PillarCandidate",
     "PillarGate",
-    "attach_pillars",
+    "to_gold_products",
     "INTENT_OPTIONS",
     "TREND_GATE_QUESTION",
     "GatedKeyword",

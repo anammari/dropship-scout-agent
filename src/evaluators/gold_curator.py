@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -124,17 +124,45 @@ class GoldSelection(BaseModel):
     unit_economics_note: Optional[str] = None
 
 
-class GoldStandardProduct(BaseModel):
-    """One row of the Step-3 deliverable (facts are code-assembled)."""
+class CuratedProduct(BaseModel):
+    """One row the curator selected and code assembled — BEFORE classification.
+
+    Every field here is a scraped fact or a code-derived string; the LLM chose
+    the row and wrote only the two notes. `pillar` is deliberately absent: the
+    Jev pillar gate decides it, downstream, and `GoldStandardProduct` is where
+    that verdict lands. Keeping the two models apart means a product can never
+    be mistaken for classified while it is not.
+    """
 
     name: str
     url: str
     description: Optional[str] = None
     retail_price_text: Optional[str] = None
-    #: Assigned by the Jev pillar gate AFTER curation (this module leaves it
-    #: empty). The deliverable always carries one of the five keys, because a
-    #: product the gate cannot place never reaches the deliverable.
-    pillar: str = ""
+    compliance_note: str
+    demand_evidence: str
+    unit_economics_note: Optional[str] = None
+    source_keyword: str = ""
+
+
+class GoldStandardProduct(BaseModel):
+    """One row of the Step-3 deliverable: a curated product WITH its pillar.
+
+    `pillar` is required, not defaulted. The only constructor is the Jev pillar
+    gate (`src/research/pillar_gate.py`), so every instance that exists has been
+    classified and the model cannot represent a half-finished product.
+    """
+
+    name: str
+    url: str
+    description: Optional[str] = None
+    retail_price_text: Optional[str] = None
+    pillar: Literal[
+        "brew_fuel",
+        "sunrise_move",
+        "mindful_awakening",
+        "restful_reset",
+        "morning_table",
+    ]
     compliance_note: str
     demand_evidence: str
     unit_economics_note: Optional[str] = None
@@ -295,33 +323,46 @@ class GoldProductCurator:
             )
         return content
 
-    def curate(self, rows: List[ShoppingRow]) -> List[GoldStandardProduct]:
-        """Select + annotate rows into gold-standard products (code-assembled).
+    def curate(self, rows: List[ShoppingRow]) -> List[CuratedProduct]:
+        """Select + annotate rows into curated products (code-assembled facts).
 
-        Rows carrying no rating/review KPI are dropped before the LLM: a gold
-        product must cite on-page demand evidence, so
-        `demand_evidence="not_available_from_source"` can never be emitted.
+        Two filters run BEFORE the LLM, both fail-closed, because a gold row that
+        cannot carry its own evidence is not worth reasoning about:
+
+        * **demand evidence** (operator decision 2026-09-28) — a row with neither
+          a rating nor a review count has no verifiable demand signal, so
+          `demand_evidence="not_available_from_source"` can never be emitted;
+        * **a readable price** (operator decision 2026-10-12) — the gold list's
+          retail price is the benchmark the whole exercise is measured against,
+          and it is what the curator's own `unit_economics_note` reasons from. A
+          row whose price cannot be read is dropped here rather than carried as a
+          blank. Note this price is *benchmark* evidence, not a cost: Step 5's
+          margin floor is computed from the supplier's own listed price plus its
+          freight quote, so a missing gold price would not corrupt the margin
+          maths — it would leave a hole in the reference set instead.
         """
         if not rows:
             raise GoldCurationError("no scraped rows to curate")
-        # Demand-evidence filter (operator decision 2026-09-28): a row with
-        # neither a rating nor a review count has no verifiable demand
-        # signal and is filtered out pre-LLM, saving the reasoning tokens too.
         demand_rows = [
-            row for row in rows if row.rating is not None or row.rating_count
+            row
+            for row in rows
+            if (row.rating is not None or row.rating_count)
+            and row.price_value is not None
         ]
         dropped_no_kpi = len(rows) - len(demand_rows)
         if dropped_no_kpi:
             logger.info(
-                "demand-evidence filter: dropped %d row(s) with no "
-                "rating/review KPI before the LLM", dropped_no_kpi,
+                "row filters: dropped %d row(s) lacking a rating/review KPI or "
+                "a readable price, before the LLM",
+                dropped_no_kpi,
             )
         if not demand_rows:
             raise GoldCurationError(
-                "every scraped row lacks rating/review KPIs — no gold "
-                "product could carry on-page demand evidence"
+                "every scraped row lacks a rating/review KPI or a readable "
+                "price — no gold product could carry its own demand evidence "
+                "and benchmark price"
             )
-        products: List[GoldStandardProduct] = []
+        products: List[CuratedProduct] = []
         seen: set = set()
         dropped_at_join = 0
         for start in range(0, len(demand_rows), self.rows_per_call):
@@ -364,12 +405,11 @@ class GoldProductCurator:
                     continue
                 seen.add(url)
                 products.append(
-                    GoldStandardProduct(
+                    CuratedProduct(
                         name=row.title,
                         url=row.url,
                         description=row.description,
                         retail_price_text=row.price_text,
-                        # Left empty on purpose: the Jev pillar gate assigns it.
                         compliance_note=selection.compliance_note,
                         demand_evidence=_demand_evidence(row),
                         unit_economics_note=selection.unit_economics_note,

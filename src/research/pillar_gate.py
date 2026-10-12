@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
 from src.config import settings
-from src.evaluators.gold_curator import GoldStandardProduct, PILLARS
+from src.evaluators.gold_curator import CuratedProduct, GoldStandardProduct, PILLARS
 from src.extractors.shopping_row import ShoppingRow
 from src.ranking.jev_client import (
     PILLAR_OPTIONS,
@@ -279,22 +279,35 @@ class PillarGate:
         return results
 
 
-def attach_pillars(
-    products: Sequence[GoldStandardProduct],
+def to_gold_products(
+    products: Sequence[CuratedProduct],
     results: Sequence[GatedProduct],
 ) -> List[GoldStandardProduct]:
-    """Copy each kept product's pillar onto the product, and return the kept set.
+    """Build the classified deliverable rows from the curated ones.
 
-    The pillar is the gate's to write and the product's to carry: this is the one
-    place the two meet, so a caller cannot accidentally write a pillar the gate
-    did not issue.
+    Returns **new** products rather than mutating the curated ones: a
+    `CuratedProduct` has no pillar and a `GoldStandardProduct` requires one, so
+    the type itself carries the invariant "everything in the gold list has been
+    classified". This is the single place the two meet, so a caller cannot write
+    a pillar the gate did not issue.
     """
     by_url = {row.candidate.url: row for row in results}
-    kept: List[GoldStandardProduct] = []
+    gold: List[GoldStandardProduct] = []
     for product in products:
         result = by_url.get(product.url)
         if result is None or not result.kept or result.pillar is None:
             continue
-        product.pillar = result.pillar
-        kept.append(product)
-    return kept
+        gold.append(
+            GoldStandardProduct(
+                name=product.name,
+                url=product.url,
+                description=product.description,
+                retail_price_text=product.retail_price_text,
+                pillar=result.pillar,
+                compliance_note=product.compliance_note,
+                demand_evidence=product.demand_evidence,
+                unit_economics_note=product.unit_economics_note,
+                source_keyword=product.source_keyword,
+            )
+        )
+    return gold

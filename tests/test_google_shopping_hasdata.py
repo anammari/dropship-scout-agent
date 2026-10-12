@@ -11,13 +11,14 @@ parser must survive either.
 
 import json
 import logging
+from typing import List
 from pathlib import Path
 
 import httpx
 import pytest
 
 from src.config import settings
-from src.evaluators.gold_curator import GoldProductCurator
+from src.evaluators.gold_curator import GoldCurationError, GoldProductCurator
 from src.extractors.shopping_row import ShoppingRow
 from src.extractors.google_shopping_hasdata import (
     GOOGLE_DOMAINS,
@@ -467,9 +468,10 @@ def test_parsed_rows_clear_the_curators_demand_evidence_filter():
     assert product.retail_price_text == "$89.95"
     assert "4.7/5" in product.demand_evidence
     assert "234 reviews" in product.demand_evidence
-    # The curator does NOT assign a pillar: it arrives empty and the Jev pillar
-    # gate fills it after curation (so its decision sees the price and rating).
-    assert product.pillar == ""
+    # The curator does NOT assign a pillar — the returned model has no such
+    # field at all. The Jev pillar gate decides it afterwards, and only it can
+    # build the `GoldStandardProduct` that carries one.
+    assert not hasattr(product, "pillar")
 
 
 # ---------------------------------------------------------------------------
@@ -633,3 +635,74 @@ def test_price_value_gives_up_rather_than_guess_a_number():
             "french press",
         )
         assert rows[0].price_value is None, text
+
+
+def _row_from_live(**overrides) -> ShoppingRow:
+    """One ShoppingRow straight off a live-shaped payload."""
+    (row,) = parse_response(
+        {"shoppingResults": [_live_item(**overrides)]}, "french press"
+    )
+    return row
+
+
+def _curator_returning(urls: List[str]) -> GoldProductCurator:
+    """A curator whose LLM selects exactly the given urls."""
+    return GoldProductCurator(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "products": [
+                                                {
+                                                    "url": url,
+                                                    "compliance_note": "Inert.",
+                                                    "unit_economics_note": None,
+                                                }
+                                                for url in urls
+                                            ]
+                                        }
+                                    )
+                                },
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    },
+                )
+            )
+        ),
+        base_url="http://llm.test",
+        api_key="mock-test-llm_api_key",
+    )
+
+
+def test_a_row_with_no_readable_price_is_dropped_before_the_llm(caplog):
+    """The gold list's price is its benchmark evidence, so a priceless row is out.
+
+    Note what is NOT claimed: this price is not a cost. Step 5's margin floor is
+    computed from the supplier's own listed price plus its freight quote, so a
+    missing gold price would leave a hole in the reference set rather than corrupt
+    the margin maths.
+    """
+    priced = _row_from_live(price="$89.95", extractedPrice=89.95, productId="1")
+    priceless = _row_from_live(price="Free", extractedPrice=None, productId="2")
+    assert priced.price_value is not None and priceless.price_value is None
+
+    curator = _curator_returning([priced.url])
+    with caplog.at_level(logging.INFO):
+        products = curator.curate([priced, priceless])
+
+    assert [p.url for p in products] == [priced.url]
+    assert any("readable price" in r.message for r in caplog.records)
+
+
+def test_a_run_where_no_row_has_a_price_raises_rather_than_yielding_nothing():
+    priceless = _row_from_live(price="Free", extractedPrice=None, productId="2")
+    curator = _curator_returning([])
+    with pytest.raises(GoldCurationError, match="readable price"):
+        curator.curate([priceless])

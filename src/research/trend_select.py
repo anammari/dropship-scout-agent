@@ -61,6 +61,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from src.config import settings
 from src.keywords.generator import PILLARS
+from src.pipeline.atomic_write import write_text_atomic
 from src.ranking.jev_client import (
     PILLAR_OPTIONS,
     JevClient,
@@ -456,7 +457,8 @@ def write_selected_deliverable(
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     picked = [row for row in selected if row.selected]
-    output.write_text(
+    write_text_atomic(
+        output,
         json.dumps(
             {
                 "keywords": [
@@ -484,12 +486,12 @@ def write_selected_deliverable(
             ensure_ascii=False,
         )
         + "\n",
-        encoding="utf-8",
     )
     if gated_path is not None:
         gated_path = Path(gated_path)
         gated_path.parent.mkdir(parents=True, exist_ok=True)
-        gated_path.write_text(
+        write_text_atomic(
+            gated_path,
             json.dumps(
                 {
                     "keywords": [
@@ -513,5 +515,4 @@ def write_selected_deliverable(
                 ensure_ascii=False,
             )
             + "\n",
-            encoding="utf-8",
         )

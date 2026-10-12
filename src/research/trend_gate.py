@@ -47,6 +47,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from src.config import settings
 from src.keywords.generator import PILLARS, carries_banned_token
+from src.pipeline.atomic_write import write_text_atomic
 from src.ranking.jev_client import (
     JevClient,
     JevError,
@@ -351,7 +352,8 @@ def write_gated_deliverable(
         for row in results
         if row.kept
     ]
-    output.write_text(
+    write_text_atomic(
+        output,
         json.dumps(
             {
                 "keywords": kept,
@@ -368,12 +370,12 @@ def write_gated_deliverable(
             ensure_ascii=False,
         )
         + "\n",
-        encoding="utf-8",
     )
     if raw_path is not None:
         raw_path = Path(raw_path)
         raw_path.parent.mkdir(parents=True, exist_ok=True)
-        raw_path.write_text(
+        write_text_atomic(
+            raw_path,
             json.dumps(
                 {
                     "keywords": [
@@ -397,5 +399,4 @@ def write_gated_deliverable(
                 ensure_ascii=False,
             )
             + "\n",
-            encoding="utf-8",
         )

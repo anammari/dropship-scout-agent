@@ -64,11 +64,12 @@ from src.extractors.google_shopping_hasdata import (  # noqa: E402
 )
 from src.extractors.shopping_row import ShoppingRow  # noqa: E402
 from src.main import render_intervention_block  # noqa: E402
+from src.pipeline.atomic_write import write_text_atomic  # noqa: E402
 from src.ranking.jev_client import JevConfigError  # noqa: E402
 from src.research.pillar_gate import (  # noqa: E402
     PillarCandidate,
     PillarGate,
-    attach_pillars,
+    to_gold_products,
 )
 from src.research.trend_gate import TrendGateError  # noqa: E402
 
@@ -174,7 +175,7 @@ def write_markdown(
                 lines.append(f"- economics: {product.unit_economics_note}")
             lines.append(f"- {product.url}")
             lines.append("")
-    path.write_text("\n".join(lines), encoding="utf-8")
+    write_text_atomic(path, "\n".join(lines))
 
 
 def main() -> None:
@@ -305,8 +306,11 @@ def main() -> None:
             rows = scraper.scrape_keywords(keywords)
             if args.dump_raw:
                 args.dump_raw.parent.mkdir(parents=True, exist_ok=True)
-                args.dump_raw.write_text(
-                    json.dumps([vars(row) for row in rows], indent=1, ensure_ascii=False)
+                write_text_atomic(
+                    args.dump_raw,
+                    json.dumps(
+                        [vars(row) for row in rows], indent=1, ensure_ascii=False
+                    ),
                 )
         curator = GoldProductCurator()
         products = curator.curate(rows)
@@ -319,7 +323,7 @@ def main() -> None:
             for product in products
         ]
         gated = PillarGate().gate(candidates)
-        products = attach_pillars(products, gated)
+        products = to_gold_products(products, gated)
     except (
         HasDataShoppingError,
         GoldCurationError,
@@ -389,9 +393,8 @@ def main() -> None:
         "note": "Step 3 gold-standard winners; reference set for Steps 4+6; "
                 "not tracked",
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    write_text_atomic(
+        args.output, json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
     )
     write_markdown(markdown_path, products)
     print(f"wrote {args.output} and {markdown_path}")

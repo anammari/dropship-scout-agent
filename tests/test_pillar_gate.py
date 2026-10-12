@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 from src.config import settings
-from src.evaluators.gold_curator import PILLARS, GoldStandardProduct
+from src.evaluators.gold_curator import CuratedProduct, PILLARS, GoldStandardProduct
 from src.extractors.shopping_row import ShoppingRow
 from src.ranking.jev_client import PILLAR_OPTIONS, JevError
 from src.research.pillar_gate import (
@@ -28,7 +28,7 @@ from src.research.pillar_gate import (
     GatedProduct,
     PillarCandidate,
     PillarGate,
-    attach_pillars,
+    to_gold_products,
 )
 from src.research.trend_gate import TrendGateError
 
@@ -41,7 +41,7 @@ def _product(
     name: str = "Bodum Chambord French Press",
     url: str = "https://www.google.com.au/shopping/product/123",
     **overrides: Any,
-) -> GoldStandardProduct:
+) -> CuratedProduct:
     base: Dict[str, Any] = dict(
         name=name,
         url=url,
@@ -52,7 +52,7 @@ def _product(
         source_keyword="french press",
     )
     base.update(overrides)
-    return GoldStandardProduct(**base)
+    return CuratedProduct(**base)
 
 
 def _row(url: str = "https://www.google.com.au/shopping/product/123", **overrides: Any) -> ShoppingRow:
@@ -308,26 +308,43 @@ def test_the_question_offers_no_slot_to_write_a_product_fact():
     assert question["type"] == "choice"
 
 
-def test_attach_pillars_writes_only_what_the_gate_issued():
+def test_to_gold_products_builds_only_what_the_gate_classified():
     kept = _product(name="kept", url="https://x/1")
     dropped = _product(name="dropped", url="https://x/2")
     results = [
         GatedProduct(candidate=_candidate("kept", "https://x/1"), pillar="brew_fuel", kept=True),
         GatedProduct(candidate=_candidate("dropped", "https://x/2"), pillar=None, kept=False, note="pillar discard"),
     ]
-    survivors = attach_pillars([kept, dropped], results)
+    gold = to_gold_products([kept, dropped], results)
 
-    assert [p.name for p in survivors] == ["kept"]
-    # The gate's verdict is on the surviving product; the dropped one keeps the
-    # empty pillar the curator left, and never reaches the deliverable.
-    assert survivors[0].pillar == "brew_fuel"
-    assert dropped.pillar == ""
+    assert [p.name for p in gold] == ["kept"]
+    assert gold[0].pillar == "brew_fuel"
+    # The curated inputs are untouched: the transform is a build, in keeping with
+    # a CuratedProduct having no pillar and a GoldStandardProduct requiring one.
+    assert not hasattr(kept, "pillar")
+    assert not hasattr(dropped, "pillar")
 
 
-def test_attach_pillars_ignores_a_product_the_gate_never_saw():
+def test_to_gold_products_ignores_a_product_the_gate_never_saw():
     orphan = _product(name="orphan", url="https://x/unseen")
-    assert attach_pillars([orphan], []) == []
-    assert orphan.pillar == ""
+    assert to_gold_products([orphan], []) == []
+
+
+def test_a_gold_product_cannot_exist_without_a_pillar():
+    # The type carries the invariant, so a half-finished product cannot be built
+    # even by accident.
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        GoldStandardProduct(
+            name="x", url="https://x/1", compliance_note="Inert.",
+            demand_evidence="rating 4.7/5",
+        )
+    with pytest.raises(ValidationError):
+        GoldStandardProduct(
+            name="x", url="https://x/1", pillar="", compliance_note="Inert.",
+            demand_evidence="rating 4.7/5",
+        )
 
 
 # ---------------------------------------------------------------------------
