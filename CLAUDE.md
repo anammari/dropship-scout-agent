@@ -747,7 +747,7 @@ only in `.env` / the real environment.
 > §5–§12 cross-reference across the repo stays valid. This section covers the
 > gold-kernel pipeline; the supplier core (§5–§9) remains the general intake.
 > The engineering plan is the (untracked)
-> `plans/morning_anthem_pipeline_implementation_plan.md`, whose
+> `plans/technical/morning_anthem_pipeline_implementation_plan.md`, whose
 > **LAUNCH OVERRIDES** section supersedes its body: the store launches
 > **Australia-only, in AUD**, so the plan's body's USD rebase and `gl=us`
 > defaults are **cancelled** — read AUD for USD and `au`/`google.com.au` for
@@ -787,8 +787,14 @@ older spike proposed is still dead and must still never be built.
 All research deliverables live under `outputs/` — **untracked**
 (gitignored; scoping data, not repo artefacts) — while the Step-5 gold-kernel
 packages are written into the Shopify workspace tree
-(`morning-anthem-candidates/`, §13.6), like the general intake (§8). `plans/`
-holds the engineering/spec documents. Step 6's Jev rankings live under the same gitignored tree as
+(`morning-anthem-candidates/`, §13.6), like the general intake (§8).
+
+**`plans/` is tracked** (operator decision 2026-10-12) and holds only plans that
+describe live codebase behaviour, in two subfolders: `plans/technical/` (this
+pipeline's implementation spec and the CJ gate directive) and
+`plans/simplified/` (plain-English walkthroughs of the same two). Superseded
+plans — the whole Sabaah-era multistep set and every AliExpress plan — were
+removed. Step 6's Jev rankings live under the same gitignored tree as
 `outputs/json/step-6-ranked-candidates.json` + `outputs/md/step-6-ranked-candidates.md` (§13.7), as Step 4's keyword bank
 already does there (`outputs/json/step-4-gold-keywords.json` + `outputs/md/step-4-gold-keywords.md`).
 
