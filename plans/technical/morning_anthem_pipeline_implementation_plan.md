@@ -579,7 +579,17 @@ credit envelope and the Jev call count before the first billable call.
 
 ---
 
-## 6. Step 4 — Gold-standard keyword bank (exact-title-first, CJ-only)
+## 6. Step 4 — Gold-standard keyword bank (exact-title-first, CJ-only) — IMPLEMENTED
+
+> **Status: implemented and hermetically tested (2026-10-12)** —
+> `src/keywords/generator.py` + `gold_keyword_prompt.md` +
+> `tests/test_keyword_generator.py` (52 tests), driven by
+> `scripts/generate_gold_keywords.py`. No live run yet (operator held all live
+> runs until implementation completes). Two deviations from the text below,
+> both flagged in `CLAUDE.md` §13.8: the **exact keyword is code-derived** rather
+> than copied by the model (copying a string is not a model's job), and the
+> pool-band / chunking / `tightens` machinery below is **deleted** rather than
+> kept.
 
 ### 6.1 Strategy — exact title first, tight fallback only
 

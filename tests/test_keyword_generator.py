@@ -1,893 +1,885 @@
-"""Offline unit tests for `src.keywords.generator` (plan Step 4).
+"""Offline unit tests for the Step-4 keyword bank (exact title first).
 
-The LLM endpoint is a scripted `httpx.MockTransport` and the Step-3 gold
-deliverable is a tmp_path fixture — no network, no real model, no real
-`outputs/` read. Covers the template prompt (the product table is a slot the
-generator fills from the gold deliverable), the table rendering (cells
-verbatim, nulls as em dashes), the gold-file read with its remediation
-errors, the strongest-products selection, the batched prompt assembly, the
-merged-pool validation rules (broad/modifier pairing, AICIS banned tokens,
-the 50-70 band, per-product coverage and floor) and the truncation salvage
-for the documented `finish_reason=length` failure mode.
+Hermetic: the LLM is an `httpx.MockTransport` returning scripted completions. No
+network, no tokens.
+
+The strategy has two halves that fail differently, so they are tested apart: the
+**exact** keywords are code-derived and must match their product's own title
+exactly (a mismatch is a code bug and fails the run), while the **fallback**
+keywords are model-authored and are re-validated in code (a bad one is dropped,
+because the product still has its exact keyword).
 """
 
+from __future__ import annotations
+
 import json
-import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import httpx
 import pytest
 
-from src.config import settings
 from src.keywords.generator import (
-    BANK_MAX_SLACK,
-    BANK_MIN_SLACK,
-    BANNED_TOKENS,
     DEFAULT_MAX_PRODUCTS,
-    MAX_KEYWORDS,
-    MIN_KEYWORDS,
-    TARGET_TOTAL,
+    MAX_EXACT_WORDS,
+    MAX_FALLBACK_WORDS,
+    PILLARS,
     CandidateKeyword,
     KeywordGenerationConfigError,
     KeywordGenerationError,
     KeywordGenerator,
+    _content_words,
+    build_exact_rows,
     build_product_table,
     carries_banned_token,
-    chunk_sizes,
     dedupe_keywords,
-    default_per_product_min,
+    exact_keyword,
     load_gold_products,
     load_prompt_parts,
     parse_llm_keywords,
-    per_product_target,
     select_gold_products,
-    validate_pool,
+    validate_bank,
 )
 
-#: The plan's deliverable targets 8-20 gold products (§5.4), which is the zone
-#: where the 50-70 band, the adaptive per-product target and the adaptive
-#: floor are all mutually satisfiable — a fixture of that size exercises the
-#: real contract rather than a degenerate one.
-GOLD_PRODUCTS = [
-    {
-        "name": "Stainless garlic press",
-        "pillar": "morning_table",
-        "demand_evidence": "rating 4.7/5, 1,204 reviews (Google Shopping AU)",
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+def _gold(
+    name: str,
+    pillar: str = "morning_table",
+    source: str = "",
+    evidence: str = "rating 4.7/5, 1,204 reviews (Google Shopping AU)",
+) -> Dict[str, Any]:
+    return {
+        "name": name,
+        "pillar": pillar,
+        "demand_evidence": evidence,
         "description": None,
-        "compliance_note": "Inert stainless-steel kitchen tool, AICIS-exempt.",
+        "compliance_note": "Inert kitchen tool.",
         "retail_price_text": "$24.95",
-    },
-    {
-        "name": "Olive wood serving board",
-        "pillar": "morning_table",
-        "demand_evidence": "rating 4.6/5, 880 reviews (Google Shopping AU)",
-        "description": "Solid olive wood board, 30 cm, hand-finished.",
-        "compliance_note": "Inert wooden tabletop object.",
-        "retail_price_text": "$49.00",
-    },
-    {
-        "name": "Ceramic bath tray",
-        "pillar": "restful_reset",
-        "demand_evidence": "rating 4.5/5, 430 reviews (Google Shopping AU)",
-        "description": None,
-        "compliance_note": "Inert ceramic bath accessory.",
-        "retail_price_text": "$19.95",
-    },
-    {
-        "name": "Bamboo bath caddy",
-        "pillar": "restful_reset",
-        "demand_evidence": "rating 4.8/5, 2,310 reviews (Google Shopping AU)",
-        "description": None,
-        "compliance_note": "Inert bamboo bath accessory.",
-        "retail_price_text": "$39.95",
-    },
-    {
-        "name": "Brass incense holder",
-        "pillar": "restful_reset",
-        "demand_evidence": "rating 4.4/5, 260 reviews (Google Shopping AU)",
-        "description": None,
-        "compliance_note": "Inert brass object.",
-        "retail_price_text": "$22.50",
-    },
-    {
-        "name": "Wooden spice rack",
-        "pillar": "morning_table",
-        "demand_evidence": "rating 4.3/5, 150 reviews (Google Shopping AU)",
-        "description": None,
-        "compliance_note": "Inert wooden storage object.",
-        "retail_price_text": "$34.00",
-    },
-    {
-        "name": "Linen tea towel set",
-        "pillar": "morning_table",
-        "demand_evidence": "rating 4.9/5, 3,120 reviews (Google Shopping AU)",
-        "description": "Set of two stonewashed linen tea towels.",
-        "compliance_note": "Inert textile.",
-        "retail_price_text": "$29.00",
-    },
-    {
-        "name": "Copper water carafe",
-        "pillar": "brew_fuel",
-        "demand_evidence": "rating 4.2/5, 96 reviews (Google Shopping AU)",
-        "description": None,
-        "compliance_note": "Inert copper tabletop object.",
-        "retail_price_text": "$54.00",
-    },
+        "source_keyword": source,
+    }
+
+
+GOLD = [
+    _gold("Bodum Chambord French Press", "brew_fuel", "french press"),
+    _gold("Stainless Steel Garlic Press", "morning_table", "garlic press"),
+    _gold("Silk Sleep Eye Mask", "restful_reset", "silk eye mask"),
 ]
 
-GOLD_NAMES = [p["name"] for p in GOLD_PRODUCTS]
 
-
-def _write_gold(tmp_path, products=None, name="gold.json"):
-    """Write a Step-3-shaped deliverable and return its path."""
+def _write_gold(tmp_path: Path, products: Optional[List[Dict]] = None, name="gold.json"):
     path = tmp_path / name
     path.write_text(
-        json.dumps({"products": GOLD_PRODUCTS if products is None else products}),
+        json.dumps({"products": GOLD if products is None else products}),
         encoding="utf-8",
     )
     return path
 
 
-def _keyword_rows(products, per_product=8, pillar="morning_table", prefix="kw"):
-    """Build a structurally valid pool: half broad, half modifier per product.
-
-    `prefix` namespaces the keyword strings — a later bank chunk passes its
-    own prefix so its keywords stay globally unique, except in the
-    cross-chunk-repeat test where the repeat is deliberate.
-    """
-    rows = []
-    for index, product in enumerate(products):
-        head = f"{prefix} {index} head"
-        for i in range(per_product // 2):
-            rows.append(
+def _llm_response(rows: List[Dict], finish_reason: str = "stop") -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "choices": [
                 {
-                    "keyword": f"{head} {i}",
-                    "product": product,
-                    "pillar": pillar,
-                    "role": "broad",
-                    "tightens": None,
-                    "rationale": "head term",
+                    "message": {"content": json.dumps({"keywords": rows})},
+                    "finish_reason": finish_reason,
                 }
-            )
-        for i in range(per_product // 2):
-            rows.append(
-                {
-                    "keyword": f"{prefix} {index} tight {i}",
-                    "product": product,
-                    "pillar": pillar,
-                    "role": "modifier",
-                    "tightens": f"{head} 0",
-                    "rationale": "tightens the head",
-                }
-            )
-    return rows
-
-
-def _batch_json(rows):
-    return json.dumps({"keywords": rows})
-
-
-def _scripted_transport(bodies, log, finish_reason="stop"):
-    """One 200 response per POST, recording each request payload."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        log.append(
-            {
-                "payload": json.loads(request.content),
-                "auth": request.headers.get("authorization"),
-            }
-        )
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {"content": bodies[len(log) - 1]},
-                        "finish_reason": finish_reason,
-                    }
-                ]
-            },
-        )
-
-    return httpx.MockTransport(handler)
-
-
-def _generator(bodies, log, tmp_path, finish_reason="stop", **kwargs):
-    return KeywordGenerator(
-        client=httpx.Client(transport=_scripted_transport(bodies, log, finish_reason)),
-        base_url="http://llm.test",
-        api_key="mock-test-llm_api_key",
-        gold_products_path=_write_gold(tmp_path),
-        **kwargs,
+            ]
+        },
     )
 
 
-# --- the prompt resource and the rendered table ---------------------------
+class ScriptedLLM:
+    """Replays scripted completions and records the calls it received."""
+
+    def __init__(self, responses: List[Any]) -> None:
+        self._responses = list(responses)
+        self.calls: List[Dict[str, Any]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.calls.append(json.loads(request.content))
+        if not self._responses:
+            raise AssertionError("ScriptedLLM ran out of scripted responses")
+        entry = self._responses.pop(0)
+        if isinstance(entry, Exception):
+            raise entry
+        if isinstance(entry, httpx.Response):
+            return entry
+        return _llm_response(entry)
 
 
-def test_prompt_parts_is_a_template_with_a_product_slot():
+def _generator(
+    tmp_path: Path,
+    responses: List[Any],
+    products: Optional[List[Dict]] = None,
+    **kwargs: Any,
+) -> KeywordGenerator:
+    """A generator whose LLM is scripted and whose gold file is a tmp fixture."""
+    scripted = ScriptedLLM(responses)
+    generator = KeywordGenerator(
+        client=httpx.Client(transport=httpx.MockTransport(scripted)),
+        base_url="http://llm.test",
+        api_key="mock-test-llm_api_key",
+        model="test-model",
+        gold_products_path=_write_gold(tmp_path, products),
+        **kwargs,
+    )
+    generator.scripted = scripted  # type: ignore[attr-defined]
+    return generator
+
+
+# ---------------------------------------------------------------------------
+# exact_keyword — the deterministic transform
+# ---------------------------------------------------------------------------
+
+
+def test_exact_keyword_is_the_titles_own_words_in_order():
+    assert exact_keyword("Bodum Chambord French Press") == "bodum chambord french press"
+
+
+def test_exact_keyword_strips_punctuation_and_collapses_runs():
+    assert exact_keyword("Garlic Press, 1L — Off White!") == "garlic press 1l off white"
+
+
+def test_exact_keyword_removes_apostrophes_rather_than_splitting_the_word():
+    # "chef's" must not become "chef s": the possessive would leave a stray
+    # letter that no catalogue indexes.
+    assert exact_keyword("Chef's Knife") == "chefs knife"
+    assert exact_keyword("Chef’s Knife") == "chefs knife"  # the curly form too
+
+
+def test_exact_keyword_is_idempotent_and_lowercase():
+    once = exact_keyword("Stainless Steel  Garlic Press")
+    assert once == "stainless steel garlic press"
+    assert exact_keyword(once) == once
+
+
+def test_exact_keyword_of_nothing_is_empty():
+    assert exact_keyword(None) == ""
+    assert exact_keyword("   ") == ""
+    assert exact_keyword("---") == ""
+
+
+def test_exact_keyword_adds_and_reorders_nothing():
+    keyword = exact_keyword("Silicone Pastry Mat 40x50cm, Non-Stick")
+    assert keyword.split() == [
+        "silicone", "pastry", "mat", "40x50cm", "non", "stick",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# build_exact_rows
+# ---------------------------------------------------------------------------
+
+
+def test_build_exact_rows_makes_one_exact_row_per_product():
+    rows = build_exact_rows(GOLD)
+    assert [row["match"] for row in rows] == ["exact"] * 3
+    # `product` is the title VERBATIM; `keyword` is the derived search string.
+    assert rows[0]["product"] == "Bodum Chambord French Press"
+    assert rows[0]["keyword"] == "bodum chambord french press"
+    assert rows[0]["pillar"] == "brew_fuel"
+
+
+def test_build_exact_rows_skips_a_title_too_long_to_be_a_search_string(caplog):
+    long_title = " ".join(f"word{i}" for i in range(MAX_EXACT_WORDS + 1))
+    rows = build_exact_rows([_gold(long_title), _gold("Garlic Press")])
+    assert [row["product"] for row in rows] == ["Garlic Press"]
+    assert any("exceeds" in r.message for r in caplog.records)
+
+
+def test_build_exact_rows_skips_a_product_with_no_usable_title(caplog):
+    rows = build_exact_rows([_gold("   "), _gold("Garlic Press")])
+    assert [row["product"] for row in rows] == ["Garlic Press"]
+
+
+# ---------------------------------------------------------------------------
+# the prompt resource
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_is_a_template_with_a_product_slot_and_no_products():
     parts = load_prompt_parts()
-    # The prompt file carries NO products any more: the table is a slot the
-    # generator fills from the live Step-3 deliverable.
     assert "{PRODUCT_TABLE}" in parts.user_template
     assert "| # |" not in parts.user_template
-    assert "50–70 supplier" in parts.user_template
-    assert "50–70 keywords in total" in parts.requirements
-    assert parts.system.startswith("You are a senior dropship supplier-sourcing")
-    # The Morning Anthem sources from CJdropshipping exclusively.
+    # The job is the fallback; the title is explicitly not the model's to write.
+    assert "fallback" in parts.user_template.lower()
+    assert "Never write a" in parts.system
     assert "CJdropshipping" in parts.system
     assert "AliExpress" not in parts.system
 
 
-def test_build_product_table_renders_verbatim_cells():
-    lines = build_product_table(GOLD_PRODUCTS)
+def test_prompt_states_the_boundary_and_the_one_fallback_cap():
+    parts = load_prompt_parts()
+    assert "Hard AICIS boundary" in parts.requirements
+    assert "at most one fallback" in parts.requirements.lower()
+    # The fallback must share a concrete word with the title, and the prompt says
+    # so because the code enforces it.
+    assert "share at least one concrete word" in parts.requirements
+
+
+def test_prompt_asks_for_no_pillar_or_match_field():
+    # Those are code-attached: a model that writes them is overstepping, and the
+    # prompt says so rather than leaving it to chance.
+    parts = load_prompt_parts()
+    assert "`pillar` or a `match` field" in parts.requirements
+
+
+def test_build_product_table_renders_verbatim_cells_with_em_dashes_for_nulls():
+    lines = build_product_table(GOLD)
     assert lines[0] == (
         "| # | Product | Pillar | AU demand evidence | "
         "Physical attributes from the listing | Retail price |"
     )
-    assert lines[1].startswith("| --- |")
-    rows = lines[2:]
-    assert len(rows) == len(GOLD_PRODUCTS)
-    assert rows[0].startswith(f"| 1 | {GOLD_NAMES[0]} | morning_table |")
-    assert "rating 4.7/5, 1,204 reviews (Google Shopping AU)" in rows[0]
-    assert "$24.95" in rows[0]
-    # `description` is null on every production row, so the compliance note —
-    # the remaining listing-derived description of the object — stands in.
-    assert "Inert stainless-steel kitchen tool" in rows[0]
-    # A populated description wins over the compliance note.
-    assert "Solid olive wood board, 30 cm" in rows[1]
-    # A null cell renders as an em dash, never a blank or the word None.
-    only_nulls = build_product_table([{"name": "Bare item"}])[2]
-    assert "—" in only_nulls
-    assert "None" not in only_nulls
+    assert lines[2].startswith("| 1 | Bodum Chambord French Press | brew_fuel |")
+    assert lines[2].endswith("| Inert kitchen tool. | $24.95 |")
 
 
-def test_load_gold_products_missing_file_names_the_fix(tmp_path):
+# ---------------------------------------------------------------------------
+# load_gold_products (fail closed)
+# ---------------------------------------------------------------------------
+
+
+def test_load_gold_products_reads_the_deliverable(tmp_path):
+    loaded = load_gold_products(_write_gold(tmp_path))
+    assert [p["name"] for p in loaded] == [p["name"] for p in GOLD]
+
+
+def test_load_gold_products_missing_file_names_step_3(tmp_path):
     with pytest.raises(KeywordGenerationError, match="run Step 3 first"):
-        load_gold_products(tmp_path / "nope.json")
+        load_gold_products(tmp_path / "absent.json")
 
 
-def test_load_gold_products_malformed_json_names_the_fix(tmp_path):
-    path = tmp_path / "broken.json"
+def test_load_gold_products_rejects_malformed_json(tmp_path):
+    path = tmp_path / "gold.json"
     path.write_text("{not json", encoding="utf-8")
-    with pytest.raises(KeywordGenerationError, match="run Step 3 first"):
+    with pytest.raises(KeywordGenerationError, match="not valid JSON"):
         load_gold_products(path)
 
 
-def test_load_gold_products_empty_list_names_the_fix(tmp_path):
-    with pytest.raises(KeywordGenerationError, match="no products"):
-        load_gold_products(_write_gold(tmp_path, products=[]))
+def test_load_gold_products_rejects_a_payload_without_a_products_list(tmp_path):
+    path = tmp_path / "gold.json"
+    path.write_text(json.dumps({"nope": []}), encoding="utf-8")
+    with pytest.raises(KeywordGenerationError, match="no 'products' list"):
+        load_gold_products(path)
 
 
-def test_load_gold_products_drops_unnamed_rows(tmp_path):
-    products = [{"name": "  "}, {"name": "Real item"}]
-    loaded = load_gold_products(_write_gold(tmp_path, products=products))
-    assert [p["name"] for p in loaded] == ["Real item"]
+def test_load_gold_products_rejects_unnamed_rows(tmp_path):
+    path = _write_gold(tmp_path, products=[{"name": "  "}])
+    with pytest.raises(KeywordGenerationError, match="no named products"):
+        load_gold_products(path)
 
 
-def test_select_gold_products_ranks_caps_and_balances_pillars():
-    selected = select_gold_products(GOLD_PRODUCTS, limit=4)
-    names = [p["name"] for p in selected]
-    # 4 slots round-robin across the pillars present in PILLARS order — the
-    # lone `brew_fuel` product leads, then the strongest of each later
-    # pillar, so no pillar is starved by demand ranking alone.
-    assert names[0] == "Copper water carafe"  # brew_fuel
-    assert "Bamboo bath caddy" in names  # strongest restful_reset (2,310)
-    assert "Linen tea towel set" in names  # strongest morning_table (3,120)
-    assert len(set(names)) == 4
-    assert len({p["pillar"] for p in selected}) >= 3
+# ---------------------------------------------------------------------------
+# select_gold_products (kept machinery)
+# ---------------------------------------------------------------------------
 
-    # Under the limit, every product survives untouched.
-    assert len(select_gold_products(GOLD_PRODUCTS, limit=50)) == len(GOLD_PRODUCTS)
+
+def test_select_gold_products_ranks_by_demand_and_caps():
+    products = [
+        _gold("Weak", evidence="rating 4.1/5, 10 reviews"),
+        _gold("Strong", evidence="rating 4.9/5, 3,120 reviews"),
+        _gold("Middle", evidence="rating 4.5/5, 500 reviews"),
+    ]
+    selected = select_gold_products(products, limit=2)
+    assert [p["name"] for p in selected] == ["Strong", "Middle"]
 
 
 def test_select_gold_products_excludes_boundary_named_products():
-    """A product named for an AICIS token cannot yield a compliant keyword."""
-    products = GOLD_PRODUCTS + [
-        {
-            "name": "Rose Quartz Gua Sha Tool",
-            "pillar": "restful_reset",
-            "demand_evidence": "rating 4.9/5, 9,000 reviews (Google Shopping AU)",
-            "compliance_note": "Inert quartz tool.",
-            "retail_price_text": "$30.00",
-        }
-    ]
-    # It is the strongest by demand, yet never enters the keyword table.
-    selected = select_gold_products(products, limit=50)
-    assert "Rose Quartz Gua Sha Tool" not in [p["name"] for p in selected]
-    assert len(selected) == len(GOLD_PRODUCTS)
-    assert carries_banned_token("Rose Quartz Gua Sha Tool") == "quartz"
-    assert carries_banned_token("Stainless garlic press") is None
+    products = GOLD + [_gold("Rose Quartz Gua Sha Tool")]
+    names = [p["name"] for p in select_gold_products(products, limit=50)]
+    assert "Rose Quartz Gua Sha Tool" not in names
+    assert len(names) == len(GOLD)
 
 
-def test_select_gold_products_keeps_one_product_per_source_keyword():
-    """The research recurs: one product type, several Step-2 search terms.
-
-    The live table's strongest 30 rows held 5 garlic presses and 5 coffee
-    presses, which the pool cannot name with unique keywords — so only the
-    strongest row per source keyword reaches the table.
-    """
+def test_select_gold_products_collapses_to_one_row_per_source_keyword():
     products = [
-        {
-            "name": "Garlic Press OXO Good Grips",
-            "pillar": "morning_table",
-            "source_keyword": "garlic press",
-            "demand_evidence": "rating 4.8/5, 900 reviews (Google Shopping AU)",
-        },
-        {
-            "name": "Joseph Joseph Helix Garlic Press",
-            "pillar": "morning_table",
-            "source_keyword": "garlic press",
-            "demand_evidence": "rating 4.7/5, 400 reviews (Google Shopping AU)",
-        },
-        {
-            "name": "Dreamfarm Garject Garlic Press",
-            "pillar": "morning_table",
-            "source_keyword": "garlic crusher",
-            "demand_evidence": "rating 4.6/5, 120 reviews (Google Shopping AU)",
-        },
-        {
-            "name": "Ceramic bath tray",
-            "pillar": "restful_reset",
-            "demand_evidence": "rating 4.5/5, 430 reviews (Google Shopping AU)",
-        },
+        _gold("Garlic Press A", source="garlic press",
+              evidence="rating 4.9/5, 900 reviews"),
+        _gold("Garlic Press B", source="garlic press",
+              evidence="rating 4.2/5, 90 reviews"),
+        _gold("Eye Mask", source="silk eye mask"),
     ]
-    selected = select_gold_products(products, limit=50)
-    names = [p["name"] for p in selected]
-    assert "Garlic Press OXO Good Grips" in names
-    assert "Joseph Joseph Helix Garlic Press" not in names
-    # A different source keyword is a different product type, so it survives.
-    assert "Dreamfarm Garject Garlic Press" in names
-    # No source keyword at all falls back to the name: its own group.
-    assert "Ceramic bath tray" in names
-    assert len(selected) == 3
+    names = [p["name"] for p in select_gold_products(products, limit=50)]
+    # The strongest row for that source keyword survives; the weaker is out.
+    assert sorted(names) == ["Eye Mask", "Garlic Press A"]
 
 
-def test_adaptive_target_and_floor_math():
-    # 8-20 gold products is the plan's design zone (§5.4).
-    assert per_product_target(8) == 8
-    assert per_product_target(12) == 5
-    assert per_product_target(20) == 3
-    # Below six products the clamp would miss the 50-keyword band, so the
-    # target lifts just enough to reach it.
-    assert per_product_target(4) == 13
-    assert per_product_target(0) == 0
-    assert default_per_product_min(8) == 5
-    assert default_per_product_min(12) == 3
-    assert default_per_product_min(4) == 11
-    assert default_per_product_min(1) == 49
+def test_select_gold_products_under_the_cap_returns_everything():
+    assert len(select_gold_products(GOLD, limit=DEFAULT_MAX_PRODUCTS)) == len(GOLD)
 
 
-def test_target_math_stays_inside_the_pool_band():
-    # The widened bank (2026-09-29) caps the table at 150 products but
-    # generates it in pool chunks, so the target math only ever faces a chunk
-    # — and any single pool is bounded by the band's hard ceiling at 35
-    # products (2 each = 70 exactly); past that no pool could name every
-    # product and still fit.
-    assert DEFAULT_MAX_PRODUCTS == 150
-    for count in range(1, 36):
-        target = per_product_target(count)
-        assert target >= default_per_product_min(count), count
-        assert target * count <= MAX_KEYWORDS, count
-        if count != 24:
-            assert target * count >= MIN_KEYWORDS, count
-    # 24 products is the one size with no uniform target inside the band: 2
-    # each is 48 (short of 50) and 3 each is 72 (past 70), so chunk_sizes
-    # never produces it and borrows a product for the tailing chunk instead.
-    assert per_product_target(24) == 2
-    assert per_product_target(30) == 2
-    assert per_product_target(30) * 30 == TARGET_TOTAL
-    assert per_product_target(35) == 2
-    assert per_product_target(35) * 35 == MAX_KEYWORDS
-    # A whole-table single pool of 36+ cannot be named per product at all.
-    assert default_per_product_min(36) * 36 > MAX_KEYWORDS
+# ---------------------------------------------------------------------------
+# validate_bank — code-invariant problems fail, model problems are reported
+# ---------------------------------------------------------------------------
 
 
-# --- the generation flow --------------------------------------------------
+def _valid_bank() -> List[Dict]:
+    rows = build_exact_rows(GOLD)
+    rows.append(
+        {
+            "keyword": "french press with plunger",
+            "product": "Bodum Chambord French Press",
+            "pillar": "brew_fuel",
+            "match": "tight_fallback",
+            "rationale": "names the plunger",
+        }
+    )
+    return rows
 
 
-def test_generate_returns_validated_pool(tmp_path):
-    parts = load_prompt_parts()
-    rows = _keyword_rows(GOLD_NAMES)
-    log = []
-    generator = _generator([_batch_json(rows[:32]), _batch_json(rows[32:])], log, tmp_path)
-
-    pool = generator.generate()
-
-    assert len(pool) == 64
-    assert all(isinstance(row, CandidateKeyword) for row in pool)
-    broad = {row.keyword for row in pool if row.role == "broad"}
-    for row in pool:
-        if row.role == "modifier":
-            assert row.tightens in broad
-            assert row.tightens != row.keyword
-
-    assert len(log) == 2
-    first, second = (entry["payload"] for entry in log)
-    assert first["model"] == generator.model
-    assert first["temperature"] == 0.6
-    assert first["max_tokens"] == 16000
-    assert first["messages"][0]["content"] == parts.system
-    first_user = first["messages"][1]["content"]
-    second_user = second["messages"][1]["content"]
-    # Each call carries only its own products' table.
-    assert GOLD_NAMES[0] in first_user and GOLD_NAMES[0] not in second_user
-    assert GOLD_NAMES[-1] in second_user and GOLD_NAMES[-1] not in first_user
-    assert "{PRODUCT_TABLE}" not in first_user
-    assert "covers only the 4 products" in first_user
-    assert "**8 keywords per product**" in first_user
-    assert "(32 in total)" in first_user
-    assert "all 8 products" in first_user
-    assert parts.requirements in first_user
-    assert log[0]["auth"] == "Bearer mock-test-llm_api_key"
+def _messages(problems) -> List[str]:
+    return [problem.message for problem in problems]
 
 
-def test_generate_accepts_every_morning_anthem_pillar(tmp_path):
-    # Every one of the five Morning Anthem pillar keys is valid on a bank row.
-    from src.keywords.generator import PILLARS
-
-    assert set(PILLARS) == {
-        "brew_fuel",
-        "sunrise_move",
-        "mindful_awakening",
-        "restful_reset",
-        "morning_table",
-    }
-
-    for pillar in PILLARS:
-        rows = _keyword_rows(GOLD_NAMES, pillar=pillar)
-        log = []
-        generator = _generator(
-            [_batch_json(rows[:32]), _batch_json(rows[32:])], log, tmp_path
-        )
-        pool = generator.generate()
-        assert len(pool) == 64
-        assert {row.pillar for row in pool} == {pillar}
+def test_a_well_formed_bank_validates_clean():
+    assert validate_bank(_valid_bank(), GOLD) == []
 
 
-def test_generate_salvages_truncated_batch(tmp_path, caplog):
-    rows = _keyword_rows(GOLD_NAMES)
-    first, second = _batch_json(rows[:32]), _batch_json(rows[32:])
-    log = []
-    generator = _generator(
-        [first[: len(first) - 40], second[: len(second) - 40]], log, tmp_path,
-        finish_reason="length",
+def test_an_exact_keyword_not_matching_its_title_is_a_problem():
+    rows = _valid_bank()
+    rows[0]["keyword"] = "something else entirely"
+    problems = _messages(validate_bank(rows, GOLD))
+    assert any("does not match its product's own title" in p for p in problems)
+
+
+def test_a_product_with_no_exact_row_is_a_problem():
+    rows = [r for r in _valid_bank() if r["product"] != "Silk Sleep Eye Mask"]
+    problems = _messages(validate_bank(rows, GOLD))
+    assert any("no exact keyword" in p for p in problems)
+
+
+def test_a_row_naming_an_unknown_product_is_a_problem():
+    rows = _valid_bank()
+    rows.append(
+        {
+            "keyword": "ghost product tool",
+            "product": "Ghost Product",
+            "pillar": "morning_table",
+            "match": "tight_fallback",
+            "rationale": "invented",
+        }
+    )
+    problems = _messages(validate_bank(rows, GOLD))
+    assert any("not in the table" in p for p in problems)
+
+
+def test_a_duplicate_keyword_is_a_problem():
+    rows = _valid_bank()
+    rows.append(dict(rows[0]))
+    problems = _messages(validate_bank(rows, GOLD))
+    assert any("appears 2 times" in p for p in problems)
+
+
+def test_a_pillar_that_is_not_its_products_pillar_is_a_problem():
+    rows = _valid_bank()
+    rows[1]["pillar"] = "brew_fuel"  # the garlic press is morning_table
+    problems = _messages(validate_bank(rows, GOLD))
+    assert any("which is not its product's" in p for p in problems)
+
+
+def test_a_fallback_outside_the_word_bounds_is_a_problem():
+    rows = _valid_bank()
+    rows[-1]["keyword"] = "press"
+    assert any("word(s)" in p for p in _messages(validate_bank(rows, GOLD)))
+
+    rows[-1]["keyword"] = " ".join(f"w{i}" for i in range(MAX_FALLBACK_WORDS + 1))
+    assert any("word(s)" in p for p in _messages(validate_bank(rows, GOLD)))
+
+
+def test_a_fallback_with_punctuation_or_capitals_is_a_problem():
+    rows = _valid_bank()
+    rows[-1]["keyword"] = "french press, large"
+    assert any("punctuation or capitals" in p for p in _messages(validate_bank(rows, GOLD)))
+
+    rows[-1]["keyword"] = "French Press Large"
+    assert any("punctuation or capitals" in p for p in _messages(validate_bank(rows, GOLD)))
+
+
+def test_a_fallback_carrying_a_banned_token_is_a_problem():
+    rows = _valid_bank()
+    rows[-1]["keyword"] = "french press with salt block"
+    assert any("banned token" in p for p in _messages(validate_bank(rows, GOLD)))
+
+
+def test_an_exact_keyword_carrying_a_banned_token_is_a_problem():
+    # The table pre-screens banned-token NAMES, so an exact keyword carrying one
+    # means that screen was bypassed — a code bug, not a model slip.
+    products = GOLD + [_gold("Bath Salt Scoop")]
+    rows = build_exact_rows(products)
+    problems = _messages(validate_bank(rows, products))
+    assert any("should not have reached the table" in p for p in problems)
+
+
+def test_a_loosely_coupled_fallback_is_a_problem():
+    # A fallback sharing no concrete word with its own title is a broader
+    # category or a different product, not a variant of this one.
+    rows = _valid_bank()
+    rows[-1]["keyword"] = "kitchen tools"
+    assert any("too loosely coupled" in p for p in _messages(validate_bank(rows, GOLD)))
+
+
+def test_a_fallback_may_be_a_valid_variant_of_its_title():
+    assert _content_words("french press with plunger") & _content_words(
+        "Bodum Chambord French Press"
     )
 
-    with caplog.at_level(logging.WARNING, logger="src.keywords.generator"):
-        pool = generator.generate()
 
-    # Each batch's last (incomplete) row is gone; complete rows survive.
-    assert len(pool) == len(rows) - 2
-    assert "output limit" in caplog.text
-    assert "salvaged" in caplog.text
+# ---------------------------------------------------------------------------
+# generate_bank — the exact rows are code's, the fallbacks are the model's
+# ---------------------------------------------------------------------------
 
 
-def test_generate_handles_fenced_json(tmp_path):
-    rows = _keyword_rows(GOLD_NAMES)
-    log = []
-    fenced = "```json\n" + _batch_json(rows) + "\n```"
-    generator = _generator([fenced], log, tmp_path)
-    generator.batch_size = 100  # one chunk -> one call
-
-    pool = generator.generate()
-
-    assert len(pool) == 64
-    assert len(log) == 1
-
-
-def test_generate_rejects_a_thin_batch(tmp_path):
-    # A batch the model answered under the floor leaves the pool under the
-    # per-product minimum; the run must fail loudly, not export a thin bank.
-    rows = _keyword_rows(GOLD_NAMES, per_product=4)
-    log = []
-    generator = _generator([_batch_json(rows[:16]), _batch_json(rows[16:])], log, tmp_path)
-
-    with pytest.raises(KeywordGenerationError, match="failed validation"):
-        generator.generate()
-
-
-def test_generate_raises_on_empty_content(tmp_path):
-    """The reasoning model's documented empties are named, not mis-parsed."""
-    log = []
-    generator = _generator([""], log, tmp_path, finish_reason="length")
-    generator.batch_size = 100
-
-    with pytest.raises(KeywordGenerationError, match="empty content"):
-        generator.generate()
-
-
-def test_generate_dedupes_repeated_keywords(tmp_path, caplog):
-    """Two listings of one product type must not put a keyword in twice.
-
-    The live case (2026-09-28): the gold list carries two garlic presses and
-    the model wrote `stainless garlic press` for both. The repeat — including
-    any modifier written twice against the shared head term — collapses to
-    one row, and the modifiers still resolve to it.
-    """
-    rows = _keyword_rows(GOLD_NAMES)
-    log = []
+def test_generate_bank_emits_an_exact_row_per_product_plus_the_models_fallbacks(tmp_path):
     generator = _generator(
-        [_batch_json(rows[:32]), _batch_json(rows[32:] + [dict(rows[0]), dict(rows[4])])],
-        log,
         tmp_path,
+        [
+            [
+                {
+                    "keyword": "french press with plunger",
+                    "product": "Bodum Chambord French Press",
+                    "rationale": "names the plunger",
+                }
+            ]
+        ],
     )
+    bank = generator.generate_bank()
 
-    with caplog.at_level(logging.WARNING, logger="src.keywords.generator"):
-        pool = generator.generate()
+    exact = [c for c in bank if c.match == "exact"]
+    fallbacks = [c for c in bank if c.match == "tight_fallback"]
+    assert len(exact) == len(GOLD)
+    assert [c.keyword for c in fallbacks] == ["french press with plunger"]
+    assert all(isinstance(c, CandidateKeyword) for c in bank)
+    assert {c.pillar for c in exact} == {p["pillar"] for p in GOLD}
+    assert fallbacks[0].pillar == "brew_fuel"
 
-    assert len(pool) == len(rows)
-    assert len({row.keyword for row in pool}) == len(pool)
-    assert "dropped 2 repeated keyword(s)" in caplog.text
+
+def test_generate_bank_accepts_an_empty_fallback_list(tmp_path):
+    # "An empty list is a valid and common answer" — most products need none.
+    bank = _generator(tmp_path, [[]]).generate_bank()
+    assert [c.match for c in bank] == ["exact"] * len(GOLD)
 
 
-def test_generate_carries_earlier_keywords_into_later_batches(tmp_path):
-    """The pool-wide uniqueness rule is only satisfiable with the taken list.
+def test_the_batch_note_asks_for_one_fallback_each_and_lists_what_is_taken(tmp_path):
+    generator = _generator(tmp_path, [[], []], batch_size=2)
+    generator.generate_bank()
 
-    Each call is independent, so a later batch cannot know what an earlier one
-    claimed. The live cap-30 rerun (2026-09-28) failed exactly there: batch 1
-    claimed `stainless steel garlic press` for one press and a later batch
-    wrote the same string for the other, which dedupe then starved.
-    """
-    rows = _keyword_rows(GOLD_NAMES)
-    log = []
+    calls = generator.scripted.calls
+    assert len(calls) == 2  # 3 products at 2 per call
+    first = calls[0]["messages"][1]["content"]
+    assert "at most one fallback" in first.lower()
+    # The exact keywords are already claimed, so the model is told not to reuse
+    # them as a fallback.
+    assert "bodum chambord french press" in first
+
+
+def test_each_batch_table_carries_only_its_own_products(tmp_path):
+    # The table is demand-ranked, so which product lands in which batch follows
+    # the ranking — the property to pin is that the batches partition the table.
+    generator = _generator(tmp_path, [[], []], batch_size=2)
+    generator.generate_bank()
+    calls = generator.scripted.calls
+    names = [p["name"] for p in generator.products]
+    assert len(calls) == 2
+    first, second = (call["messages"][1]["content"] for call in calls)
+    assert names[0] in first and names[1] in first and names[2] not in first
+    assert names[2] in second and names[1] not in second
+
+
+def test_a_model_row_claiming_to_be_an_exact_keyword_is_ignored(tmp_path, caplog):
+    # The model's job is the fallback and nothing else; claiming a match of
+    # "exact" is not something it gets to decide.
     generator = _generator(
-        [_batch_json(rows[:32]), _batch_json(rows[32:])], log, tmp_path
+        tmp_path,
+        [
+            [
+                {
+                    "keyword": "sneaky exact title",
+                    "product": "Bodum Chambord French Press",
+                    "match": "exact",
+                }
+            ]
+        ],
     )
-
-    generator.generate()
-
-    first_send = log[0]["payload"]["messages"][1]["content"]
-    second_send = log[1]["payload"]["messages"][1]["content"]
-    # The first call has nothing to avoid; the second is told the first's pool.
-    assert "already used these" not in first_send
-    assert "never repeat one of them" in second_send
-    first_keywords = {row["keyword"] for row in rows[:32]}
-    for keyword in first_keywords:
-        assert f"`{keyword}`" in second_send
-    # A keyword only the second batch is expected to write is not pre-listed.
-    later_only = {row["keyword"] for row in rows[32:]} - first_keywords
-    assert later_only
-    for keyword in later_only:
-        assert f"`{keyword}`" not in second_send
+    bank = generator.generate_bank()
+    assert "sneaky exact title" not in [c.keyword for c in bank]
+    assert any("is not a fallback" in r.message for r in caplog.records)
 
 
-def test_dedupe_keywords_keeps_the_first_occurrence():
+def test_a_model_row_naming_an_unknown_product_is_ignored(tmp_path, caplog):
+    generator = _generator(
+        tmp_path,
+        [[{"keyword": "ghost tool", "product": "Ghost Product"}]],
+    )
+    bank = generator.generate_bank()
+    assert "ghost tool" not in [c.keyword for c in bank]
+    assert any("is not a fallback" in r.message for r in caplog.records)
+
+
+def test_a_fallback_that_fails_validation_is_dropped_not_fatal(tmp_path, caplog):
+    """A bad fallback costs its own row, not the run: the exact keyword stands."""
+    generator = _generator(
+        tmp_path,
+        [[{"keyword": "kitchen tools", "product": "Bodum Chambord French Press"}]],
+    )
+    bank = generator.generate_bank()
+    assert all(c.match == "exact" for c in bank)
+
+
+def test_a_fallback_duplicating_another_products_exact_keyword_is_deduped(tmp_path):
+    # The model must not be able to steal another product's exact string: the
+    # neediest owner keeps it, and the duplicate is dropped.
+    generator = _generator(
+        tmp_path,
+        [[{"keyword": "stainless steel garlic press",
+           "product": "Bodum Chambord French Press"}]],
+    )
+    bank = generator.generate_bank()
+    garlic = [c for c in bank if c.keyword == "stainless steel garlic press"]
+    assert len(garlic) == 1
+    assert garlic[0].product == "Stainless Steel Garlic Press"
+    assert garlic[0].match == "exact"
+
+
+def test_a_truncated_batch_is_salvaged_rather_than_paid_for_again(tmp_path, caplog):
+    # One complete row, then a second cut off mid-object — the documented
+    # `finish_reason="length"` failure mode.
+    truncated = (
+        '{"keywords": [{"keyword": "french press with plunger", '
+        '"product": "Bodum Chambord French Press", "rationale": "plunger"}, '
+        '{"keyword": "garlic press with cleaner", "prod'
+    )
+    response = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {"message": {"content": truncated}, "finish_reason": "length"}
+            ]
+        },
+    )
+    generator = _generator(tmp_path, [response])
+    bank = generator.generate_bank()
+    # The complete row survived the salvage and no second call was paid for.
+    assert len(generator.scripted.calls) == 1
+    assert "french press with plunger" in [c.keyword for c in bank]
+
+
+def test_an_empty_completion_names_the_finish_reason(tmp_path):
+    response = httpx.Response(
+        200,
+        json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}]},
+    )
+    generator = _generator(tmp_path, [response])
+    with pytest.raises(KeywordGenerationError, match="finish_reason='length'"):
+        generator.generate_bank()
+
+
+def test_an_http_error_fails_the_run(tmp_path):
+    generator = _generator(tmp_path, [httpx.Response(500, text="boom")])
+    with pytest.raises(KeywordGenerationError, match="LLM HTTP 500"):
+        generator.generate_bank()
+
+
+def test_a_transport_error_fails_the_run(tmp_path):
+    generator = _generator(tmp_path, [httpx.ConnectError("refused")])
+    with pytest.raises(KeywordGenerationError, match="transport error"):
+        generator.generate_bank()
+
+
+def test_a_fenced_json_response_is_accepted(tmp_path):
+    body = "```json\n" + json.dumps(
+        {
+            "keywords": [
+                {
+                    "keyword": "french press with plunger",
+                    "product": "Bodum Chambord French Press",
+                    "rationale": "plunger",
+                }
+            ]
+        }
+    ) + "\n```"
+    response = httpx.Response(
+        200, json={"choices": [{"message": {"content": body}, "finish_reason": "stop"}]}
+    )
+    bank = _generator(tmp_path, [response]).generate_bank()
+    assert "french press with plunger" in [c.keyword for c in bank]
+
+
+def test_an_unparsable_response_raises(tmp_path):
+    response = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {"message": {"content": "no json here"}, "finish_reason": "stop"}
+            ]
+        },
+    )
+    generator = _generator(tmp_path, [response])
+    with pytest.raises(KeywordGenerationError, match="could not be parsed"):
+        generator.generate_bank()
+
+
+def test_the_bank_never_writes_a_partial_result(tmp_path):
+    """A validation failure must reach the caller as an exception, not a bank."""
+    generator = _generator(tmp_path, [httpx.Response(500, text="boom")])
+    with pytest.raises(KeywordGenerationError):
+        generator.generate_bank()
+
+
+def test_generate_bank_raises_when_no_product_is_eligible(tmp_path):
+    # Every product's own name carries a banned token, so none can be named.
+    products = [_gold("Dead Sea Salt Scrub"), _gold("Jade Gua Sha")]
+    with pytest.raises(KeywordGenerationError, match="no eligible gold products"):
+        _generator(tmp_path, [], products=products)
+
+
+def test_the_generator_requires_an_llm_model(tmp_path, monkeypatch):
+    from src.config import settings
+
+    # An explicit empty `model=` falls back to the settings default (the repo's
+    # blank-means-default rule), so the error needs the setting itself empty.
+    monkeypatch.setattr(settings, "LLM_MODEL", "")
+    with pytest.raises(KeywordGenerationConfigError, match="LLM_MODEL"):
+        KeywordGenerator(
+            client=httpx.Client(transport=httpx.MockTransport(lambda r: r)),
+            gold_products_path=_write_gold(tmp_path),
+        )
+
+
+def test_a_non_positive_batch_size_is_rejected(tmp_path):
+    with pytest.raises(KeywordGenerationError, match="batch_size"):
+        _generator(tmp_path, [], batch_size=0)
+
+
+# ---------------------------------------------------------------------------
+# dedupe_keywords (kept machinery)
+# ---------------------------------------------------------------------------
+
+
+def test_dedupe_awards_a_contested_keyword_to_the_neediest_product():
     rows = [
-        {"keyword": "a", "product": "one"},
-        {"keyword": "b", "product": "two"},
-        {"keyword": "a", "product": "two"},
+        {"keyword": "shared tool", "product": "A"},
+        {"keyword": "shared tool", "product": "B"},
+        {"keyword": "b only", "product": "B"},
     ]
     kept, dropped = dedupe_keywords(rows)
-    assert [r["product"] for r in kept] == ["one", "two"]
-    assert dropped == ["a"]
+    assert dropped == ["shared tool"]
+    # B already has its own keyword, so A — which has none — wins the share.
+    assert [(r["keyword"], r["product"]) for r in kept] == [
+        ("shared tool", "A"),
+        ("b only", "B"),
+    ]
 
 
-def test_dedupe_keywords_awards_a_contested_keyword_to_the_neediest_product():
-    """Two products writing the same pair must end up with one each.
-
-    First-wins would hand both keywords to the first product and leave the
-    second with none, which is what failed the live cap-30 run — the rows
-    arrive in batch order, so the loss always fell on the later batch.
-    """
+def test_dedupe_keeps_the_earliest_row_on_a_tie():
     rows = [
-        {"keyword": "garlic press", "product": "helix"},
-        {"keyword": "garlic press with peeler", "product": "helix"},
-        {"keyword": "garlic press", "product": "oxo"},
-        {"keyword": "garlic press with peeler", "product": "oxo"},
+        {"keyword": "shared", "product": "A"},
+        {"keyword": "shared", "product": "B"},
     ]
     kept, dropped = dedupe_keywords(rows)
-    by_product = {}
-    for row in kept:
-        by_product.setdefault(row["product"], []).append(row["keyword"])
-    assert sorted(by_product) == ["helix", "oxo"]
-    assert len(by_product["helix"]) == 1
-    assert len(by_product["oxo"]) == 1
-    assert len({row["keyword"] for row in kept}) == 2
-    assert dropped == ["garlic press", "garlic press with peeler"]
+    assert dropped == ["shared"]
+    assert kept[0]["product"] == "A"
 
 
-def test_dedupe_keywords_leaves_a_single_writer_alone():
-    rows = [
-        {"keyword": "olive wood board", "product": "board"},
-        {"keyword": "bamboo bath caddy", "product": "caddy"},
-    ]
+def test_dedupe_leaves_unique_rows_alone():
+    rows = [{"keyword": "one", "product": "A"}, {"keyword": "two", "product": "B"}]
     kept, dropped = dedupe_keywords(rows)
-    assert kept == rows
-    assert dropped == []
+    assert len(kept) == 2 and dropped == []
 
 
-# --- the chunked bank flow (the widened Step-4 run) ------------------------
+# ---------------------------------------------------------------------------
+# parse_llm_keywords (kept machinery)
+# ---------------------------------------------------------------------------
 
 
-def test_chunk_sizes_sums_a_uniform_plan():
-    assert chunk_sizes(150, 30) == [30, 30, 30, 30, 30]
+def test_parse_llm_keywords_reads_a_plain_object():
+    rows, salvaged = parse_llm_keywords('{"keywords": [{"keyword": "x"}]}')
+    assert rows == [{"keyword": "x"}] and salvaged is False
 
 
-def test_chunk_sizes_borrows_a_product_when_the_tailing_chunk_is_24():
-    # 24 is the one unsatisfiable size (2 each = 48 short of 50; 3 each = 72
-    # past 70): the tailing chunk takes one product from the previous chunk
-    # so both satisfy the band.
-    assert chunk_sizes(84, 30) == [30, 29, 25]
-    assert chunk_sizes(54, 30) == [29, 25]
-
-
-def test_chunk_sizes_accepts_a_single_pool_table():
-    assert chunk_sizes(30, 30) == [30]
-    assert chunk_sizes(8, 30) == [8]
-
-
-def test_chunk_sizes_rejects_an_unsatisfiable_chunk_before_any_spend():
-    # A whole-table chunk of 24 (or a chunk size like 45, whose adaptive
-    # target cannot reach the 50-keyword band) fails the plan before any
-    # LLM call spends.
-    with pytest.raises(KeywordGenerationError, match="--chunk-size"):
-        chunk_sizes(24, 30)
-    with pytest.raises(KeywordGenerationError, match="--chunk-size"):
-        chunk_sizes(90, 45)
-    with pytest.raises(KeywordGenerationError, match="empty gold table"):
-        chunk_sizes(0, 30)
-
-
-def _table_names():
-    """The table the generator builds: the gold fixture, demand-ranked."""
-    return [p["name"] for p in select_gold_products(GOLD_PRODUCTS, limit=8)]
-
-
-def _bank_bodies(per_product, second_prefix="wk"):
-    """Two 4-product chunk responses with `per_product` rows per product.
-
-    The second chunk's keywords carry their own prefix (a real bank run
-    writes globally unique strings); `second_prefix="kw"` re-uses the first
-    pool's strings for the deliberate-repeat test.
-    """
-    ranked = _table_names()
-    first = _keyword_rows(ranked[:4], per_product=per_product)
-    second = _keyword_rows(ranked[4:], per_product=per_product, prefix=second_prefix)
-    return first, second
-
-
-def test_generate_bank_concatenates_two_validated_pools_in_order(tmp_path):
-    # Two chunks of 4 (target 13/products, summed target 104, band 54-124);
-    # rows of 14 each give each pool 56 keywords — legal inside the 50-70
-    # band — and a bank of 112 inside the merged band.
-    first, second = _bank_bodies(per_product=14)
-    log = []
-    generator = _generator(
-        [_batch_json(first), _batch_json(second)], log, tmp_path, max_products=8
+def test_parse_llm_keywords_salvages_a_truncated_tail():
+    rows, salvaged = parse_llm_keywords(
+        '{"keywords": [{"keyword": "a"}, {"keyword": "b", "ration'
     )
-
-    ranked = _table_names()
-    bank = generator.generate_bank(chunk_size=4)
-
-    assert len(bank) == 112
-    assert all(isinstance(row, CandidateKeyword) for row in bank)
-    broad = {row.keyword for row in bank if row.role == "broad"}
-    for row in bank:
-        if row.role == "modifier":
-            assert row.tightens in broad
-    # Chunk order is preserved: the first pool's products occupy the head.
-    assert [row.product for row in bank[:14]] == [ranked[0]] * 14
-    assert [row.product for row in bank[56:70]] == [ranked[4]] * 14
-    # One LLM call per chunk at the default 4-product batch size.
-    assert len(log) == 2
-
-
-def test_generate_bank_seeds_the_do_not_repeat_list_across_chunks(tmp_path):
-    first, second = _bank_bodies(per_product=14)
-    log = []
-    generator = _generator(
-        [_batch_json(first), _batch_json(second)], log, tmp_path, max_products=8
-    )
-
-    generator.generate_bank(chunk_size=4)
-
-    # The second pool's call is handed every keyword the first pool claimed.
-    second_send = log[1]["payload"]["messages"][1]["content"]
-    assert "already used these 56 strings" in second_send
-    for row in first:
-        assert f"`{row['keyword']}`" in second_send
-    # The first pool's own call has nothing to avoid yet.
-    assert "already used these" not in log[0]["payload"]["messages"][1]["content"]
-
-
-def test_generate_bank_fails_closed_on_a_cross_chunk_repeat(tmp_path):
-    """A cross-pool repeat is fatal, never silently deduped post-validation.
-
-    The second pool re-writes the first pool's keyword strings for its own
-    products ("kw" prefix re-used); every in-pool rule passes, so only the
-    cross-chunk check can catch it — a post-validation dedupe would void the
-    first pool's already validated per-product floor guarantee.
-    """
-    first, second = _bank_bodies(per_product=14, second_prefix="kw")
-    log = []
-    generator = _generator(
-        [_batch_json(first), _batch_json(second)], log, tmp_path, max_products=8
-    )
-
-    with pytest.raises(KeywordGenerationError, match="cross-chunk repeat"):
-        generator.generate_bank(chunk_size=4)
-
-
-def test_generate_bank_rejects_a_merged_bank_over_the_band(tmp_path):
-    # Both pools are legal (64 ≤ 70), but 128 exceeds the merged ceiling at
-    # this sizing (summed target 104 + BANK_MAX_SLACK = 124): the bank band
-    # is what keeps over-delivery inside the operator's envelope.
-    first, second = _bank_bodies(per_product=17)
-    log = []
-    generator = _generator(
-        [_batch_json(first), _batch_json(second)], log, tmp_path, max_products=8
-    )
-
-    summed_target = 2 * (per_product_target(4) * 4)
-    bank_max = summed_target + BANK_MAX_SLACK
-    assert len(first) + len(second) == bank_max + 4
-    with pytest.raises(KeywordGenerationError, match="merged keyword bank"):
-        generator.generate_bank(chunk_size=4)
-
-
-def test_generate_bank_band_scales_with_a_smaller_cap(tmp_path):
-    # A deliberate smaller table gets its own band around its own summed
-    # target — the operator's 250-320 band is the default sizing, not a
-    # constant that would make every smaller run fail.
-    ranked = [p["name"] for p in select_gold_products(GOLD_PRODUCTS, limit=4)]
-    first = _keyword_rows(ranked[:2], per_product=26)
-    second = _keyword_rows(ranked[2:], per_product=26, prefix="wk")
-    log = []
-    generator = _generator(
-        [_batch_json(first), _batch_json(second)], log, tmp_path, max_products=4
-    )
-
-    bank = generator.generate_bank(chunk_size=2)
-
-    summed_target = per_product_target(2) * 2 * 2
-    assert len(bank) == 104
-    assert summed_target - BANK_MIN_SLACK <= len(bank) <= summed_target + BANK_MAX_SLACK
-
-
-def test_parse_llm_keywords_reports_salvage():
-    rows = _keyword_rows(["Dry body brush"])
-    complete, salvaged = parse_llm_keywords(_batch_json(rows))
-    assert complete == rows
-    assert salvaged is False
-
-    cut = _batch_json(rows[:5])[:-30]
-    partial, salvaged = parse_llm_keywords(cut)
-    assert len(partial) == 4
+    assert [r["keyword"] for r in rows] == ["a"]
     assert salvaged is True
 
 
-def test_parse_llm_keywords_rejects_unsalvageable():
-    with pytest.raises(KeywordGenerationError, match="could not be parsed"):
-        parse_llm_keywords("the model replied in prose, not JSON")
+# ---------------------------------------------------------------------------
+# carries_banned_token / PILLARS
+# ---------------------------------------------------------------------------
 
 
-# --- pool validation ------------------------------------------------------
+def test_carries_banned_token_finds_the_boundary_tokens():
+    assert carries_banned_token("jade roller") == "jade"
+    assert carries_banned_token("french press") is None
+    assert carries_banned_token(None) is None
 
 
-def _valid_pool():
-    return _keyword_rows(GOLD_NAMES)
+def test_pillars_are_the_five_morning_anthem_keys():
+    assert set(PILLARS) == {
+        "brew_fuel", "sunrise_move", "mindful_awakening",
+        "restful_reset", "morning_table",
+    }
 
 
-def test_validate_pool_accepts_the_reference_pool():
-    assert validate_pool(_valid_pool(), GOLD_NAMES) == []
+# ---------------------------------------------------------------------------
+# Runner: scripts/generate_gold_keywords.py
+# ---------------------------------------------------------------------------
 
 
-def test_validate_pool_banned_token():
-    rows = _valid_pool()
-    rows[5]["keyword"] = "dead sea mud brush"
-    problems = validate_pool(rows, GOLD_NAMES, min_keywords=10, max_keywords=100)
-    assert any("banned token 'dead sea'" in p for p in problems)
-    # The prompt's boundary list and the code's check are the same tuple.
-    assert "dead sea" in BANNED_TOKENS
+def _runner():
+    import importlib.util
 
-
-def test_validate_pool_dangling_tightens():
-    rows = _valid_pool()
-    rows[5]["tightens"] = "kw 99 head"
-    problems = validate_pool(rows, GOLD_NAMES, min_keywords=10, max_keywords=100)
-    assert any("not in the pool" in p for p in problems)
-
-
-def test_validate_pool_tightens_itself():
-    rows = _valid_pool()
-    # A modifier that carries a real broad term as both its keyword and its
-    # tightens target (this also duplicates that broad keyword).
-    rows[5]["keyword"] = "kw 0 head 1"
-    rows[5]["tightens"] = "kw 0 head 1"
-    problems = validate_pool(rows, GOLD_NAMES, min_keywords=10, max_keywords=100)
-    assert any("tightens itself" in p for p in problems)
-
-
-def test_validate_pool_broad_carries_tightens():
-    rows = _valid_pool()
-    rows[0]["tightens"] = "kw 0 head 1"
-    problems = validate_pool(rows, GOLD_NAMES, min_keywords=10, max_keywords=100)
-    assert any("is broad but carries tightens" in p for p in problems)
-
-
-def test_validate_pool_unknown_pillar_and_role():
-    rows = _valid_pool()
-    rows[5]["pillar"] = "beauty"
-    rows[5]["role"] = "longtail"
-    problems = validate_pool(rows, GOLD_NAMES, min_keywords=10, max_keywords=100)
-    assert any("unknown pillar 'beauty'" in p for p in problems)
-    assert any("unknown role 'longtail'" in p for p in problems)
-
-
-def test_validate_pool_missing_field():
-    rows = _valid_pool()
-    del rows[5]["rationale"]
-    problems = validate_pool(rows, GOLD_NAMES, min_keywords=10, max_keywords=100)
-    assert any("missing fields ['rationale']" in p for p in problems)
-
-
-def test_validate_pool_duplicates():
-    problems = validate_pool(_valid_pool() + [_valid_pool()[0]], GOLD_NAMES)
-    assert any("duplicate keywords" in p for p in problems)
-
-
-def test_validate_pool_size_band():
-    rows = _valid_pool()[:40]
-    problems = validate_pool(rows, GOLD_NAMES)
-    assert any("outside the 50-70 band" in p for p in problems)
-
-
-def test_validate_pool_product_coverage():
-    rows = _valid_pool()
-    rows[0]["product"] = "Mystery item"
-    problems = validate_pool(rows, GOLD_NAMES)
-    assert any("outside the gold product table" in p for p in problems)
-
-    dropped = [r for r in _valid_pool() if r["product"] != GOLD_NAMES[0]]
-    problems = validate_pool(dropped, GOLD_NAMES)
-    assert any(f"'{GOLD_NAMES[0]}'" in p for p in problems)
-
-
-def test_validate_pool_per_product_minimum():
-    rows = _keyword_rows(GOLD_NAMES, per_product=4)
-    problems = validate_pool(rows, GOLD_NAMES, min_keywords=10, max_keywords=100)
-    assert any("5-keyword minimum" in p for p in problems)
-
-    # An explicit floor overrides the adaptive default.
-    problems = validate_pool(
-        rows, GOLD_NAMES, min_keywords=10, max_keywords=100, per_product_min=1
+    spec = importlib.util.spec_from_file_location(
+        "step4_runner",
+        Path(__file__).resolve().parents[1] / "scripts" / "generate_gold_keywords.py",
     )
-    assert not any("minimum" in p for p in problems)
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    return runner
 
 
-# --- endpoint failures ----------------------------------------------------
+def test_the_digest_lists_each_product_with_its_exact_and_fallback_keyword():
+    runner = _runner()
+    candidates = [
+        CandidateKeyword(
+            keyword="bodum chambord french press",
+            product="Bodum Chambord French Press",
+            pillar="brew_fuel",
+            match="exact",
+            rationale="the gold product's own title",
+        ),
+        CandidateKeyword(
+            keyword="french press with plunger",
+            product="Bodum Chambord French Press",
+            pillar="brew_fuel",
+            match="tight_fallback",
+            rationale="names the plunger",
+        ),
+    ]
+    digest = runner.render_markdown(candidates)
+    assert "### Bodum Chambord French Press" in digest
+    assert "- **exact** — `bodum chambord french press`" in digest
+    assert "- fallback — `french press with plunger` (names the plunger)" in digest
+    assert "1 exact-title" in digest and "1 fallback" in digest
 
 
-def test_missing_llm_config_raises(monkeypatch):
-    monkeypatch.setattr(settings, "LLM_BASE_URL", "")
-    monkeypatch.setattr(settings, "LLM_API_KEY", "")
-    with pytest.raises(KeywordGenerationConfigError) as excinfo:
-        KeywordGenerator()
-    assert "LLM_BASE_URL" in str(excinfo.value)
-    assert "LLM_API_KEY" in str(excinfo.value)
+def test_the_plan_prints_the_bank_size_and_the_call_count_before_spending(tmp_path, capsys):
+    runner = _runner()
+    generator = _generator(tmp_path, [])
+    runner.print_plan(generator)
+
+    out = capsys.readouterr().out
+    assert "eligible product(s)" in out
+    assert "exact" in out and "fallback" in out
+    # The step spends LLM tokens but never HasData credits, and says so.
+    assert "no HasData credits" in out
 
 
-def test_http_error_raises(tmp_path):
-    transport = httpx.MockTransport(lambda request: httpx.Response(500, text="boom"))
-    generator = KeywordGenerator(
-        client=httpx.Client(transport=transport),
-        base_url="http://llm.test",
-        api_key="mock-test-llm_api_key",
-        gold_products_path=_write_gold(tmp_path),
+def test_the_runner_writes_the_bank_and_the_digest(tmp_path, monkeypatch, capsys):
+    import sys
+
+    runner = _runner()
+    gold = _write_gold(tmp_path)
+    output = tmp_path / "bank.json"
+
+    # Stub the generator so the runner is driven end to end without an LLM.
+    monkeypatch.setattr(
+        runner, "KeywordGenerator",
+        lambda **kwargs: _StubGenerator(tmp_path, gold),
     )
-    with pytest.raises(KeywordGenerationError, match="LLM HTTP 500"):
-        generator.generate()
-
-
-def test_transport_error_raises(tmp_path):
-    def refuse(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
-
-    generator = KeywordGenerator(
-        client=httpx.Client(transport=httpx.MockTransport(refuse)),
-        base_url="http://llm.test",
-        api_key="mock-test-llm_api_key",
-        gold_products_path=_write_gold(tmp_path),
+    monkeypatch.setattr(
+        sys, "argv",
+        ["generate_gold_keywords.py", "--gold-products", str(gold),
+         "--output", str(output)],
     )
-    with pytest.raises(KeywordGenerationError, match="LLM transport error"):
-        generator.generate()
+    assert runner.main() == 0
+
+    payload = json.loads(output.read_text())
+    assert payload["strategy"] == "exact_title_first"
+    assert payload["counts"] == {"exact": 1, "tight_fallback": 1}
+    assert payload["source_products"] == 1
+    digest = (tmp_path / "bank.md").read_text()
+    assert "exact" in digest and "fallback" in digest
+    assert "[STEP 4 COMPLETE]" in capsys.readouterr().out
+
+
+def test_the_runner_halts_when_the_gold_file_is_missing(tmp_path, capsys, monkeypatch):
+    import sys
+
+    runner = _runner()
+    monkeypatch.setattr(
+        sys, "argv",
+        ["generate_gold_keywords.py", "--gold-products", str(tmp_path / "absent.json"),
+         "--output", str(tmp_path / "bank.json")],
+    )
+    assert runner.main() == 1
+    out = capsys.readouterr().out
+    assert "Step 4 Gold Products" in out
+    assert "run_gold_standard_research.py" in out
+    assert not (tmp_path / "bank.json").exists()
+
+
+def test_the_runner_halts_when_the_bank_fails_validation(tmp_path, capsys, monkeypatch):
+    import sys
+
+    runner = _runner()
+    gold = _write_gold(tmp_path)
+    output = tmp_path / "bank.json"
+    monkeypatch.setattr(
+        runner, "KeywordGenerator", lambda **kwargs: _FailingGenerator(gold)
+    )
+    monkeypatch.setattr(
+        sys, "argv",
+        ["generate_gold_keywords.py", "--gold-products", str(gold),
+         "--output", str(output)],
+    )
+    assert runner.main() == 1
+    out = capsys.readouterr().out
+    assert "Step 4 Keyword Bank" in out
+    assert "code bug, not a model slip" in out
+    # Nothing is written: a failed bank is not a partial deliverable.
+    assert not output.exists()
+
+
+class _StubGenerator:
+    """A generator stand-in returning a fixed one-exact-one-fallback bank."""
+
+    def __init__(self, tmp_path: Path, gold: Path) -> None:
+        self.products = GOLD[:1]
+        self.batch_size = 4
+
+    def generate_bank(self) -> List[CandidateKeyword]:
+        return [
+            CandidateKeyword(
+                keyword="bodum chambord french press",
+                product="Bodum Chambord French Press",
+                pillar="brew_fuel",
+                match="exact",
+                rationale="the gold product's own title",
+            ),
+            CandidateKeyword(
+                keyword="french press with plunger",
+                product="Bodum Chambord French Press",
+                pillar="brew_fuel",
+                match="tight_fallback",
+                rationale="names the plunger",
+            ),
+        ]
+
+
+class _FailingGenerator:
+    def __init__(self, gold: Path) -> None:
+        self.products = GOLD[:1]
+        self.batch_size = 4
+
+    def generate_bank(self):
+        raise KeywordGenerationError(
+            "keyword bank failed validation:\n- row 0 is an exact keyword "
+            "('x') that does not match its product's own title ('y')"
+        )

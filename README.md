@@ -365,54 +365,38 @@ the `x-api-key` header; the official CLI builds the identical URL, which
 cross-checks the request shape. The skills stay installed for agent-side
 research (`.agents/skills/`, §5).
 
-### 2.5 Step 4 — gold-standard keyword bank
+### 2.5 Step 4 — gold-standard keyword bank (exact title first)
 
-Turns the Step-3 gold list into the **supplier search keyword bank** Step 5
-ingests — generated **in pool chunks**: the table is capped at 150 eligible
-products (`DEFAULT_MAX_PRODUCTS`, raiseable/lowerable via `--max-products`)
-and each `--chunk-size` 30 slice generates ONE pool validated under the
-single-pool rules, so the default run writes ~300 keywords. The reasoning LLM
-authors the keywords; every structural rule is re-checked in code
-(broad/modifier pairing, pillar membership, the AICIS banned-token boundary,
-the 50–70 band per pool, the merged bank band around the chunks' summed
-target — 250–320 at the default sizing — and per-product coverage and
-floor), and a pool that breaks any rule exits non-zero with nothing written.
+Turns the gold list into the supplier search strings Step 5 feeds to
+CJdropshipping. The bank is built **exact title first**: each product's primary
+keyword is its **own title**, derived in code, and the configured reasoning LLM
+contributes only the optional **fallback**.
 
 ```bash
 source .venv/bin/activate && python scripts/generate_gold_keywords.py \
-    [--gold-products outputs/json/step-3-gold-standard-products.json] \
-    [--batch-size 4] [--max-products 150] [--chunk-size 30] \
-    [--output outputs/json/step-4-gold-keywords.json] [--markdown …]
+    [--gold-products outputs/json/morning-anthem-step-3-gold-products.json] \
+    [--batch-size 4] [--max-products 150] \
+    [--output outputs/json/morning-anthem-step-4-keyword-bank.json]
 ```
 
-- **The prompt carries no products.** `src/keywords/gold_keyword_prompt.md` has a
-  literal `{PRODUCT_TABLE}` slot filled at runtime from the live Step-3
-  deliverable, so the gold products are ground truth the prompt never hardcodes.
-  Each chunk's table is exactly the slice it covers, so one prompt serves all
-  pools.
-- **Selection is bounded, type-diverse and deterministic.** The gold deliverable
-  can hold far more products than any single 50–70 pool can cover, so the table
-  is capped at `DEFAULT_MAX_PRODUCTS` (`--max-products`), ranked by demand,
-  collapsed to the strongest row per duplicate name, collapsed to **one product
-  per Step-2 source keyword**, then round-robined across pillars so a capped
-  table still covers every pillar.
-- **The one-per-source-keyword collapse is load-bearing.** The research is
-  keyword-driven, so the strongest rows by raw demand cluster into a few
-  distinct product types. Every table product must be named by its *own*
-  keywords, a duplicate keyword string is fatal and brand names are banned — so
-  several garlic presses cannot each own two honest keywords. One row per source
-  keyword spends the table on distinct products instead.
-- **Uniqueness is enforced at three levels.** `validate_pool` treats a
-  duplicate keyword as fatal; within a pool, the neediest-first dedupe salvages
-  a contested string; and across pools a repeat is **fail-closed** — every
-  chunk's call is handed the strings earlier chunks claimed as an explicit
-  do-not-repeat list, and a chunk that re-writes one anyway fails the run
-  (a post-validation silent dedupe would void the earlier pool's validated
-  per-product floor).
-- **Deliverable**: `KEYWORD_BANK_PATH` (+ a `.md` digest with modifiers nested
-  under their broad term) in the untracked `outputs/` tree — Step 5's intake.
-  The runner prints the bank plan (chunk sizes, targets, band and the LLM-call
-  estimate) before the first call.
+- **The exact keyword is code-derived** (`exact_keyword`): lowercase, apostrophes
+  removed, every other run of non-alphanumerics collapsed to a single space —
+  `Bodum Chambord French Press, 1L` → `bodum chambord french press 1l`. Copying a
+  string is not a job for a model, and a code-derived string cannot hallucinate.
+- **The fallback is the model's only job**: one tightly-specific variant of that
+  title — the same object named through its mechanics, material, form factor or
+  size — for a product whose exact title finds nothing. At most one per product,
+  and an empty list is a valid answer the prompt explicitly allows.
+- **Validation splits by who could cause the problem.** A broken *code* invariant
+  (an exact keyword that does not match its product's title, a missing exact row,
+  a row naming an unknown product) fails the run and writes nothing. A *model*
+  slip (a fallback too long, punctuated, banned, or sharing no concrete word with
+  its own title) costs that one row and the bank is re-validated without it.
+- **Deliverables**: `MORNING_ANTHEM_KEYWORD_BANK_PATH` (the bank — each row typed
+  `match ∈ {exact, tight_fallback}`) and a `.md` digest listing every product with
+  its exact keyword and its fallback. Both in the untracked `outputs/` tree.
+- **Cost**: LLM tokens only. This step spends **no HasData credits** — the gold
+  list it reads was bought in Step 3.
 
 ### 2.6 Step 5 — CJ ingestion (the gold kernel)
 

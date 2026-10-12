@@ -1,9 +1,9 @@
 # CLAUDE.md - Dropship Scout Agent (The Morning Anthem, Supplier-First)
 
 > Aligned with the implemented codebase as of **2026-10-12**, on branch
-> `feature/morning-anthem-pipeline-update`: **§1 (the rebrand sweep), Step 2 and
-> Step 3 are implemented** — §1 and Step 2 live-piloted, Step 3 hermetically
-> tested and awaiting its first live run. Steps 4–6 are not started (see §13.8).
+> `feature/morning-anthem-pipeline-update`: **§1 (the rebrand sweep) and Steps 2,
+> 3 and 4 are implemented** — §1 and Step 2 live-piloted, Steps 3–4 hermetically
+> tested and awaiting their first live run. Steps 5–6 are not started (see §13.8).
 > This file is the operating mandate and the single source of operating
 > context: it carries the schemas, gate rules, config reference and
 > operational notes.
@@ -780,7 +780,7 @@ older spike proposed is still dead and must still never be built.
 | 1 | Google Trends (**HasData MCP only**) research | done — the Apify fallback is retired; the live pilot used two HasData Trends calls |
 | 2 | Trends → candidate strings → **Jev product-intent gate** → AU product-search keywords, tagged with the five Morning Anthem pillars | **done — §13.8**, deliverable `outputs/json/morning-anthem-step-2-trend-keywords.json` (untracked) |
 | 3 | Google Shopping AU scrape (**HasData only**, no `--source`) + LLM select-by-url curation + **Jev pillar gate** → gold-standard product list | **done — §13.8**; §13.2 describes the superseded design |
-| 4 | Reasoning LLM → supplier keyword bank from the gold list | not started — §13.3 is the superseded design |
+| 4 | **Exact-title-first** keyword bank: each product's own title in code, plus one optional LLM fallback | **done — §13.8**; §13.3 describes the superseded design |
 | 5 | **CJ-only** ingestion of the keyword bank → `morning-anthem-candidates/cjdropshipping/` | not started — §13.6 is the superseded design |
 | 6 | Jev ranks supplier candidates against the gold products | not started — §13.7 is the superseded design |
 | 7–8 | Human-only: CJ app linking; store curation | no code (deliberately) |
@@ -958,11 +958,15 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
 
 ### 13.3 Step 4 — gold-standard keyword bank (SUPERSEDED — see §13.8)
 
-> **Historical.** The mechanism (chunked pools, code-side validation,
-> do-not-repeat list, salvage) still stands, but the pillar Literal is the five
-> Morning Anthem keys and the prompt now names CJdropshipping as the sole
-> catalogue. **The exact-title-first strategy in the plan (§6) has not been
-> implemented yet** — the bank still emits broad/modifier pairs.
+> **Historical, and now re-implemented** — see §13.8 for the live design. The
+> broad/modifier pairing, the 50–70 pool band, the chunked pools, the adaptive
+> per-product target and the merged bank band are all **deleted**: they existed
+> to spread a *generated* pool across products it could not otherwise name, and
+> when the primary keyword is the product's own title there is nothing left for
+> a band to enforce. What survives is the template prompt with its
+> `{PRODUCT_TABLE}` slot, the demand-ranked / type-diverse / pillar-balanced
+> selection, the AICIS boundary, the batched calls with JSON-tail salvage, and
+> the neediest-first duplicate collapse.
 
 ```bash
 source .venv/bin/activate && python scripts/generate_gold_keywords.py \
@@ -1768,6 +1772,47 @@ would leave Steps 4–6 reading a file that looks like a result.
 **Tests**: `tests/test_pillar_gate.py` (20 tests) covers the verdict set, the
 enriched state, the batching, the join, the retry containment, verbatim
 carry-through, `attach_pillars`, and the runner's wiring and zero-survivor halt.
+
+#### Step 4 — the keyword bank, exact title first
+
+Turns the gold list into the supplier search strings Step 5 feeds to
+CJdropshipping. **The strategy is exact-title first**, and it moves as much of the
+work as possible back into code:
+
+1. **The primary keyword is the product's own title**, produced by
+   `exact_keyword()` — a deterministic transform (lowercase, apostrophes removed,
+   every other run of non-alphanumerics collapsed to one space). Copying a string
+   is not a job for a model, and a code-derived string cannot hallucinate. That
+   exact string is the highest-precision query there is for the identical product.
+2. **The model's only job is the optional fallback**: one tightly-specific variant
+   of that title for a product whose exact title finds nothing — the same object
+   named through its mechanics, material, form factor or size. At most one per
+   product, and plenty of products get none; the prompt says an empty list is a
+   valid and common answer.
+
+So the bank is roughly one row per product plus the fallbacks that earned their
+place, and every row is typed `match ∈ {exact, tight_fallback}`.
+
+**Validation splits by who could have caused the problem** (`validate_bank`
+returns `BankProblem`s carrying the row index and a `droppable` flag):
+
+* **Code invariants** — an exact keyword that does not match its product's title,
+  a product with no exact row, a row naming an unknown product or another
+  product's pillar, a duplicate that reached validation — **fail the run**,
+  because a code invariant broke and nothing is written.
+* **Model slips** — a fallback that is too long or short, punctuated or
+  capitalised, carries a banned token, or shares no concrete word with its own
+  title (the cheap code-side proxy for "specific to THIS product") — cost **their
+  own row**, and the bank is re-validated without them. The product still has its
+  exact keyword, so one bad fallback must not void a run.
+* A model row that names an unknown product, or claims `match="exact"`, is
+  ignored on arrival: the model does not get to decide either.
+
+**What this deletes:** the 50–70 per-pool band, the chunked pools, the adaptive
+per-product target, the merged bank band, the broad/modifier pairing and its
+`tightens` links. All of them existed to spread a *generated* pool across
+products it could not otherwise name; with the title as the primary keyword,
+uniqueness is free and coverage is one row per product.
 
 #### The launch run (one-off, operator decision 2026-10-12)
 

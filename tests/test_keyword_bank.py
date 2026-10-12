@@ -52,9 +52,7 @@ def _bank_row(
         "product": product,
         "pillar": "morning_table",
         "match": match,
-        "role": "broad",
-        "tightens": None,
-        "rationale": "Head term",
+        "rationale": "the gold product's own title",
     }
 
 
@@ -227,9 +225,7 @@ def _keywords(count: int = 2) -> List[BankKeyword]:
             product="Gold Product",
             pillar="morning_table",
             match="exact",
-            role="broad",
-            tightens=None,
-            rationale="Head term",
+            rationale="the gold product's own title",
         )
         for index in range(count)
     ]
@@ -275,8 +271,7 @@ def test_load_keyword_bank_reads_typed_rows(tmp_path):
     assert isinstance(bank[0], BankKeyword)
     assert bank[0].pillar == "morning_table"
     assert bank[0].match == "exact"
-    assert bank[0].role == "broad"
-    assert bank[0].tightens is None
+    assert bank[0].rationale
 
 
 def test_load_keyword_bank_accepts_a_bare_list_payload(tmp_path):
@@ -284,14 +279,12 @@ def test_load_keyword_bank_accepts_a_bare_list_payload(tmp_path):
     assert [row.keyword for row in load_keyword_bank(path)] == ["pumice foot file"]
 
 
-def test_load_keyword_bank_keeps_a_modifier_s_tightens(tmp_path):
-    row = _bank_row("stainless garlic press with peeler")
-    row["role"] = "modifier"
-    row["tightens"] = "stainless garlic press"
+def test_load_keyword_bank_reads_a_fallback_row(tmp_path):
+    row = _bank_row("stainless steel garlic press with cleaner", match="tight_fallback")
     path = _write_bank(tmp_path, {"keywords": [row]})
-    assert (
-        load_keyword_bank(path)[0].tightens == "stainless garlic press"
-    )
+    loaded = load_keyword_bank(path)[0]
+    assert loaded.match == "tight_fallback"
+    assert loaded.rationale
 
 
 def test_load_keyword_bank_defaults_to_the_configured_path(tmp_path, monkeypatch):

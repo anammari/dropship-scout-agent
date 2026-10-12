@@ -94,7 +94,7 @@ class BankKeyword:
 
     `product` and `pillar` are provenance (they tie the keyword back to the
     gold product it came from and stay in the bank file); `match` records
-    whether the keyword is the verbatim product title (`exact`) or a
+    whether the keyword is the product's own title, code-derived (`exact`), or a
     tightly-specific LLM-authored variant (`tight_fallback`). Only `keyword`
     reaches a supplier query.
     """
@@ -103,8 +103,6 @@ class BankKeyword:
     product: str
     pillar: str
     match: str = "exact"
-    role: str = ""
-    tightens: Optional[str] = None
     rationale: str = ""
 
 
@@ -189,7 +187,6 @@ def load_keyword_bank(path: Optional[Path] = None) -> List[BankKeyword]:
                 "the bank as well as in the generator. Re-generate the bank: "
                 "python scripts/generate_gold_keywords.py"
             )
-        tightens = row.get("tightens")
         match = str(row.get("match") or "exact").strip().lower()
         if match not in ("exact", "tight_fallback"):
             match = "exact"
@@ -199,8 +196,6 @@ def load_keyword_bank(path: Optional[Path] = None) -> List[BankKeyword]:
                 product=str(row.get("product") or ""),
                 pillar=str(row.get("pillar") or ""),
                 match=match,
-                role=str(row.get("role") or ""),
-                tightens=str(tightens).strip() if tightens else None,
                 rationale=str(row.get("rationale") or ""),
             )
         )
