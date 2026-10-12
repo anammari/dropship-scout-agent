@@ -598,3 +598,38 @@ def test_price_value_survives_the_dump_raw_round_trip():
     replayed = ShoppingRow(**vars(row))
     assert replayed.price_value == pytest.approx(89.95)
     assert vars(replayed) == vars(row)
+
+
+def test_price_value_does_not_mistake_a_discount_for_the_price():
+    # A display string is not always a bare price. An unanchored "first number"
+    # read would turn "10% off $50" into 10 — a wrong number handed to a decision
+    # model, which is worse than no number.
+    rows = parse_response(
+        {"shoppingResults": [_live_item(price="10% off $50.00", extractedPrice=None)]},
+        "french press",
+    )
+    assert rows[0].price_value == pytest.approx(50.00)
+
+
+def test_price_value_reads_a_currency_anchored_figure():
+    for text, expected in (
+        ("AU$1,299.00", 1299.0),
+        ("US $12.99", 12.99),
+        ("USD 12.99", 12.99),
+        ("£24.50", 24.50),
+    ):
+        rows = parse_response(
+            {"shoppingResults": [_live_item(price=text, extractedPrice=None)]},
+            "french press",
+        )
+        assert rows[0].price_value == pytest.approx(expected), text
+
+
+def test_price_value_gives_up_rather_than_guess_a_number():
+    # No currency anchor and no cents: nothing here is a price we can trust.
+    for text in ("Free", "$", "Sale", "12", "2 for 1"):
+        rows = parse_response(
+            {"shoppingResults": [_live_item(price=text, extractedPrice=None)]},
+            "french press",
+        )
+        assert rows[0].price_value is None, text

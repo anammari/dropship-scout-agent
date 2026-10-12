@@ -86,25 +86,36 @@ class HasDataShoppingRunFailedError(HasDataShoppingError):
     """The HTTP call failed, or the API answered with an error status."""
 
 
-#: A leading currency symbol or code, and thousands separators, are the only
-#: decoration a Google Shopping price string carries ("$1,299.00", "AU$89.95").
-_PRICE_NUMBER_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)")
+#: A number ANCHORED to a currency symbol or code. Anchoring matters: a display
+#: string is not always a bare price, and an unanchored first number would read
+#: "10% off $50" as 10 — feeding a decision model a wrong number is worse than
+#: feeding it none. Covers "$1,299.00", "AU$89.95", "US $12.99", "USD 12.99".
+_PRICE_ANCHORED_RE = re.compile(
+    r"(?:AU\s*\$|US\s*\$|USD|AUD|\$|£|€)\s*(\d[\d,]*(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+#: A last resort: a bare decimal with cents ("12.99"), which is a price shape a
+#: discount percentage cannot imitate.
+_PRICE_DECIMAL_RE = re.compile(r"\b(\d[\d,]*\.\d{2})\b")
 
 
 def _price_value(item: Dict[str, Any], price: Any) -> Optional[float]:
     """The row's retail price as a number, or None.
 
     Prefers the payload's own numeric field (`extractedPrice`, present on the
-    live shape); falls back to parsing the display string. Both are the
-    supplier's figure — this only re-types it, and returns None rather than a
-    guess when neither yields a number.
+    live shape). The display-string fallback is deliberately cautious — it reads
+    a currency-anchored figure first, then a bare decimal-with-cents, and gives up
+    rather than guess: this number reaches a decision model as context, so a wrong
+    figure is worse than an absent one.
     """
     extracted = item.get("extractedPrice")
     if isinstance(extracted, (int, float)) and not isinstance(extracted, bool):
         return float(extracted)
     if price is None:
         return None
-    match = _PRICE_NUMBER_RE.search(str(price))
+    text = str(price)
+    match = _PRICE_ANCHORED_RE.search(text) or _PRICE_DECIMAL_RE.search(text)
     if not match:
         return None
     try:
