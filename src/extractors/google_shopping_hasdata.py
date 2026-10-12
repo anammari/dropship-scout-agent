@@ -176,7 +176,9 @@ class HasDataShoppingScraper:
 
     #: Published rate for the Google Shopping API; used for the runner's
     #: spend banner and the run telemetry. HasData returns no per-call usage
-    #: figure, so this is a rate, not a measurement.
+    #: figure, so this is a rate, not a measurement. The config key
+    #: `HASDATA_SHOPPING_CREDITS_PER_REQUEST` is what the *guardrails* read, so
+    #: the two stay in step if the rate ever changes.
     CREDITS_PER_REQUEST = 10
 
     def __init__(

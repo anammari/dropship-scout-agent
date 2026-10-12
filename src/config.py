@@ -210,11 +210,32 @@ class Settings:
         self.HASDATA_MONTHLY_BUDGET: int = _parse_int(
             os.getenv("HASDATA_MONTHLY_BUDGET"), default=1000
         )
+        # The launch-run profile (operator decision 2026-10-12): a one-off
+        # full run that front-loads the month's research into one gold list,
+        # because the CJ side of the pipeline costs no credits. At the rates
+        # below the two halves sum to the cap exactly:
+        #   Step 2  TRENDS_MAX_CALLS (10) x 10 = 100
+        #   Step 3  30 keywords x 10            = 300
+        #                                       = 400 = HASDATA_PRODUCTION_CAP
+        # ~600 credits of the monthly tier stay in reserve for the per-step
+        # pilots and any re-run.
         self.HASDATA_PRODUCTION_CAP: int = _parse_int(
-            os.getenv("HASDATA_PRODUCTION_CAP"), default=250
+            os.getenv("HASDATA_PRODUCTION_CAP"), default=400
         )
         self.HASDATA_GS_MAX_KEYWORDS: int = _parse_int(
-            os.getenv("HASDATA_GS_MAX_KEYWORDS"), default=20
+            os.getenv("HASDATA_GS_MAX_KEYWORDS"), default=30
+        )
+        # The rates the guardrail arithmetic is computed from, so a confirmed
+        # figure is a one-line change rather than a hunt through the runners.
+        # Trends is OBSERVED at 10 credits/call (2026-10-12: two live pilot
+        # calls moved the account balance by exactly 20), while the published
+        # tables say 5 — the conservative observed figure is budgeted until
+        # the operator's dashboard usage log settles it.
+        self.HASDATA_TRENDS_CREDITS_PER_CALL: int = _parse_int(
+            os.getenv("HASDATA_TRENDS_CREDITS_PER_CALL"), default=10
+        )
+        self.HASDATA_SHOPPING_CREDITS_PER_REQUEST: int = _parse_int(
+            os.getenv("HASDATA_SHOPPING_CREDITS_PER_REQUEST"), default=10
         )
         # Step-3 deliverable path (untracked outputs/ tree — all production
         # deliverables of the Morning Anthem pipeline live there, never a

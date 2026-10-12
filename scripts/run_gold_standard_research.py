@@ -81,26 +81,32 @@ PILOT_CREDIT_CAP = HasDataShoppingScraper.CREDITS_PER_REQUEST
 def print_spend_plan(keywords: list[str], results_per_keyword: int) -> None:
     """The honest pre-spend envelope, in HasData credits.
 
-    One request per keyword at the published 10-credit rate; the request count
-    IS the keyword count, and the keyword count IS the spend. One request
-    returns the whole grid per query (~65 rows observed), so the local row cap
-    bounds LLM curation only, never HasData spend.
+    One request per keyword; the request count IS the keyword count, and the
+    keyword count IS the spend. One request returns the whole grid per query
+    (~65 rows observed), so the local row cap bounds LLM curation only, never
+    HasData spend. The rate is read from config so the banner and the
+    guardrail arithmetic cannot disagree.
     """
     requests = len(keywords)
-    credits = requests * HasDataShoppingScraper.CREDITS_PER_REQUEST
+    rate = settings.HASDATA_SHOPPING_CREDITS_PER_REQUEST
+    credits = requests * rate
     print(
         f"planned HasData spend: {requests} keyword(s) x 1 request "
-        f"({HasDataShoppingScraper.CREDITS_PER_REQUEST} credits) = "
-        f"{credits} credit(s), at the published Google Shopping rate. "
-        f"One request returns the whole grid per query (~65 rows "
-        f"observed); the local row cap of {results_per_keyword} bounds "
+        f"({rate} credits) = {credits} credit(s), at the published Google "
+        f"Shopping rate. One request returns the whole grid per query (~65 "
+        f"rows observed); the local row cap of {results_per_keyword} bounds "
         f"LLM curation only, never HasData spend."
     )
     cap = settings.HASDATA_GS_MAX_KEYWORDS
     budget = settings.HASDATA_PRODUCTION_CAP
+    trends = (
+        settings.TRENDS_MAX_CALLS * settings.HASDATA_TRENDS_CREDITS_PER_CALL
+    )
     print(
         f"guardrails: keyword cap {cap} (refuses above), production credit "
-        f"cap {budget} of {settings.HASDATA_MONTHLY_BUDGET}/month free tier"
+        f"cap {budget} of {settings.HASDATA_MONTHLY_BUDGET}/month free tier "
+        f"(Step 2 trends budget {trends} + this scrape {credits} would total "
+        f"{trends + credits})"
     )
 
 
@@ -242,7 +248,7 @@ def main() -> None:
                 "list or raise the cap in .env\n",
             )
         planned_credits = (
-            len(keywords) * HasDataShoppingScraper.CREDITS_PER_REQUEST
+            len(keywords) * settings.HASDATA_SHOPPING_CREDITS_PER_REQUEST
         )
         if planned_credits > settings.HASDATA_PRODUCTION_CAP:
             parser.exit(

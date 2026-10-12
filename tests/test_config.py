@@ -422,21 +422,56 @@ def test_hasdata_budget_guardrails_have_their_defaults(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     loaded = load_settings()
     assert loaded.HASDATA_MONTHLY_BUDGET == 1000
-    assert loaded.HASDATA_PRODUCTION_CAP == 250
-    assert loaded.HASDATA_GS_MAX_KEYWORDS == 20
+    assert loaded.HASDATA_PRODUCTION_CAP == 400
+    assert loaded.HASDATA_GS_MAX_KEYWORDS == 30
     assert loaded.TRENDS_MAX_CALLS == 10
 
 
-def test_the_production_envelope_fits_the_credit_cap(monkeypatch):
-    # Step 2 trends (10 calls x 5) + Step 3 shopping (20 keywords x 10) = 250,
-    # exactly the production cap — the arithmetic the budget guardrails exist
-    # to hold.
-    monkeypatch.delenv("HASDATA_PRODUCTION_CAP", raising=False)
+def test_credit_rates_have_their_defaults(monkeypatch):
+    # Trends is budgeted at the OBSERVED 10 credits/call (2026-10-12: two live
+    # pilot calls moved the account balance by exactly 20) even though the
+    # published tables say 5 — the conservative figure wins until the
+    # dashboard usage log settles it.
+    monkeypatch.delenv("HASDATA_TRENDS_CREDITS_PER_CALL", raising=False)
+    monkeypatch.delenv("HASDATA_SHOPPING_CREDITS_PER_REQUEST", raising=False)
     loaded = load_settings()
-    trend_credits = loaded.TRENDS_MAX_CALLS * 5
-    shopping_credits = loaded.HASDATA_GS_MAX_KEYWORDS * 10
+    assert loaded.HASDATA_TRENDS_CREDITS_PER_CALL == 10
+    assert loaded.HASDATA_SHOPPING_CREDITS_PER_REQUEST == 10
+
+
+def test_credit_rates_are_env_overridable(monkeypatch):
+    monkeypatch.setenv("HASDATA_TRENDS_CREDITS_PER_CALL", "5")
+    monkeypatch.setenv("HASDATA_SHOPPING_CREDITS_PER_REQUEST", "10")
+    loaded = load_settings()
+    assert loaded.HASDATA_TRENDS_CREDITS_PER_CALL == 5
+
+
+def test_the_launch_run_envelope_equals_the_production_cap(monkeypatch):
+    # The launch-run profile is sized so the two halves sum to the cap
+    # exactly (Step 2: 10 calls x 10 = 100; Step 3: 30 keywords x 10 = 300),
+    # so HASDATA_PRODUCTION_CAP is the arithmetic, not an arbitrary ceiling.
+    for key in (
+        "HASDATA_PRODUCTION_CAP",
+        "HASDATA_TRENDS_CREDITS_PER_CALL",
+        "HASDATA_SHOPPING_CREDITS_PER_REQUEST",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    loaded = load_settings()
+    trend_credits = (
+        loaded.TRENDS_MAX_CALLS * loaded.HASDATA_TRENDS_CREDITS_PER_CALL
+    )
+    shopping_credits = (
+        loaded.HASDATA_GS_MAX_KEYWORDS
+        * loaded.HASDATA_SHOPPING_CREDITS_PER_REQUEST
+    )
+    assert trend_credits == 100
+    assert shopping_credits == 300
     assert trend_credits + shopping_credits == loaded.HASDATA_PRODUCTION_CAP
+    # The monthly tier keeps a reserve for the per-step pilots and reruns.
     assert loaded.HASDATA_PRODUCTION_CAP <= loaded.HASDATA_MONTHLY_BUDGET
+    assert (
+        loaded.HASDATA_MONTHLY_BUDGET - loaded.HASDATA_PRODUCTION_CAP >= 500
+    )
 
 
 def test_hasdata_budget_env_overrides_are_respected(monkeypatch):
