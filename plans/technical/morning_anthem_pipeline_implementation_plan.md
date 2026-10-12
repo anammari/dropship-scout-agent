@@ -521,11 +521,27 @@ against the **five Morning Anthem pillars** (§0). Jev assigns exactly one
 pillar, or `discard` when the product does not logically fit any pillar.
 **Discarded products never reach the gold list.**
 
+**Placement — settled by the operator 2026-10-12.** The gate runs **after** the
+scrape and the LLM curation, never before it. A decision model is only as good as
+its context, and a pillar needs *commercial* context to be classified honestly:
+"is this a Restful Reset product?" is a very different question when the row
+carries a price and 4.7/5 from 1,200 reviews than when it carries a bare title.
+So the gate sees **enriched rows**, and the cheap scraper/curator stages run
+first.
+
 **Design:**
 
 - One `decide()` call per batch of `PILLAR_GATE_BATCH_SIZE` (default **4**)
   candidate products. State =
-  `{"pillars": {<key>: <one-line description>, …}, "products": {<i>: {name, description, retail_price_text, demand_evidence, source_keyword}}}`.
+  `{"pillars": {<key>: <one-line description>, …}, "products": {<i>: {name, description, retail_price_text, price_value, rating, review_count, demand_evidence, source_keyword}}}`
+  — note the *numeric* `price_value`, `rating` and `review_count` alongside the
+  raw `retail_price_text` and the formatted evidence line, so the model can
+  reason over the numbers rather than parse a string. The curator's own pillar
+  guess is deliberately **not** passed: it would bias the classification the
+  gate exists to make.
+- One **choice** question per product: `<i>__pillar` with criteria =
+  the five pillar keys (each with its §0 product-line description) plus
+  `discard` — "does not logically fit any Morning Anthem pillar".
 - One **choice** question per product: `<i>__pillar` with criteria =
   the five pillar keys (each with its §0 product-line description) plus
   `discard` — "does not logically fit any Morning Anthem pillar".
@@ -538,6 +554,13 @@ pillar, or `discard` when the product does not logically fit any pillar.
   `demand_evidence` are all code-assembled from the scraped rows; Jev
   contributes only the pillar key, which is written into the deliverable by
   code.
+- **The gate becomes the pillar's single author.** The curator stops assigning
+  one (its prompt and schema drop the field): two independent pillar opinions
+  in one pipeline is one too many, and only the gate's is informed by the
+  numeric context above.
+- **Fail-closed, in the pipeline's idiom:** if every product in a run is
+  discarded, the runner halts with an intervention rather than writing an empty
+  gold list that Step 4 would silently work from.
 
 **Gold deliverable:** `outputs/json/morning-anthem-step-3-gold-products.json`
 — every product carries a valid five-way `pillar`, on-page demand
