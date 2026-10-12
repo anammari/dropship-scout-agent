@@ -164,12 +164,12 @@ async def _run(args: argparse.Namespace) -> int:
     factories = _build_extractor_factories()
     engines = list(factories)
     export_root = Path(args.export_root)
-    _print_pilot_banner(len(keywords), args.target_per_keyword, engines, str(export_root))
+    _print_pilot_banner(len(keywords), args.target_per_product, engines, str(export_root))
 
     try:
         summary = await ingest_keyword_bank(
             keywords=keywords,
-            target_per_keyword=args.target_per_keyword,
+            target_per_product=args.target_per_product,
             extractor_factories=factories,
             export_root=export_root,
         )

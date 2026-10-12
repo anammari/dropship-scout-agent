@@ -869,7 +869,25 @@ Step 6 raises two blocks (§2.7), same rendered shape:
   gold set is settled before the client is built, so a missing Step-3
   deliverable fails before any billable System One call.
 
-### 4.5 Running the test suite
+### 4.5 Rehearsing the chain without spending anything
+
+`scripts/rehearse_pipeline.py` drives the whole chain — Steps 3 to 7 — over
+synthetic data with **only the external services stubbed** (HasData, the CJ MCP
+server, the reasoning LLM, Jev, the CDN download). Everything else is real: the
+guardrails, the file handoffs, the export contract, the margin floor, the image
+gate, the counters and the cleanup. It is a development harness, not part of the
+pipeline.
+
+```bash
+source .venv/bin/activate && python scripts/rehearse_pipeline.py
+```
+
+It cannot spend a credit: every outbound socket is blocked for the duration, so a
+missed stub fails loudly rather than quietly reaching a real API. It writes only
+inside `outputs/rehearsal/` and refuses to run inside the real workspace tree, which
+matters because Step 7 deletes directories.
+
+### 4.6 Running the test suite
 
 ```bash
 python -m pytest tests/ -v

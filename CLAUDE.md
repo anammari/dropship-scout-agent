@@ -176,6 +176,8 @@ dropship-scout-agent/
 │   ├── exporter.py          # workspace writer (metadata.json + images/)
 │   └── main.py              # CLI orchestrator, funnel counters, exit codes
 ├── scripts/
+│   ├── rehearse_pipeline.py     # DEVELOPMENT harness: the whole chain on synthetic
+│   │                            #   data with every external service stubbed (§11)
 │   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
 │   ├── gate_trend_keywords.py        # Step-2 Jev product-intent gate runner (§13.8)
 │   ├── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
@@ -557,6 +559,26 @@ resolves to its default in `src/config.py` (blank never means `0`/`False`).
 only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
+
+### The rehearsal harness — `scripts/rehearse_pipeline.py`
+
+**Not part of the pipeline**; nothing in the production path imports it. It drives
+Steps 3–7 over synthetic data with **only the external services stubbed** —
+HasData Google Shopping, the CJdropshipping MCP server, the reasoning LLM, Jev and
+the CDN image download — while every guardrail, file handoff, the export contract,
+the margin floor, the image gate, the funnel counters and the cleanup's deletion
+logic all run for real.
+
+```bash
+source .venv/bin/activate && python scripts/rehearse_pipeline.py
+```
+
+**It cannot spend anything:** every outbound socket is blocked for the duration, so
+a stub that misses its mark fails loudly instead of quietly reaching a real API, and
+it refuses to run with a scratch directory anywhere inside the real workspace tree
+(it deletes directories in Step 7). Run it before any live run, and after any change
+to a runner — it is the only thing that exercises the *seams* between the steps.
+`tests/test_rehearsal.py` keeps it from rotting.
 
 - Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — **534
   tests, zero network** (httpx.MockTransport + fake MCP sessions + scripted
