@@ -45,6 +45,7 @@ documented and the live spellings rather than trusting either alone.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -83,6 +84,33 @@ class HasDataNotConfiguredError(HasDataShoppingError):
 
 class HasDataShoppingRunFailedError(HasDataShoppingError):
     """The HTTP call failed, or the API answered with an error status."""
+
+
+#: A leading currency symbol or code, and thousands separators, are the only
+#: decoration a Google Shopping price string carries ("$1,299.00", "AU$89.95").
+_PRICE_NUMBER_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)")
+
+
+def _price_value(item: Dict[str, Any], price: Any) -> Optional[float]:
+    """The row's retail price as a number, or None.
+
+    Prefers the payload's own numeric field (`extractedPrice`, present on the
+    live shape); falls back to parsing the display string. Both are the
+    supplier's figure — this only re-types it, and returns None rather than a
+    guess when neither yields a number.
+    """
+    extracted = item.get("extractedPrice")
+    if isinstance(extracted, (int, float)) and not isinstance(extracted, bool):
+        return float(extracted)
+    if price is None:
+        return None
+    match = _PRICE_NUMBER_RE.search(str(price))
+    if not match:
+        return None
+    try:
+        return float(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
 
 
 def parse_response(
@@ -148,6 +176,7 @@ def parse_response(
                 url=url,
                 merchant=str(merchant).strip() if merchant else None,
                 price_text=str(price).strip() if price is not None else None,
+                price_value=_price_value(item, price),
                 delivery_text=(
                     str(item["delivery"]).strip() if item.get("delivery") else None
                 ),

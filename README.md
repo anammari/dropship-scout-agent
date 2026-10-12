@@ -332,12 +332,19 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   (≤ 100) inside `HASDATA_PRODUCTION_CAP=400`. See §2.3 below and `CLAUDE.md`
   §13.8.
 - **Curate** (`src/evaluators/gold_curator.py`): the LLM only **selects by
-  verbatim `url`** and annotates pillar/compliance/economics. Every product fact
-  is **code-assembled from the scraped rows**, so a hallucinated or edited url
-  can never become a product. Rows carrying no rating/review KPI are filtered
-  out before the LLM — a gold product must carry on-page demand evidence.
-- **Deliverable**: `MORNING_ANTHEM_GOLD_PRODUCTS_PATH` (+ a `.md` digest) in the
-  untracked `outputs/` tree. The runner prints the planned credit envelope
+  verbatim `url`** and annotates compliance/economics. Every product fact is
+  **code-assembled from the scraped rows**, so a hallucinated or edited url can
+  never become a product. Rows carrying no rating/review KPI are filtered out
+  before the LLM — a gold product must carry on-page demand evidence.
+- **Pillar gate** (`src/research/pillar_gate.py`): Jev classifies each curated
+  product into exactly one of the five Morning Anthem pillars, or discards it —
+  discarded products never reach the gold list. It runs **last** on purpose, so
+  the decision sees each product's numeric price, rating and review count, not
+  just a title. It is the pillar's single author: the curator no longer assigns
+  one. If the gate keeps nothing, the runner halts without writing an empty gold
+  list.
+- **Deliverable**: `MORNING_ANTHEM_GOLD_PRODUCTS_PATH` (+ a `.md` digest grouped
+  by the gate's pillar) in the untracked `outputs/` tree. The runner prints the planned credit envelope
   before the first request, and exits non-zero when nothing usable comes back;
   `--from-raw` replays curation over a prior dump at **zero scrape spend** (the
   debugging path).

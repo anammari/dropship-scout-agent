@@ -13,9 +13,13 @@ The scrape is pinned to the AU market (`SHOPPING_GL`/`SHOPPING_DOMAIN`) so
 demand signals and price benchmarks reflect Australian shopper behaviour and
 AUD retail pricing (the store launches selling to Australia).
 
-Then the reasoning LLM curates the rows (`src.evaluators.gold_curator`)
-and code assembles the deliverable from the verbatim scraped rows — the LLM
-selects by url, it never authors a product fact. Both outputs default under
+Then the reasoning LLM curates the rows (`src.evaluators.gold_curator`) and code
+assembles the deliverable from the verbatim scraped rows — the LLM selects by
+url, it never authors a product fact. Every curated product is finally
+classified by the **Jev pillar gate** (`src/research/pillar_gate.py`) into one of
+the five Morning Anthem pillars, or discarded; the gate runs last, and only for
+that reason does it see each product's numeric price, rating and review count
+when it decides. Both outputs default under
 `outputs/` (git-ignored — production deliverables of the Morning Anthem
 pipeline, never repo artefacts).
 
@@ -59,6 +63,14 @@ from src.extractors.google_shopping_hasdata import (  # noqa: E402
     HasDataShoppingScraper,
 )
 from src.extractors.shopping_row import ShoppingRow  # noqa: E402
+from src.main import render_intervention_block  # noqa: E402
+from src.ranking.jev_client import JevConfigError  # noqa: E402
+from src.research.pillar_gate import (  # noqa: E402
+    PillarCandidate,
+    PillarGate,
+    attach_pillars,
+)
+from src.research.trend_gate import TrendGateError  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -129,7 +141,11 @@ def load_step2_keywords(path: Path) -> list[str]:
 def write_markdown(
     path: Path, products: list[GoldStandardProduct]
 ) -> None:
-    """Human digest: gold-standard products grouped by Morning Anthem pillar."""
+    """Human digest: gold-standard products grouped by Morning Anthem pillar.
+
+    Every product here has already passed the Jev pillar gate, so its pillar is
+    one of the five — the grouping is the gate's verdict, not a suggestion.
+    """
     per_pillar = Counter(p.pillar for p in products)
     lines = [
         "# Step 3 — GOLD-STANDARD winning products (The Morning Anthem, "
@@ -294,17 +310,75 @@ def main() -> None:
                 )
         curator = GoldProductCurator()
         products = curator.curate(rows)
+        # The pillar gate runs LAST, on the curated products, so its decision
+        # sees each row's numeric price and rating (operator decision
+        # 2026-10-12). It is the pillar's single author.
+        row_by_url = {row.url.strip(): row for row in rows}
+        candidates = [
+            PillarCandidate.from_product(product, row_by_url.get(product.url.strip()))
+            for product in products
+        ]
+        gated = PillarGate().gate(candidates)
+        products = attach_pillars(products, gated)
     except (
         HasDataShoppingError,
         GoldCurationError,
+        TrendGateError,
     ) as exc:
         parser.exit(1, f"error: {exc}\n")
+    except JevConfigError as exc:
+        print(
+            render_intervention_block(
+                step="Jev Pillar Gate Configuration",
+                reason=str(exc),
+                instructions=[
+                    "Set OPENROUTER_API_KEY in .env — the pillar gate uses the "
+                    "same Jev credential as the Step-2 passes",
+                    "Re-run: python scripts/run_gold_standard_research.py",
+                ],
+            )
+        )
+        return 1
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
+    by_pillar = Counter(p.pillar for p in products)
+    dropped = [row for row in gated if not row.kept]
+
+    print(
+        f"\nscraped {len(rows)} row(s) -> curated {len(gated)} -> "
+        f"{len(products)} gold product(s) after the Jev pillar gate"
+    )
+    print(f"  pillars: {dict(by_pillar)}")
+    if dropped:
+        print(f"  discarded by the gate: {len(dropped)}")
+        for row in dropped[:10]:
+            print(f"    - {row.candidate.name!r}: {row.note}")
+    if scraper and scraper.last_run:
+        run = scraper.last_run
+        print(f"run {run.get('source')}: ~{run.get('credits')} HasData credit(s)")
+
+    if not products:
+        # The gate kept nothing, so there is no gold list — and writing an empty
+        # one would leave Steps 4+6 reading a file that looks like a result.
+        # Checked BEFORE the writes, so a failed gate leaves no artefact behind.
+        parser.exit(
+            1,
+            "error: the pillar gate kept zero products from "
+            f"{len(gated)} curated candidate(s) — nothing was written. Inspect "
+            "the gate's verdicts above (a run of `discard` means the scrape's "
+            "products are outside the five pillars; `unclassified` means the "
+            "Jev calls failed).\n",
+        )
+
     payload = {
         "products": [p.model_dump() for p in products],
         "scraped_keywords": len(keywords),
         "scraped_rows": len(rows),
+        "curated_products": len(gated),
+        "pillar_gate": {
+            "classified": sum(1 for row in gated if row.kept),
+            "discarded": len(dropped),
+            "by_pillar": dict(by_pillar),
+        },
         "generated_by": settings.LLM_MODEL,
         # HasData is the pipeline's only shopping source; the field names the
         # source so a reader can tell which free tier a deliverable was
@@ -315,18 +389,12 @@ def main() -> None:
         "note": "Step 3 gold-standard winners; reference set for Steps 4+6; "
                 "not tracked",
     }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     write_markdown(markdown_path, products)
-
-    print(f"\nscraped {len(rows)} row(s) -> curated {len(products)} gold product(s)")
-    if scraper and scraper.last_run:
-        run = scraper.last_run
-        print(f"run {run.get('source')}: ~{run.get('credits')} HasData credit(s)")
     print(f"wrote {args.output} and {markdown_path}")
-    if not products:
-        parser.exit(1, "error: curation produced zero products; nothing written that Steps 4+6 could use\n")
 
 
 if __name__ == "__main__":

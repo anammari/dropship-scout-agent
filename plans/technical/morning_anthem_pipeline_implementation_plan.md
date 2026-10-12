@@ -514,7 +514,13 @@ rating nor review count are filtered out before the LLM). Changes:
   `MIN_MARGIN_USD` ($10) floor, interpolated from config so prompt and code
   cannot drift.
 
-### 5.3 NEW GATE — Jev pillar gate (`src/research/pillar_gate.py`)
+### 5.3 NEW GATE — Jev pillar gate (`src/research/pillar_gate.py`) — IMPLEMENTED
+
+> **Status: implemented and hermetically tested (2026-10-12)** —
+> `src/research/pillar_gate.py` + `tests/test_pillar_gate.py` (20 tests), wired
+> into `scripts/run_gold_standard_research.py` as scrape → curate → gate → write.
+> No live run yet (operator held all live runs until implementation completes).
+> See `CLAUDE.md` §13.8 for the state and the design rationale.
 
 Every curated candidate product is routed through **Jev** and evaluated
 against the **five Morning Anthem pillars** (§0). Jev assigns exactly one

@@ -36,3 +36,9 @@ class ShoppingRow:
     rating: Optional[float]
     rating_count: Optional[int]
     source_keyword: str
+    #: The retail price as a NUMBER, so a downstream decision model can reason
+    #: over it instead of parsing `price_text`. Taken from the payload's own
+    #: numeric `extractedPrice` when the API supplies one, otherwise parsed from
+    #: the display string — derived from the row, never invented. None when
+    #: neither yields a figure.
+    price_value: Optional[float] = None

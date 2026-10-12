@@ -444,7 +444,6 @@ def test_parsed_rows_clear_the_curators_demand_evidence_filter():
                                             "products": [
                                                 {
                                                     "url": row.url,
-                                                    "pillar": "brew_fuel",
                                                     "compliance_note": "Inert kitchen tool.",
                                                     "unit_economics_note": None,
                                                 }
@@ -468,6 +467,9 @@ def test_parsed_rows_clear_the_curators_demand_evidence_filter():
     assert product.retail_price_text == "$89.95"
     assert "4.7/5" in product.demand_evidence
     assert "234 reviews" in product.demand_evidence
+    # The curator does NOT assign a pillar: it arrives empty and the Jev pillar
+    # gate fills it after curation (so its decision sees the price and rating).
+    assert product.pillar == ""
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +510,26 @@ def test_runner_has_no_apify_source_left():
     assert not hasattr(runner, "source_label")
 
 
+def test_a_stray_pillar_in_the_curation_response_is_ignored_not_trusted():
+    """A model that still volunteers a pillar must not have it believed.
+
+    The prompt now says not to assign one, but a habit from the earlier prompt is
+    harmless rather than fatal: the field is simply not part of the response
+    schema, so the pillar the gate issues later is the only one that ever reaches
+    the deliverable. (Contrast `ProvisionalProductEvaluation`, which forbids extra
+    fields outright — there a silently dropped field would be a *lost fact*; here
+    it would be an unauthorised opinion.)
+    """
+    from src.evaluators.gold_curator import GoldSelection
+
+    selection = GoldSelection(
+        url="https://x/1",
+        pillar="brew_fuel",  # a stray field the schema does not declare
+        compliance_note="Inert.",
+    )
+    assert not hasattr(selection, "pillar")
+
+
 def test_runner_enforces_the_keyword_cap_and_pilot_budget(monkeypatch, tmp_path):
     """The planned spend is checked BEFORE any credit moves: the keyword cap
     and the pilot cap both fail closed rather than letting a run overspend."""
@@ -526,3 +548,53 @@ def test_runner_enforces_the_keyword_cap_and_pilot_budget(monkeypatch, tmp_path)
     with pytest.raises(SystemExit) as exc:
         runner.main()
     assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# price_value — the numeric price the Step-3 pillar gate reasons over
+# ---------------------------------------------------------------------------
+
+
+def test_price_value_prefers_the_payloads_own_numeric_field():
+    # The live shape carries `extractedPrice`; that is the supplier's own figure,
+    # so it is taken as-is rather than re-parsed from the display string.
+    rows = parse_response(
+        {"shoppingResults": [_live_item(price="$89.95", extractedPrice=89.95)]},
+        "french press",
+    )
+    assert rows[0].price_value == pytest.approx(89.95)
+
+
+def test_price_value_falls_back_to_parsing_the_display_string():
+    rows = parse_response(
+        {"shoppingResults": [_live_item(price="AU$1,299.00", extractedPrice=None)]},
+        "french press",
+    )
+    assert rows[0].price_value == pytest.approx(1299.0)
+
+
+def test_price_value_is_none_when_no_number_can_be_read():
+    # "Free", "$" alone, or no price at all: None rather than a guess, so a
+    # decision model sees an absence instead of a fabricated zero.
+    for overrides in (
+        {"price": "Free", "extractedPrice": None},
+        {"price": "$", "extractedPrice": None},
+        {"price": None, "extractedPrice": None},
+    ):
+        rows = parse_response(
+            {"shoppingResults": [_live_item(**overrides)]}, "french press"
+        )
+        assert rows[0].price_value is None, overrides
+
+
+def test_price_value_survives_the_dump_raw_round_trip():
+    # `--from-raw` rebuilds rows with `ShoppingRow(**vars(row))`, so the numeric
+    # price has to survive the dump or a replayed curation would lose the context
+    # the pillar gate needs.
+    (row,) = parse_response(
+        {"shoppingResults": [_live_item(price="$89.95", extractedPrice=89.95)]},
+        "french press",
+    )
+    replayed = ShoppingRow(**vars(row))
+    assert replayed.price_value == pytest.approx(89.95)
+    assert vars(replayed) == vars(row)

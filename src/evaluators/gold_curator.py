@@ -3,8 +3,12 @@
 The reasoning LLM turns the scraped Google Shopping AU rows into the
 GOLD-STANDARD product list — but under the repo's anti-hallucination posture
 the LLM is only ever allowed to *select and annotate*: its output references
-rows by their exact `url` plus the three judgement fields it owns (`pillar`,
-`compliance_note`, `unit_economics_note`). Every product fact in the
+rows by their exact `url` plus the two judgement fields it owns
+(`compliance_note`, `unit_economics_note`). **The pillar is NOT the curator's
+to assign** — it is decided downstream by the Jev pillar gate
+(`src/research/pillar_gate.py`), which sees the same row enriched with its
+numeric price, rating and review count, so the pipeline has one informed pillar
+opinion rather than two competing ones. Every product fact in the
 deliverable (name, url, price, merchant, demand evidence, keyword
 attribution) is assembled by code from the verbatim scraped rows, so a
 hallucinated or mistyped url can never become a product — it is dropped by
@@ -79,17 +83,11 @@ USER_TEMPLATE = """### Hard rules
    cost with standard AU packet shipping (7-12 business days). When the row
    gives no basis, set `unit_economics_note` to null — never estimate from
    imagination.
-5. `pillar` is exactly one of The Morning Anthem's five merchandising pillars:
-   `brew_fuel` (manual coffee tools, espresso distribution gear, portable milk
-   frothers, minimalist tumblers, matcha accessories), `sunrise_move`
-   (aesthetic active gear, commuter backpacks, waterproof pouches, hands-free
-   dog leashes, sand-free towels), `mindful_awakening` (backflow incense
-   burners, digital gratitude journals, shower steamers, meditation
-   accessories), `restful_reset` (silk eye masks, ergonomic recovery pillows,
-   sunrise alarm clocks, facial ice rollers), or `morning_table` (cutting
-   boards, garlic presses/mashers, breakfast preparation and serving kitchen
-   aids). A product that fits none of the five is not a Morning Anthem
-   product — leave it out.
+5. **Do not assign a pillar.** A later stage classifies each selected product
+   against The Morning Anthem's five pillars, with the price and rating figures
+   in front of it. Your job is only to select rows worth carrying, so keep a row
+   whose product is a real physical good even if you are unsure which pillar it
+   belongs to.
 6. `compliance_note` is one short sentence on why the item is an AICIS-exempt
    inert accessory and IP-clean — only when true; otherwise leave the product
    out entirely.
@@ -98,7 +96,7 @@ USER_TEMPLATE = """### Hard rules
 8. Output strict JSON only — no markdown fence, no commentary, and always
    close the JSON (a truncated response is unusable):
 
-   {"products": [{"url": "https://...", "pillar": "brew_fuel",
+   {"products": [{"url": "https://...",
    "compliance_note": "...", "unit_economics_note": "... or null"}]}
 
 ### Rows (Google Shopping AU, scraped live)
@@ -115,10 +113,13 @@ class GoldCurationConfigError(GoldCurationError):
 
 
 class GoldSelection(BaseModel):
-    """One LLM judgement over one scraped row (referenced by verbatim url)."""
+    """One LLM judgement over one scraped row (referenced by verbatim url).
+
+    Deliberately carries no `pillar`: the pillar is the Jev pillar gate's
+    decision, made downstream with the row's numeric price and rating in view.
+    """
 
     url: str
-    pillar: str
     compliance_note: str
     unit_economics_note: Optional[str] = None
 
@@ -130,7 +131,10 @@ class GoldStandardProduct(BaseModel):
     url: str
     description: Optional[str] = None
     retail_price_text: Optional[str] = None
-    pillar: str
+    #: Assigned by the Jev pillar gate AFTER curation (this module leaves it
+    #: empty). The deliverable always carries one of the five keys, because a
+    #: product the gate cannot place never reaches the deliverable.
+    pillar: str = ""
     compliance_note: str
     demand_evidence: str
     unit_economics_note: Optional[str] = None
@@ -346,13 +350,6 @@ class GoldProductCurator:
                     )
                     continue
                 url = selection.url.strip()
-                if selection.pillar not in PILLARS:
-                    dropped_at_join += 1
-                    logger.warning(
-                        "dropping curated product %r: unknown pillar %r",
-                        url, selection.pillar,
-                    )
-                    continue
                 row = batch_urls.get(url)
                 if row is None:
                     dropped_at_join += 1
@@ -372,7 +369,7 @@ class GoldProductCurator:
                         url=row.url,
                         description=row.description,
                         retail_price_text=row.price_text,
-                        pillar=selection.pillar,
+                        # Left empty on purpose: the Jev pillar gate assigns it.
                         compliance_note=selection.compliance_note,
                         demand_evidence=_demand_evidence(row),
                         unit_economics_note=selection.unit_economics_note,

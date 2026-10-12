@@ -1,8 +1,9 @@
 # CLAUDE.md - Dropship Scout Agent (The Morning Anthem, Supplier-First)
 
 > Aligned with the implemented codebase as of **2026-10-12**, on branch
-> `feature/morning-anthem-pipeline-update`: **§1 (the rebrand sweep) and Step 2
-> are implemented and live-piloted**; Steps 3–6 are not started (see §13.8).
+> `feature/morning-anthem-pipeline-update`: **§1 (the rebrand sweep), Step 2 and
+> Step 3 are implemented** — §1 and Step 2 live-piloted, Step 3 hermetically
+> tested and awaiting its first live run. Steps 4–6 are not started (see §13.8).
 > This file is the operating mandate and the single source of operating
 > context: it carries the schemas, gate rules, config reference and
 > operational notes.
@@ -778,7 +779,7 @@ older spike proposed is still dead and must still never be built.
 |---|---|---|
 | 1 | Google Trends (**HasData MCP only**) research | done — the Apify fallback is retired; the live pilot used two HasData Trends calls |
 | 2 | Trends → candidate strings → **Jev product-intent gate** → AU product-search keywords, tagged with the five Morning Anthem pillars | **done — §13.8**, deliverable `outputs/json/morning-anthem-step-2-trend-keywords.json` (untracked) |
-| 3 | Google Shopping AU scrape (**HasData only**, no `--source`) + LLM curation + **Jev pillar gate** → gold-standard product list | not started — §13.2 is the superseded design |
+| 3 | Google Shopping AU scrape (**HasData only**, no `--source`) + LLM select-by-url curation + **Jev pillar gate** → gold-standard product list | **done — §13.8**; §13.2 describes the superseded design |
 | 4 | Reasoning LLM → supplier keyword bank from the gold list | not started — §13.3 is the superseded design |
 | 5 | **CJ-only** ingestion of the keyword bank → `morning-anthem-candidates/cjdropshipping/` | not started — §13.6 is the superseded design |
 | 6 | Jev ranks supplier candidates against the gold products | not started — §13.7 is the superseded design |
@@ -814,11 +815,13 @@ destination is never silently relocated.
 
 ### 13.2 Step 3 — gold-standard product research (SUPERSEDED — see §13.8)
 
-> **Historical.** Written when Apify and HasData were interchangeable sources
-> and the pillar set was the retired three. Live today: HasData is the only
-> shopping source (no `--source` flag), the market pin is `SHOPPING_GL`/
-> `SHOPPING_DOMAIN` (`au`/`google.com.au`), and a **Jev pillar gate** admits a
-> product only if it fits one of the five Morning Anthem pillars (§13.8).
+> **Historical**, and now **re-implemented** — see §13.8 for the live design.
+> Written when Apify and HasData were interchangeable sources and the pillar set
+> was the retired three. Live today: HasData is the only shopping source (no
+> `--source` flag); the market pin is `SHOPPING_GL`/`SHOPPING_DOMAIN`
+> (`au`/`google.com.au`); the curator **no longer assigns a pillar**; and a
+> **Jev pillar gate** runs last, admitting a product only if it fits one of the
+> five Morning Anthem pillars.
 
 ```bash
 source .venv/bin/activate && python scripts/run_gold_standard_research.py \
@@ -1719,6 +1722,52 @@ batches over 13 curated candidates:
 | Related queries are brand-heavy | of 50 AU related queries for `milk frother`, roughly half name a manufacturer or retailer (nespresso, breville, delonghi, smeg, kmart, aldi, big w, ikea) — they pass the intent gate legitimately, which is why the banned-token screen and the curator carry the load |
 | Yield ratio | 5 input terms + 50 related queries → 13 curated candidates → 12 kept |
 | **Second AU call (same day, 10 credits): the `sunrise_move` pillar is not trend-dead, its seed was too narrow** | Head terms carry real AU demand — `beach towel` 5-y mean 25 at peak 100, `dog leash` 16 — while phrase-level product names do not (`sand free towel` 2, `commuter backpack` peak 2, `hands free dog leash` 8/262 weeks). Google Trends reports head terms, not long-tail phrasings, and AU is a small market, so a specific phrase falls under the reporting floor. **Seed Trends with head terms; the long-tail phrasings belong downstream as Step-4 supplier keywords.** |
+
+#### Step 3 — the HasData scrape, the curator and the Jev pillar gate
+
+Three stages, in this order, and the order is the design:
+
+1. **Scrape** (`src/extractors/google_shopping_hasdata.py`) — one HasData Google
+   Shopping request per selected keyword, 10 credits each, pinned to the AU
+   market (`SHOPPING_GL`/`SHOPPING_DOMAIN`). One request returns the whole grid
+   (~65 rows); `HASDATA_GS_MAX_RESULTS_PER_KEYWORD` (20) bounds curation only,
+   never spend. The runner refuses to start above `HASDATA_GS_MAX_KEYWORDS` (30)
+   or `HASDATA_PRODUCTION_CAP` (400).
+2. **Curate** (`src/evaluators/gold_curator.py`) — the reasoning LLM **selects
+   rows by verbatim `url`** and writes only `compliance_note` /
+   `unit_economics_note`. Rows with neither a rating nor a review count are
+   filtered out before the LLM, so a gold product always carries on-page demand
+   evidence. Every product fact is code-assembled from the row; an invented or
+   edited url is dropped at the code-side join.
+3. **Pillar gate** (`src/research/pillar_gate.py`) — Jev classifies each curated
+   product into exactly one of the five pillars, or `discard`s it. **The gate is
+   the pillar's single author**, which is why the curator no longer assigns one.
+
+**The gate runs last on purpose (operator decision 2026-10-12).** A decision
+model is only as good as its context, and a pillar is not an honest question
+without commercial context — "is this a Restful Reset product?" reads
+differently when the row carries a price and 4.7/5 from 1,200 reviews than when it
+carries a bare title. So the state hands it the name, description, **the price
+as both its display string and its number**, the rating, the review count, the
+demand-evidence line and the source keyword, plus the five pillar descriptions.
+The numeric `price_value` needed a new field on `ShoppingRow`, taken from the
+payload's own `extractedPrice` with a defensive parse of the display string
+falling back behind it — `None` rather than a fabricated zero.
+
+The curator's own pillar guess is deliberately **not** passed to the gate: it
+would bias the classification the gate exists to make. (A stray `pillar` in a
+curation response is ignored rather than fatal — unlike
+`ProvisionalProductEvaluation`, where an undeclared field would be a *lost fact*
+rather than an unauthorised opinion.)
+
+**Failure containment**: a failed batch retries once, then its products are
+dropped with a note; one `discard` is a normal verdict. If the gate keeps
+**nothing**, the runner halts *before writing anything* — an empty gold list
+would leave Steps 4–6 reading a file that looks like a result.
+
+**Tests**: `tests/test_pillar_gate.py` (20 tests) covers the verdict set, the
+enriched state, the batching, the join, the retry containment, verbatim
+carry-through, `attach_pillars`, and the runner's wiring and zero-survivor halt.
 
 #### The launch run (one-off, operator decision 2026-10-12)
 
