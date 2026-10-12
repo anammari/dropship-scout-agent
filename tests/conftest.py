@@ -58,5 +58,14 @@ def sanitize_test_environment(request, monkeypatch):
 def _hermetic_supplier_pipeline(monkeypatch):
     cj_mcp_extractor.reset_cj_mcp_client()
     monkeypatch.setattr(settings, "CJ_MCP_TOKEN", None)
+    # Scrubbing `os.environ` is not enough: the `settings` singleton snapshots
+    # `.env` at import time, so the REAL LLM / HasData / OpenRouter credentials
+    # stay on it for the whole process. Without this, a test that accidentally
+    # builds a live client spends the operator's balance — the Step-2 trend
+    # gate is the first module where that is easy to do by patching the wrong
+    # namespace. A test that genuinely needs one patches it back explicitly.
+    monkeypatch.setattr(settings, "LLM_API_KEY", None)
+    monkeypatch.setattr(settings, "HASDATA_API_KEY", None)
+    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)
     yield
     cj_mcp_extractor.reset_cj_mcp_client()
