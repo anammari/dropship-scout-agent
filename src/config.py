@@ -227,10 +227,10 @@ class Settings:
         )
         # The rates the guardrail arithmetic is computed from, so a confirmed
         # figure is a one-line change rather than a hunt through the runners.
-        # Trends is OBSERVED at 10 credits/call (2026-10-12: two live pilot
-        # calls moved the account balance by exactly 20), while the published
-        # tables say 5 — the conservative observed figure is budgeted until
-        # the operator's dashboard usage log settles it.
+        # Trends is 10 credits per request, CONFIRMED by the operator on the
+        # HasData dashboard 2026-10-12 (stated on the endpoint's Run Request
+        # button; documented at docs.hasdata.com/apis/google-trends/search).
+        # The repo's older "5 credits" note was stale.
         self.HASDATA_TRENDS_CREDITS_PER_CALL: int = _parse_int(
             os.getenv("HASDATA_TRENDS_CREDITS_PER_CALL"), default=10
         )

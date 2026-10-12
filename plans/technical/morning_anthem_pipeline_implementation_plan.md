@@ -719,7 +719,7 @@ hard-capped at ≤ 10 credits.**
 
 | Call | Credits | Source |
 |---|---|---|
-| Google Trends (per call, up to 5 terms) | **10** | Observed 2026-10-12: two live calls moved the account balance by exactly 20. The published tables say 5 (`CLAUDE.md` §10, the HasData CLI reference's `google-trends (5 credits)`), so **the two disagree and 10/call is what the ledger shows**. The plan budgets the conservative (observed) figure; the operator's dashboard usage log is the tie-breaker. |
+| Google Trends (per request, up to 5 terms) | **10** | **Confirmed 2026-10-12** by the operator on the HasData dashboard — the endpoint's *Run Request* button states it, matching `docs.hasdata.com/apis/google-trends/search` and the pilot's own arithmetic (two calls moved the balance by exactly 20). The repo's older "5 credits" note was stale. |
 | Google Shopping (per request = per keyword) | **10** | Published, and the module's own `CREDITS_PER_REQUEST`. |
 
 Both rates are config keys (`HASDATA_TRENDS_CREDITS_PER_CALL`,
@@ -921,11 +921,9 @@ modules must keep every still-applicable machinery test.
 2. **`SHOPPING_GL=us` / `TRENDS_GEO=US`** — confirm US as the global
    demand-evidence geography (deepest Google Shopping/Trends signal).
    The keys are configurable if the operator prefers a multi-market read.
-3. **Trends credit rate — confirm from the dashboard usage log.** Two live
-   pilot calls moved the balance by exactly 20, i.e. 10 credits/call, while
-   the published tables say 5. The plan budgets the observed (conservative)
-   10; if the dashboard shows 5, drop `HASDATA_TRENDS_CREDITS_PER_CALL` to 5
-   and the launch-run envelope falls to ~350 credits.
+3. ~~Trends credit rate~~ — **RESOLVED 2026-10-12: 10 credits per request**,
+   confirmed on the HasData dashboard. The launch-run arithmetic above already
+   budgets it, so the 400-credit envelope stands as written.
 4. **The selection shape** — Jev scores, code quotes. `TREND_SELECT_MIN_PER_PILLAR`
    (**2**) is the floor inside each pillar's proportional quota: it guarantees a
    weak pillar still reaches the launch (the pilot found `sunrise_move` has

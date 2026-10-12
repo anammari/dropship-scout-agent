@@ -520,7 +520,7 @@ with the AliExpress extractor (§1). CJ's MCP server needs only its token.
 | `HASDATA_MONTHLY_BUDGET` | `1000` | the free-tier ceiling the production cap is checked against |
 | `HASDATA_PRODUCTION_CAP` | `400` | max credits one full production run may plan (the launch-run profile, §13.8) |
 | `HASDATA_GS_MAX_KEYWORDS` | `30` | Step-3 hard keyword-count cap (fail-closed before any credit moves) |
-| `HASDATA_TRENDS_CREDITS_PER_CALL` | `10` | Trends rate the guardrail arithmetic uses — OBSERVED 10 (2026-10-12: two live calls moved the balance by 20); published tables say 5 |
+| `HASDATA_TRENDS_CREDITS_PER_CALL` | `10` | Trends rate the guardrail arithmetic uses — **10 per request, confirmed on the HasData dashboard 2026-10-12** |
 | `HASDATA_SHOPPING_CREDITS_PER_REQUEST` | `10` | Shopping rate the guardrail arithmetic uses |
 | `TRENDS_MAX_CALLS` | `10` | Step-2 Trends call ceiling (up to 5 comma-separated terms per call) |
 | `MORNING_ANTHEM_TREND_KEYWORDS_PATH` | `outputs/json/morning-anthem-step-2-trend-keywords.json` | Step-2 deliverable (Jev-gated) — Step 3's intake |
@@ -1743,11 +1743,9 @@ equivalent.
 
 #### Open items
 
-1. **Confirm the Trends credit rate** from the dashboard usage log. Two live
-   calls moved the balance by exactly 20 → 10 credits/call, while the published
-   tables say 5. `HASDATA_TRENDS_CREDITS_PER_CALL` carries the observed figure;
-   if the dashboard shows 5, set it to 5 and the launch-run envelope falls to
-   ~350.
+1. ~~Confirm the Trends credit rate~~ — **RESOLVED 2026-10-12: 10 credits per
+   request**, confirmed on the HasData dashboard. The launch-run envelope of 400
+   stands as written.
 2. **Step 4's exact-title-first strategy is not built** — the bank still emits
    broad/modifier pairs.
 3. **`sunrise_move` seeds** for the production Step-2 research pass.
