@@ -99,8 +99,8 @@ def test_request_carries_the_au_market_pin_and_key():
     (request,) = requests
     assert request.url.path == "/scrape/google/shopping"
     assert request.url.params["q"] == "french press"
-    # The market pin is load-bearing: Google Shopping quotes differ per gl,
-    # exactly as the AliExpress DS Center's do.
+    # The market pin is load-bearing: Google Shopping prices and demand signals
+    # differ per market, so the launch must read the AU grid.
     assert request.url.params["gl"] == "au"
     assert request.url.params["domain"] == "google.com.au"
     assert request.url.params["hl"] == "en"
@@ -122,8 +122,8 @@ def test_one_request_per_keyword():
 
 
 def test_each_row_is_attributed_to_its_own_keyword():
-    # HasData items carry no `query` field (unlike the Apify actor's rows), so
-    # the attribution has to come from the request.
+    # A HasData grid row carries no `query` field of its own, so the keyword
+    # attribution has to come from the request that produced it.
     scraper, _ = _scraper()
     rows = scraper.scrape_keywords(["french press", "tea infuser"])
     assert [row.source_keyword for row in rows] == ["french press", "tea infuser"]

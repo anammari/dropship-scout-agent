@@ -38,7 +38,7 @@ from src.extractors.base import (
     ExtractorTimeoutException,
 )
 from src.extractors.cj_mcp_extractor import CjMcpExtractor
-from src.models import ProductCandidateEvaluation, RawSupplierProduct
+from src.models import RawSupplierProduct
 
 logger = logging.getLogger(__name__)
 

@@ -313,6 +313,15 @@ def pillar_quotas(
     then the remaining slots go out by largest remainder — so the quotas sum to
     exactly ``target`` whenever the pool can fill it, and the same pool always
     yields the same quotas.
+
+    **Termination.** Both distribution loops are bounded by the *available
+    candidates*, not by the slot count alone, so neither can spin when the pool
+    is exhausted: the trim loop only ever decrements a pillar still above its own
+    floor (its headroom strictly decreases), and the fill loop only ever
+    increments a pillar still holding an unpicked candidate (so it stops at
+    ``sum(counts)``). Each re-checks that bound every iteration and breaks with
+    nothing left to allocate. A pool too small even to satisfy the floor raises
+    rather than looping.
     """
     pillars = [p for p in PILLARS if counts.get(p, 0) > 0]
     if not pillars or target <= 0:
@@ -334,19 +343,24 @@ def pillar_quotas(
         return quota[p] - min(min_per_pillar, counts[p])
 
     # Trim over-allocation (the floor can overshoot a small target) from the
-    # pillars not already at their own floor, largest first.
+    # pillars not already at their own floor, largest first. The bound is
+    # `headroom(p) > 0`: each pass removes one slot from a pillar that still has
+    # slack above its floor, so the loop cannot outlive the slack.
     while sum(quota.values()) > target:
         room = [p for p in pillars if headroom(p) > 0]
-        if not room:
+        if not room:  # every pillar is at its floor — nothing left to trim
             break
         victim = max(room, key=lambda p: (quota[p], counts[p], -pillars.index(p)))
         quota[victim] -= 1
 
     # Hand the remaining slots out by largest fractional remainder, then by the
     # bigger pool, then in PILLARS order — a total order, so it is reproducible.
+    # The bound is `quota[p] < counts[p]`: a pillar already holding every
+    # candidate it has cannot take another slot, so the loop stops at the size of
+    # the pool instead of chasing slots that do not exist.
     while sum(quota.values()) < target:
         room = [p for p in pillars if quota[p] < counts[p]]
-        if not room:
+        if not room:  # the pool is exhausted — no pillar has a spare candidate
             break
         winner = max(
             room,

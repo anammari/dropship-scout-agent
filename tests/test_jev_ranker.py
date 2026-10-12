@@ -781,8 +781,8 @@ def _ranked_samples():
             tier="shortlist",
         ),
         RankedPackage(
-            package_dir="/root/aliexpress/product-03",
-            metadata={**METADATA, "product_title": "Bath caddy", "supplier_name": "AliExpress"},
+            package_dir="/root/cjdropshipping/product-03",
+            metadata={**METADATA, "product_title": "Bath caddy", "supplier_name": "CJdropshipping"},
             similarity_score=3.0,
             value_score=2.5,
             pillar="restful_reset",
@@ -790,7 +790,7 @@ def _ranked_samples():
             tier="review",
         ),
         RankedPackage(
-            package_dir="/root/aliexpress/product-09",
+            package_dir="/root/cjdropshipping/product-09",
             metadata={**METADATA, "product_title": "Broken"},
             similarity_score=None,
             value_score=None,
@@ -818,7 +818,7 @@ def test_payload_groups_the_tiers_and_counts_them(tmp_path):
         "disregard": 1,
     }
     assert payload["tiers"]["shortlist"] == ["/root/cjdropshipping/product-04"]
-    assert payload["tiers"]["disregard"] == ["/root/aliexpress/product-09"]
+    assert payload["tiers"]["disregard"] == ["/root/cjdropshipping/product-09"]
     assert payload["summary"]["similarity_weight"] == SIMILARITY_WEIGHT
     assert payload["summary"]["value_weight"] == VALUE_WEIGHT
     assert len(payload["packages"]) == 3

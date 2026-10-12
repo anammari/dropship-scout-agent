@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -49,7 +49,6 @@ from src.config import settings
 from src.keywords.generator import PILLARS, carries_banned_token
 from src.ranking.jev_client import (
     JevClient,
-    JevConfigError,
     JevError,
     answer_choice,
 )

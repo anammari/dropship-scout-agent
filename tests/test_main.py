@@ -15,7 +15,6 @@ from src.main import (
     _build_arg_parser,
     _funnel_exhausted_reason,
     _positive_int,
-    main,
     render_intervention_block,
     run_pipeline,
 )

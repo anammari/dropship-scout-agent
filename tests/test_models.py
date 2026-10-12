@@ -372,8 +372,8 @@ def test_final_accept_passes_on_margin_over_the_floor_even_below_3x():
 
 def test_final_accept_survives_the_relaxed_floor_below_3x():
     # COGS 4.00 with a 2.75x retail: the original 3.0x / AUD 25 floor rejected
-    # this, which is exactly the realistic AU pricing the DS Center cost basis
-    # now produces. The floor is relaxed to 2.5x / AUD 20.
+    # this, which is exactly the realistic AU pricing a real supplier landed
+    # cost produces. The floor is 2.5x / AUD 10.
     final = _final(_provisional(suggested_retail_aud=11.00), raw=_low_cogs())
     assert final.verdict == "ACCEPT"
     assert final.markup_multiplier == pytest.approx(2.75, abs=0.01)

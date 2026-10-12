@@ -13,7 +13,9 @@ keyword.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import signal
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -22,9 +24,9 @@ from src.config import settings
 from src.ranking.jev_client import JevError
 from src.research.trend_gate import GatedKeyword, TrendGateError
 from src.research.trend_select import (
+    PILLARS,
     QUALITY_LEVELS,
     TREND_SELECT_QUESTION,
-    ScoredKeyword,
     TrendKeywordSelector,
     write_selected_deliverable,
 )
@@ -592,7 +594,6 @@ def test_runner_gated_sibling_names_the_reserve():
 
 def test_runner_gates_then_selects_and_writes_both_files(tmp_path, capsys, monkeypatch):
     import sys
-    from pathlib import Path
 
     runner = _runner()
     source = tmp_path / "candidates.json"
@@ -730,3 +731,135 @@ def test_selector_reads_its_defaults_from_settings(monkeypatch):
     monkeypatch.setattr(settings, "TREND_SELECT_MIN_PER_PILLAR", 0)
     selector = TrendKeywordSelector(client=ScriptedJevClient())
     assert (selector.target, selector.batch_size, selector.min_per_pillar) == (7, 3, 0)
+
+
+# ---------------------------------------------------------------------------
+# Quota-loop safety (review question 1)
+#
+# The distribution loops must be bounded by the AVAILABLE CANDIDATES, not by the
+# slot count alone — a loop that chases slots the pool cannot fill never ends.
+# These tests pin the bound, and `_deadline` turns a regression into a failure
+# instead of a hung test run.
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _deadline(seconds: float = 5.0):
+    """Fail if the block runs longer than `seconds` (a non-terminating loop)."""
+
+    def _boom(signum, frame):  # pragma: no cover - only on regression
+        raise AssertionError(
+            f"quota allocation exceeded {seconds}s — a loop is not terminating"
+        )
+
+    previous = signal.signal(signal.SIGALRM, _boom)
+    signal.alarm(max(1, int(seconds)))
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def test_quota_allocation_terminates_when_the_pool_is_far_smaller_than_the_target():
+    from src.research.trend_select import pillar_quotas
+
+    with _deadline():
+        quotas = pillar_quotas({"brew_fuel": 1}, target=1000, min_per_pillar=2)
+    assert quotas == {"brew_fuel": 1}
+
+
+def test_quota_allocation_terminates_when_every_pillar_is_at_its_cap():
+    from src.research.trend_select import pillar_quotas
+
+    # Every pillar holding exactly one candidate, target far beyond the pool:
+    # the fill loop must stop at the pool, not chase the remaining slots.
+    counts = {p: 1 for p in PILLARS}
+    with _deadline():
+        quotas = pillar_quotas(counts, target=500, min_per_pillar=1)
+    assert quotas == counts
+    assert sum(quotas.values()) == 5
+
+
+def test_quota_allocation_terminates_on_degenerate_inputs():
+    from src.research.trend_select import pillar_quotas
+
+    with _deadline():
+        # One candidate, target 1.
+        assert pillar_quotas({"brew_fuel": 1}, target=1, min_per_pillar=0) == {
+            "brew_fuel": 1
+        }
+        # Zero floor, many pillars, tiny target.
+        assert sum(
+            pillar_quotas(
+                {"brew_fuel": 3, "sunrise_move": 3, "morning_table": 3},
+                target=2,
+                min_per_pillar=0,
+            ).values()
+        ) == 2
+        # Equal pools, odd target.
+        assert sum(
+            pillar_quotas(
+                {"brew_fuel": 10, "morning_table": 10}, target=7, min_per_pillar=0
+            ).values()
+        ) == 7
+        # Very lopsided pools with a floor.
+        quotas = pillar_quotas(
+            {"brew_fuel": 1000, "morning_table": 1}, target=999, min_per_pillar=2
+        )
+        assert quotas["morning_table"] == 1
+        assert quotas["brew_fuel"] == 998
+
+
+def test_quota_invariants_hold_across_a_random_sweep():
+    """Termination + the three invariants, over many synthetic pools.
+
+    Seeded, so a failure is reproducible. This is the property test that would
+    have caught both bugs found by hand while writing the allocation (a quota
+    above the pool size, and a target the floor cannot fit).
+    """
+    import random
+
+    from src.research.trend_select import pillar_quotas
+
+    rng = random.Random(20261012)
+    checked = 0
+    with _deadline(20.0):
+        for _ in range(400):
+            pillar_count = rng.randint(1, len(PILLARS))
+            counts = {
+                p: rng.randint(1, 60) for p in list(PILLARS)[:pillar_count]
+            }
+            target = rng.randint(1, 120)
+            floor = rng.randint(0, 4)
+            total = sum(counts.values())
+
+            # A floor that cannot fit the target must raise, not loop.
+            feasible_floor = floor * len(counts) <= total and (
+                floor * len(counts) <= target or total <= target
+            )
+            try:
+                quotas = pillar_quotas(counts, target=target, min_per_pillar=floor)
+            except TrendGateError:
+                assert not feasible_floor, (
+                    f"raised on a feasible pool: counts={counts} "
+                    f"target={target} floor={floor}"
+                )
+                continue
+
+            checked += 1
+            # (a) never more than the pillar holds
+            assert all(quotas[p] <= counts[p] for p in counts), (counts, quotas)
+            # (b) never fewer than the floor, where the pool can afford it
+            assert all(
+                quotas[p] >= min(floor, counts[p]) for p in counts
+            ), (counts, quotas, floor)
+            # (c) as many slots as the target, or exactly the pool when the
+            #     pool is the smaller of the two
+            assert sum(quotas.values()) == min(target, total), (
+                counts,
+                target,
+                floor,
+                quotas,
+            )
+    assert checked > 300  # the sweep exercised real allocations, not mostly raises

@@ -523,3 +523,47 @@ def test_env_declares_the_same_keys_in_the_same_order_as_env_example():
     if not live.exists():
         pytest.skip(".env is operator-local (gitignored) and absent here")
     assert _declared_keys(live) == _declared_keys(root / ".env.example")
+
+# ----------------------------------------------------------------------
+# No client may fall back to a live default when a credential is absent
+# ----------------------------------------------------------------------
+
+
+def test_no_real_client_reaches_a_live_endpoint_without_credentials():
+    """Blanking the credentials must fail every client closed.
+
+    `tests/conftest.py` blanks `settings.LLM_API_KEY`, `settings.HASDATA_API_KEY`
+    and `settings.OPENROUTER_API_KEY` for the whole suite, so a test that
+    accidentally builds a real client gets a config error instead of spending the
+    operator's balance. That guarantee only holds if no client has a hardcoded
+    fallback that would let it proceed — this is the guard for that, and it fails
+    the moment someone adds an endpoint default that makes a credential optional.
+    """
+    from src.evaluators.gold_curator import GoldCurationConfigError, GoldProductCurator
+    from src.evaluators.llm_filter import LLMConfigError, LLMEvaluationFilter
+    from src.extractors.google_shopping_hasdata import (
+        HasDataNotConfiguredError,
+        HasDataShoppingScraper,
+    )
+    from src.ranking.jev_client import JevClient, JevConfigError
+
+    with pytest.raises(LLMConfigError):
+        LLMEvaluationFilter()
+    with pytest.raises(GoldCurationConfigError):
+        GoldProductCurator()
+    with pytest.raises(HasDataNotConfiguredError):
+        HasDataShoppingScraper()
+    with pytest.raises(JevConfigError):
+        JevClient()
+
+
+def test_the_supplier_engine_fails_closed_without_its_token():
+    # CJ is the only supplier, so an unconfigured token must raise rather than
+    # attempt a session — the conftest blanks it on the settings singleton.
+    import asyncio
+
+    from src.extractors.base import ExtractorNotConfiguredError
+    from src.extractors.cj_mcp_extractor import CjMcpExtractor
+
+    with pytest.raises(ExtractorNotConfiguredError, match="CJ_MCP_TOKEN"):
+        asyncio.run(CjMcpExtractor().fetch_products(["garlic press"]))

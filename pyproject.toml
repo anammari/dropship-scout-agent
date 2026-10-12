@@ -23,6 +23,9 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-asyncio",
+    # Static sweep for dead code / unused imports (F-rules): the tool the
+    # rebrand residue sweep was run with, kept reproducible.
+    "ruff",
 ]
 
 [build-system]

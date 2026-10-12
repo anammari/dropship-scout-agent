@@ -13,11 +13,10 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import httpx
 import pytest
 
 from src.config import settings
-from src.ranking.jev_client import JevConfigError, JevError
+from src.ranking.jev_client import JevError
 from src.research.trend_gate import (
     INTENT_OPTIONS,
     TREND_GATE_QUESTION,

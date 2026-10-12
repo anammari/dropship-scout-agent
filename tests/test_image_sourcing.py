@@ -15,7 +15,6 @@ import os
 from io import BytesIO
 
 import httpx
-import pytest
 from PIL import Image
 
 from src.models import RawSupplierProduct

@@ -10,10 +10,9 @@ import json
 from pathlib import Path
 
 import httpx
-import pytest
 from PIL import Image
 
-from src.exporter import CandidateExporter, ExportResult, IMAGE_SOURCE
+from src.exporter import CandidateExporter, IMAGE_SOURCE
 from src.models import (
     ProductCandidateEvaluation,
     ProvisionalProductEvaluation,
