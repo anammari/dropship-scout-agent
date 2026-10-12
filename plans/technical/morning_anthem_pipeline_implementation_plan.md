@@ -144,6 +144,52 @@ The selection lands the best 30 in the Step-2 deliverable (Step 3's intake) and
 preserves the full gated pool beside it, so the remaining ~30 stay available as
 the re-run reserve without paying for trends again.
 
+**Pilot evidence (2026-10-12, live, 3 Jev calls over 13 candidates).** The gate
+kept 12; the selection scored them:
+
+| Score | Verdict | Keyword |
+|---|---|---|
+| 4.94 | selected | `hand held milk frother` |
+| 4.70 | selected | `matcha whisk` |
+| 4.51 / 4.00 / 3.67 / 3.67 | reserve | `milk steamer and frother`, `coffee milk frother`, `coffee frother`, `milk frother machine` |
+| 3.24 / 3.23 / 3.11 | selected (quota) | `incense burner`, `silk eye mask`, `garlic press` |
+| 2.80 | reserve | `nespresso frother` |
+| 2.24 | reserve | `best milk frother` |
+| 1.56 | reserve | `breville barista express` |
+
+Two findings this settled:
+
+1. **The brand-query problem is solved here, not by a blacklist.** The brand and
+   comparison strings did not merely miss the top N — they scored at the
+   *bottom* of the pool (`breville barista express` lowest of all twelve),
+   because a brand-plus-model query is a poor sourcing keyword.
+2. **The quotas behave as intended.** Three lower-scoring rows from three
+   different pillars entered on their share while four higher-scoring
+   `brew_fuel` rows stayed in reserve.
+
+**Second Trends call (2026-10-12, 10 credits) — The Sunrise Move is NOT
+trend-dead; the earlier single seed was simply too narrow.** One AU call with
+five terms, chosen as head-term/specific pairs:
+
+| Term | 5-y mean | weeks with data | peak |
+|---|---|---|---|
+| `beach towel` | 25 | 262/262 | 100 |
+| `dog leash` | 16 | 262/262 | 30 |
+| `sand free towel` | 2 | 130/262 | 13 |
+| `commuter backpack` | — | 16/262 | 2 |
+| `hands free dog leash` | — | 8/262 | 3 |
+
+The pillar carries real, measurable AU demand at its **head terms** and almost
+none at its **phrase-level product names**: Google Trends reports head terms,
+not long-tail phrasings, and AU is a small market, so a specific phrase falls
+under the reporting floor — which is why the pilot's lone `commuter backpack`
+seed read as "no demand". It cuts both ways: the brew-heavy pilot pool looked
+strong partly because those seeds happened to be head terms.
+
+**Seeding rule for the production Step-2 pass: seed Trends with head terms
+(`beach towel`, `dog leash`), not phrase-level product names.** The long-tail
+variants belong downstream as Step-4 supplier keywords, once demand is proven.
+
 **Expected yield: ~55 gold products** (~2 per keyword, the ratio the pipeline's
 own live runs have produced). Those become the reference set Steps 4–6 chase:
 the Step-4 bank targets each gold product by its **exact title first**, and
@@ -899,9 +945,9 @@ Per step:
 
 | Step | Proof gate before advancing |
 |---|---|
-| Renames/removals (§1) | suite green after the AUD→USD, AliExpress-removal, and Apify-removal sweeps; no existing test weakened |
+| Renames/removals (§1) | suite green after the **AUD-retention**, AliExpress-removal and Apify-removal sweeps (the AUD rebase the plan body describes was cancelled by the launch overrides); no existing test weakened |
 | 2 | Step-2 deliverable validated (Jev `product_search`-confirmed, five-pillar tags, demand evidence, no banned tokens) + the Jev **selection** recorded (scores per keyword, the cut, the reserve) + `tests/test_trend_gate.py` and `tests/test_trend_select.py` green + one live pilot (≤ 10 HasData credits) |
-| 3 | HasData-only scrape + LLM select + Jev pillar gate; `tests/test_pillar_gate.py` green + one live pilot (`--limit 1`, exactly 10 credits, 0 over) + gold deliverable reviewed (every product five-way pillar-tagged, on-page demand evidence). The launch run then scrapes the hand-picked **30 keywords** (300 credits, within `HASDATA_PRODUCTION_CAP=400`) |
+| 3 | HasData-only scrape + LLM select + Jev pillar gate; `tests/test_pillar_gate.py` green + one live pilot (`--limit 1`, exactly 10 credits, 0 over) + gold deliverable reviewed (every product five-way pillar-tagged, on-page demand evidence). The launch run then scrapes the **Jev-selected 30 keywords** (300 credits, within `HASDATA_PRODUCTION_CAP=400`) |
 | 4 | suite green + one live run reproducing an exact-title-first bank from the real Step-3 file; every `exact` row verbatim-verified against its product name; bank reviewed |
 | 5 | suite green + pilot (`--limit 4 --target-per-keyword 1`) live, `cjdropshipping/` root populated, per-leg funnel summary reviewed; exact-before-fallback ordering observed in the logs |
 | 6 | suite green + one live ranked report over the pilot packages; tiers reviewed; five-pillar classification observed |
@@ -914,13 +960,14 @@ modules must keep every still-applicable machinery test.
 
 ## 14. Open decisions for the operator
 
-1. **`CJ_DEFAULT_DEST_COUNTRY=US`** — confirm US as the default freight
-   destination for the global brand (the store ships worldwide; the
-   landed-cost quote needs one reference destination). Alternative: quote
-   to a second market and take the higher. Default is US.
-2. **`SHOPPING_GL=us` / `TRENDS_GEO=US`** — confirm US as the global
-   demand-evidence geography (deepest Google Shopping/Trends signal).
-   The keys are configurable if the operator prefers a multi-market read.
+1. ~~`CJ_DEFAULT_DEST_COUNTRY=US`~~ — **SETTLED by the launch overrides:
+   `AU`.** The Australia-first launch ships from CJ's China warehouse into
+   Australia, so the freight quote names an Australian lane. The global
+   question (a second reference destination, or quote-to-each-market) returns
+   when the store opens Shopify Markets.
+2. ~~`SHOPPING_GL=us` / `TRENDS_GEO=US`~~ — **SETTLED by the launch overrides:
+   `au` / `AU`.** Demand evidence and price benchmarks are the AU market at
+   launch, so the launch run can be read against Australian retail reality.
 3. ~~Trends credit rate~~ — **RESOLVED 2026-10-12: 10 credits per request**,
    confirmed on the HasData dashboard. The launch-run arithmetic above already
    budgets it, so the 400-credit envelope stands as written.
@@ -931,7 +978,7 @@ modules must keep every still-applicable machinery test.
    and it costs the dominant pillar one slot. `TREND_SELECT_TARGET` **is** the
    Step-3 budget (10 credits per keyword), so 30 means 300 credits.
    `--no-pillar-quota` reverts to a pure best-of.
-4. **Keyword-bank size** — the exact-title-first strategy yields ~1–2
+5. **Keyword-bank size** — the exact-title-first strategy yields ~1–2
    keywords per product (exact + maybe one tight fallback). Confirm the
    bank band target (the old 50–70 band is replaced by a per-product
    1–2 target; the merged bank lands at roughly the gold-product count).

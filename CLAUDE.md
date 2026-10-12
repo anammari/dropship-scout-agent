@@ -1718,6 +1718,7 @@ batches over 13 curated candidates:
 | One seed had no usable AU demand | `commuter backpack` — 16/262 weekly points had data, max 5, no mean reported. **`sunrise_move` still has no demand signal** and needs its own seeds |
 | Related queries are brand-heavy | of 50 AU related queries for `milk frother`, roughly half name a manufacturer or retailer (nespresso, breville, delonghi, smeg, kmart, aldi, big w, ikea) — they pass the intent gate legitimately, which is why the banned-token screen and the curator carry the load |
 | Yield ratio | 5 input terms + 50 related queries → 13 curated candidates → 12 kept |
+| **Second AU call (same day, 10 credits): the `sunrise_move` pillar is not trend-dead, its seed was too narrow** | Head terms carry real AU demand — `beach towel` 5-y mean 25 at peak 100, `dog leash` 16 — while phrase-level product names do not (`sand free towel` 2, `commuter backpack` peak 2, `hands free dog leash` 8/262 weeks). Google Trends reports head terms, not long-tail phrasings, and AU is a small market, so a specific phrase falls under the reporting floor. **Seed Trends with head terms; the long-tail phrasings belong downstream as Step-4 supplier keywords.** |
 
 #### The launch run (one-off, operator decision 2026-10-12)
 
@@ -1748,7 +1749,13 @@ equivalent.
    stands as written.
 2. **Step 4's exact-title-first strategy is not built** — the bank still emits
    broad/modifier pairs.
-3. **`sunrise_move` seeds** for the production Step-2 research pass.
+3. ~~`sunrise_move` seeds~~ — **RESOLVED 2026-10-12** by a second live Trends
+   call (10 credits): the pillar is not trend-dead, its *head terms* carry real
+   AU demand (`beach towel` 5-y mean 25 at peak 100, `dog leash` 16) while its
+   phrase-level product names do not (`sand free towel` 2, `commuter backpack`
+   peak 2, `hands free dog leash` 8/262 weeks). **Seed Trends with head terms,
+   not phrase-level product names** — the long-tail phrasings belong downstream
+   as Step-4 supplier keywords, once demand is proven.
 4. **`TREND_SELECT_TARGET` is the Step-3 budget.** 30 keywords = 300 credits;
    changing it changes the scrape size, not just the list.
 5. **The production Step-2 research pass** (≤ 10 Trends calls) has not been run
