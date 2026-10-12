@@ -1,9 +1,10 @@
 # CLAUDE.md - Dropship Scout Agent (The Morning Anthem, Supplier-First)
 
 > Aligned with the implemented codebase as of **2026-10-12**, on branch
-> `feature/morning-anthem-pipeline-update`: **§1 (the rebrand sweep) and Steps 2,
-> 3 and 4 are implemented** — §1 and Step 2 live-piloted, Steps 3–4 hermetically
-> tested and awaiting their first live run. Steps 5–6 are not started (see §13.8).
+> `feature/morning-anthem-pipeline-update`: **the whole pipeline is implemented —
+> §1 (the rebrand sweep) and Steps 2–6** — with §1 and Step 2 live-piloted and
+> Steps 3–6 hermetically tested, awaiting their first live run. Only the human
+> steps 7–8 remain (see §13.8).
 > This file is the operating mandate and the single source of operating
 > context: it carries the schemas, gate rules, config reference and
 > operational notes.
@@ -781,8 +782,8 @@ older spike proposed is still dead and must still never be built.
 | 2 | Trends → candidate strings → **Jev product-intent gate** → AU product-search keywords, tagged with the five Morning Anthem pillars | **done — §13.8**, deliverable `outputs/json/morning-anthem-step-2-trend-keywords.json` (untracked) |
 | 3 | Google Shopping AU scrape (**HasData only**, no `--source`) + LLM select-by-url curation + **Jev pillar gate** → gold-standard product list | **done — §13.8**; §13.2 describes the superseded design |
 | 4 | **Exact-title-first** keyword bank: each product's own title in code, plus one optional LLM fallback | **done — §13.8**; §13.3 describes the superseded design |
-| 5 | **CJ-only** ingestion of the keyword bank → `morning-anthem-candidates/cjdropshipping/` | not started — §13.6 is the superseded design |
-| 6 | Jev ranks supplier candidates against the gold products | not started — §13.7 is the superseded design |
+| 5 | **CJ-only** ingestion of the keyword bank → `morning-anthem-candidates/cjdropshipping/` | **done — §13.8**; §13.6 describes the superseded design |
+| 6 | Jev ranks supplier candidates against the gold products | **done — §13.8**; §13.7 describes the superseded design |
 | 7–8 | Human-only: CJ app linking; store curation | no code (deliberately) |
 
 All research deliverables live under `outputs/` — **untracked**
@@ -1813,6 +1814,45 @@ per-product target, the merged bank band, the broad/modifier pairing and its
 `tightens` links. All of them existed to spread a *generated* pool across
 products it could not otherwise name; with the title as the primary keyword,
 uniqueness is free and coverage is one row per product.
+
+#### Step 5 — CJ-only ingestion, product-major
+
+Every bank **product** runs through the CJdropshipping MCP pipeline — the sole
+supplier engine — under the full gate stack: the commercial gate (§6.2), the MCP
+payload liveness gate (§5), the mandatory freight quote to
+`CJ_DEFAULT_DEST_COUNTRY` (§6.3), the LLM viability gate, the AUD margin floor
+(`MIN_MARGIN_AUD`) and the 3-image gallery gate. Survivors are written to
+`<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/`.
+
+**The unit of ingestion is the product, not the keyword** (operator decision
+2026-10-12). A product's rows run in order — its **exact title first**, then its
+**fallback only to fill whatever target slots the exact keyword left open** — so
+a fallback is never paid for when the exact title already worked. Each engine
+gets its own pass at a product's keywords, since they write to separate supplier
+folders.
+
+Because the unit changed, the config key did too: `BANK_TARGET_PER_PRODUCT`
+(formerly `..._PER_KEYWORD`) is the number of ACCEPTed packages one product may
+contribute through one engine, and the summary reports
+`products_attempted` / `products_empty` with a per-engine `keywords_skipped`
+counter for the fallbacks that were not needed.
+
+#### Step 6 — Jev ranking (the gold kernel's last automated step)
+
+Reads the packages from `<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/`
+plus the Step-3 gold list, and ranks each package with Jev on three questions:
+`<slug>__similarity` (score — is it the same object as a gold product?),
+`<slug>__winning_value` (score — its own **AUD** retail, landed cost and
+projected margin weighed against the gold reference's demand evidence) and
+`<slug>__pillar` (choice — one of the five pillars, or `discard`). Tiers:
+`rank_score = 0.6·similarity + 0.4·value` ≥ `JEV_SHORTLIST_MIN_SCORE` (3.5) →
+shortlist, ≥ `JEV_REVIEW_MIN_SCORE` (2.5) → review, else disregard.
+
+**Ranking is a report, not a deletion**: no package is moved or removed, and Jev
+authors no product fact — every field in the report is copied verbatim from the
+package's `metadata.json`. A post-evaluation compliance gate then forces any
+package whose own text carries a banned token to `disregard` regardless of score.
+Deliverable: `outputs/json/morning-anthem-step-6-ranked-candidates.json` (+ `.md`).
 
 #### The launch run (one-off, operator decision 2026-10-12)
 

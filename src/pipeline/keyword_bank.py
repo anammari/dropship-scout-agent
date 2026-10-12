@@ -110,11 +110,15 @@ class BankKeyword:
 class BankIngestionSummary:
     """What one bank-ingestion run did, per engine and in total."""
 
+    #: The bank's size, for reporting.
     keywords_total: int = 0
-    keywords_attempted: int = 0
-    # Keywords for which NO engine returned a single verified supplier
-    # product — nothing to evaluate, nothing to export.
-    keywords_empty: int = 0
+    #: Products iterated. The unit of work is the PRODUCT, not the keyword: a
+    #: product's exact keyword runs first and its fallback only to fill whatever
+    #: target slots the exact one left open.
+    products_attempted: int = 0
+    #: Products for which NO engine returned a single verified supplier product —
+    #: nothing to evaluate, nothing to export.
+    products_empty: int = 0
     per_engine: Dict[str, Dict[str, int]] = field(default_factory=dict)
     exports: List[ExportResult] = field(default_factory=list)
     export_roots: Dict[str, str] = field(default_factory=dict)
@@ -206,6 +210,21 @@ def load_keyword_bank(path: Optional[Path] = None) -> List[BankKeyword]:
     return keywords
 
 
+def _by_product(keywords: Sequence[BankKeyword]) -> List[tuple]:
+    """Group the bank rows by product, preserving order within each group.
+
+    The unit of ingestion is the PRODUCT: its exact keyword runs first and its
+    fallback only fills whatever target slots the exact one left open, so the
+    fallback is never paid for when the exact title already worked. `product` is
+    the join key the generator wrote verbatim, and the loader has already sorted
+    exact rows ahead of fallbacks, so each group arrives exact-first.
+    """
+    groups: Dict[str, List[BankKeyword]] = {}
+    for keyword in keywords:
+        groups.setdefault(keyword.product, []).append(keyword)
+    return list(groups.items())
+
+
 def _resolve_engines(factories: Dict[str, Callable[[], Any]]) -> List[str]:
     """Registered bank engines, in SUPPLIER_PRIORITY_ORDER then default order.
 
@@ -248,7 +267,7 @@ def _default_exporters(export_root: Path, engines: Sequence[str]) -> Dict[str, A
 
 async def ingest_keyword_bank(
     keywords: Optional[List[BankKeyword]] = None,
-    target_per_keyword: Optional[int] = None,
+    target_per_product: Optional[int] = None,
     country: Optional[str] = None,
     evaluator: Optional[Any] = None,
     exporters: Optional[Dict[str, Any]] = None,
@@ -266,14 +285,20 @@ async def ingest_keyword_bank(
     fast on the first leg rather than after supplier quota is spent).
 
     Raises `BankIngestionFailedError` when every registered engine failed
-    every keyword, and lets `LLMConfigError` from the leg propagate — both
+    every product, and lets `LLMConfigError` from the leg propagate — both
     are boundary conditions the runner renders as interventions rather than
-    per-keyword drops.
+    per-product drops.
+
+    **The product is the unit.** Its exact-title keyword runs first and its
+    fallback only fills whatever target slots the exact keyword left open, so a
+    fallback is never paid for when the exact title already worked. Each engine
+    gets its own pass at a product's keywords, since they write to separate
+    supplier folders.
     """
     from src.main import PipelineExtractionFailedError, run_pipeline
 
     keywords = keywords if keywords is not None else load_keyword_bank()
-    target = target_per_keyword or settings.BANK_TARGET_PER_KEYWORD
+    target = target_per_product or settings.BANK_TARGET_PER_PRODUCT
     country = country or settings.TARGET_COUNTRY
     extractor_factories = extractor_factories or _default_extractor_factories()
     engines = _resolve_engines(extractor_factories)
@@ -288,7 +313,7 @@ async def ingest_keyword_bank(
         keywords_total=len(keywords),
         per_engine={
             engine: {counter: 0 for counter in _FUNNEL_COUNTERS}
-            | {"keywords_run": 0, "leg_failures": 0}
+            | {"keywords_run": 0, "leg_failures": 0, "keywords_skipped": 0}
             for engine in engines
         },
         export_roots={
@@ -297,57 +322,75 @@ async def ingest_keyword_bank(
         },
     )
 
-    for keyword in keywords:
-        summary.keywords_attempted += 1
-        scraped_this_keyword = 0
+    for product, group in _by_product(keywords):
+        summary.products_attempted += 1
+        scraped_for_product = 0
         for engine in engines:
             counters = summary.per_engine[engine]
-            extractor = extractor_factories[engine]()
-            exporter = exporters[engine]
-            before = {
-                name: getattr(exporter, name, 0)
-                for name in _EXPORTER_ACCUMULATED_COUNTERS
-            }
-            try:
-                leg = await run_pipeline(
-                    keyword=keyword.keyword,
-                    target_count=target,
-                    country=country,
-                    extractors=[extractor],
-                    evaluator=evaluator,
-                    exporter=exporter,
-                )
-            except PipelineExtractionFailedError as exc:
-                # Unconfigured / blocked / timed out for this leg only.
-                counters["leg_failures"] += 1
-                logger.warning(
-                    "Bank leg %s/%r failed — skipping this leg: %s",
-                    engine, keyword.keyword, exc,
-                )
-                continue
-            counters["keywords_run"] += 1
-            for counter in _FUNNEL_COUNTERS:
-                if counter in _EXPORTER_ACCUMULATED_COUNTERS:
-                    # From the EXPORTER, not the leg summary — see the note on
-                    # _EXPORTER_ACCUMULATED_COUNTERS.
-                    counters[counter] += (
-                        getattr(exporter, counter, 0) - before[counter]
+            exported_for_product = 0
+            for keyword in group:
+                remaining = target - exported_for_product
+                if remaining <= 0:
+                    # The product's exact keyword(s) already filled the target
+                    # for this engine, so its fallback is not worth a supplier
+                    # search — that is the point of running the exact title first.
+                    counters["keywords_skipped"] += 1
+                    logger.info(
+                        "Bank leg %s/%r skipped: %r already filled this "
+                        "product's %d slot(s)",
+                        engine, product, keyword.keyword, target,
                     )
-                else:
-                    counters[counter] += getattr(leg, counter, 0)
-            summary.exports.extend(leg.exports)
-            scraped_this_keyword += leg.candidates_scraped
-            logger.info(
-                "Bank leg %s/%r: scraped=%d accepted=%d exported=%d",
-                engine, keyword.keyword, leg.candidates_scraped,
-                leg.accepted, leg.candidates_exported,
-            )
-        if scraped_this_keyword == 0:
-            summary.keywords_empty += 1
+                    continue
+                extractor = extractor_factories[engine]()
+                exporter = exporters[engine]
+                before = {
+                    name: getattr(exporter, name, 0)
+                    for name in _EXPORTER_ACCUMULATED_COUNTERS
+                }
+                try:
+                    leg = await run_pipeline(
+                        keyword=keyword.keyword,
+                        target_count=remaining,
+                        country=country,
+                        extractors=[extractor],
+                        evaluator=evaluator,
+                        exporter=exporter,
+                    )
+                except PipelineExtractionFailedError as exc:
+                    # Unconfigured / blocked / timed out for this leg only.
+                    counters["leg_failures"] += 1
+                    logger.warning(
+                        "Bank leg %s/%r failed — skipping this leg: %s",
+                        engine, keyword.keyword, exc,
+                    )
+                    continue
+                counters["keywords_run"] += 1
+                for counter in _FUNNEL_COUNTERS:
+                    if counter in _EXPORTER_ACCUMULATED_COUNTERS:
+                        # From the EXPORTER, not the leg summary — see the note
+                        # on _EXPORTER_ACCUMULATED_COUNTERS.
+                        counters[counter] += (
+                            getattr(exporter, counter, 0) - before[counter]
+                        )
+                    else:
+                        counters[counter] += getattr(leg, counter, 0)
+                summary.exports.extend(leg.exports)
+                scraped_for_product += leg.candidates_scraped
+                exported_for_product += leg.candidates_exported
+                logger.info(
+                    "Bank leg %s/%r (match=%s): scraped=%d accepted=%d "
+                    "exported=%d (%d/%d of this product's target)",
+                    engine, keyword.keyword, keyword.match,
+                    leg.candidates_scraped, leg.accepted,
+                    leg.candidates_exported, exported_for_product, target,
+                )
+        if scraped_for_product == 0:
+            summary.products_empty += 1
 
-    if engines and summary.keywords_attempted:
+    if engines and summary.products_attempted:
         if all(
-            summary.per_engine[engine]["leg_failures"] == summary.keywords_attempted
+            summary.per_engine[engine]["keywords_run"] == 0
+            and summary.per_engine[engine]["leg_failures"] > 0
             for engine in engines
         ):
             reasons = ", ".join(
@@ -356,7 +399,7 @@ async def ingest_keyword_bank(
             )
             raise BankIngestionFailedError(
                 f"Every registered bank engine failed every one of the "
-                f"{summary.keywords_attempted} keyword(s): {reasons}. Nothing "
+                f"{summary.products_attempted} product(s): {reasons}. Nothing "
                 "could be read from the supplier."
             )
     return summary

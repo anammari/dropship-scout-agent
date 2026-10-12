@@ -66,10 +66,27 @@ DEFAULT_MAX_PRODUCTS = 150
 #: A fallback keyword is supplier search vocabulary, 2–7 words.
 MIN_FALLBACK_WORDS = 2
 MAX_FALLBACK_WORDS = 7
-#: A sanity bound on an exact keyword: a title longer than this is listing-data
-#: noise rather than a supplier search string, and such a product is dropped
-#: (with a warning) instead of being searched for verbatim.
-MAX_EXACT_WORDS = 24
+#: The safety bound on an exact keyword's length. A title longer than this is
+#: listing-data stuffing rather than a search string, so it is TRUNCATED to this
+#: many words (and never below a content word) instead of costing the product its
+#: keyword.
+#:
+#: Why 20 and not a tight bound like 8: a real supplier search wants the product's
+#: own title, and titles of 8-15 words are ordinary, not pathological — truncating
+#: those would throw away the attributes that make the query precise, which is the
+#: exact keyword's entire purpose (the FALLBACK is where a shorter, mechanics-named
+#: string belongs). A bound of 20 therefore only touches genuinely stuffed titles,
+#: and truncation is strictly better than the alternative it replaces, which was
+#: dropping the product from the bank entirely.
+MAX_EXACT_WORDS = 20
+#: Words a truncated title must not end on: a query ending in "with" or "and"
+#: reads as a cut-off sentence and matches worse than one ending on an object word.
+_TRAILING_FUNCTION_WORDS = frozenset(
+    {
+        "a", "an", "and", "at", "by", "for", "from", "in", "of", "on", "or",
+        "the", "to", "with",
+    }
+)
 TEMPERATURE = 0.6
 #: The configured model is a *reasoning* model whose chain-of-thought shares the
 #: completion budget, so the budget must leave room for the answer after the
@@ -202,10 +219,26 @@ def exact_keyword(title: object) -> str:
     Punctuation goes because supplier search boxes index words, and a comma or an
     em dash in a query is noise; the words themselves are the title's own, in its
     own order, and nothing is added, removed or reordered.
+
+    A title stuffed past `MAX_EXACT_WORDS` is truncated to that many words —
+    never below the last content word, so the query does not end on "with" or
+    "and" — because a truncated title is still a usable search string while no
+    keyword at all is a lost product. Truncation keeps the title's own prefix, so    the string remains derived from the product rather than authored about it.
     """
+    words = normalized_title_words(title)
+    if len(words) <= MAX_EXACT_WORDS:
+        return " ".join(words)
+    truncated = words[:MAX_EXACT_WORDS]
+    while truncated and truncated[-1] in _TRAILING_FUNCTION_WORDS:
+        truncated.pop()
+    return " ".join(truncated)
+
+
+def normalized_title_words(title: object) -> List[str]:
+    """The title's own words, lowercased and stripped of punctuation."""
     text = str(title or "").lower().replace("’", "").replace("'", "")
     text = re.sub(r"[^a-z0-9]+", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\s+", " ", text).strip().split()
 
 
 def _content_words(text: object) -> set:
@@ -390,13 +423,11 @@ def build_exact_rows(products: Sequence[Dict]) -> List[Dict]:
         if not keyword:
             logger.warning("skipping product with no usable title: %r", name)
             continue
-        if len(keyword.split()) > MAX_EXACT_WORDS:
-            # A listing title this long is data noise, not a search string.
-            logger.warning(
-                "skipping product whose title exceeds %d words: %r",
+        if len(normalized_title_words(name)) > MAX_EXACT_WORDS:
+            logger.info(
+                "truncated a stuffed title to %d words for %r",
                 MAX_EXACT_WORDS, name,
             )
-            continue
         rows.append(
             {
                 "keyword": keyword,

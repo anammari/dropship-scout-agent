@@ -662,7 +662,14 @@ target, band, LLM-call estimate), fail-closed on `KeywordGenerationError`
 
 ## 7. Step 5 — CJ-only ingestion
 
-### 7.1 Single-engine bank ingestion (`src/pipeline/keyword_bank.py` — slimmed)
+### 7.1 Single-engine bank ingestion (`src/pipeline/keyword_bank.py`) — IMPLEMENTED
+
+> **Status: implemented and hermetically tested (2026-10-12)**, driven by
+> `scripts/ingest_keyword_bank.py`. No live run yet (operator held all live runs
+> until implementation completes). Two changes from the text below: the unit of
+> ingestion is the **product**, not the keyword (a product's exact title runs
+> first and its fallback only fills the slots the exact one left open), and the
+> config key is therefore `BANK_TARGET_PER_PRODUCT`. See `CLAUDE.md` §13.8.
 
 `BANK_ENGINES = ("cjdropshipping",)` — the dual-engine fan-out collapses to
 a single engine, but the per-(keyword, engine) leg structure is **kept**
@@ -748,7 +755,12 @@ DS Center Session block is removed (no AliExpress).
 
 ---
 
-## 8. Step 6 — Jev product ranking (global appeal)
+## 8. Step 6 — Jev product ranking (global appeal) — IMPLEMENTED
+
+> **Status: implemented and hermetically tested (2026-10-12)**, driven by
+> `scripts/rank_optimal_candidates.py`, deliverable
+> `outputs/json/morning-anthem-step-6-ranked-candidates.{json,md}`. No live run
+> yet. See `CLAUDE.md` §13.8.
 
 `src/ranking/jev_product_ranker.py` + `src/ranking/jev_client.py` are
 rewritten for Morning Anthem:

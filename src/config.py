@@ -259,13 +259,13 @@ class Settings:
             os.getenv("MORNING_ANTHEM_TREND_KEYWORDS_PATH")
             or "outputs/json/morning-anthem-step-2-trend-keywords.json"
         )
-        # Step-5 export target PER ENGINE: the number of ACCEPTed packages
-        # one (keyword, engine) leg may write. It is a per-leg target, so the
-        # bank's keyword count multiplies it — 2 keeps a 60-keyword bank from
-        # turning into hundreds of packages, while still giving each keyword
-        # a real chance to contribute to the supplier folder.
-        self.BANK_TARGET_PER_KEYWORD: int = _parse_int(
-            os.getenv("BANK_TARGET_PER_KEYWORD"), default=2
+        # Step-5 export target PER (PRODUCT, ENGINE): the number of ACCEPTed
+        # packages one product may contribute through one engine. The PRODUCT is
+        # the unit of ingestion — its exact-title keyword runs first and its
+        # fallback only fills whatever slots the exact keyword left open, so a
+        # fallback is never paid for when the exact title already worked.
+        self.BANK_TARGET_PER_PRODUCT: int = _parse_int(
+            os.getenv("BANK_TARGET_PER_PRODUCT"), default=2
         )
         # Step-5 Morning Anthem gold-kernel intake root: the supplier
         # subfolder is created under it by the runner, numbered independently

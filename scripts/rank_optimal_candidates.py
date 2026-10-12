@@ -11,8 +11,8 @@ asks Jev for a similarity score, a winning-value score and a pillar per
 package in batches (default 4 packages per System One call), and writes a
 tiered report:
 
-    outputs/json/step-6-ranked-candidates.json   (the structured ranking)
-    outputs/md/step-6-ranked-candidates.md       (the tier-grouped digest)
+    outputs/json/morning-anthem-step-6-ranked-candidates.json   (the structured ranking)
+    outputs/md/morning-anthem-step-6-ranked-candidates.md       (the tier-grouped digest)
 
 `rank_score = 0.6*similarity + 0.4*value` on a 1–5 scale; shortlist ≥
 `JEV_SHORTLIST_MIN_SCORE`, review ≥ `JEV_REVIEW_MIN_SCORE`, else disregard.
@@ -25,7 +25,7 @@ Usage (from the repo root):
     source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
         [--gold-products outputs/json/step-3-gold-standard-products.json] \
         [--export-root <MORNING_ANTHEM_EXPORT_DIR>] [--batch-size 4] \
-        [--output outputs/json/step-6-ranked-candidates.json]
+        [--output outputs/json/morning-anthem-step-6-ranked-candidates.json]
 
 Exit codes: 0 complete, 1 requires human intervention, 2 unexpected error.
 """
@@ -54,7 +54,7 @@ from src.ranking.jev_product_ranker import (  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 
-DEFAULT_OUTPUT = OUTPUTS_JSON_DIR / "step-6-ranked-candidates.json"
+DEFAULT_OUTPUT = OUTPUTS_JSON_DIR / "morning-anthem-step-6-ranked-candidates.json"
 
 
 def _engine_of(package_dir: str) -> str:

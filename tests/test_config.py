@@ -327,18 +327,18 @@ def test_digest_path_specialises_an_absolute_outputs_json_path():
 def test_bank_target_per_keyword_defaults_to_two(monkeypatch):
     # Per (keyword, engine) leg: the bank's keyword count multiplies it, so
     # the default has to stay small for a 60-keyword bank to stay tractable.
-    monkeypatch.delenv("BANK_TARGET_PER_KEYWORD", raising=False)
-    assert load_settings().BANK_TARGET_PER_KEYWORD == 2
+    monkeypatch.delenv("BANK_TARGET_PER_PRODUCT", raising=False)
+    assert load_settings().BANK_TARGET_PER_PRODUCT == 2
 
 
 def test_bank_target_per_keyword_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("BANK_TARGET_PER_KEYWORD", "1")
-    assert load_settings().BANK_TARGET_PER_KEYWORD == 1
+    monkeypatch.setenv("BANK_TARGET_PER_PRODUCT", "1")
+    assert load_settings().BANK_TARGET_PER_PRODUCT == 1
 
 
 def test_bank_target_per_keyword_blank_falls_back_to_the_default(monkeypatch):
-    monkeypatch.setenv("BANK_TARGET_PER_KEYWORD", "")
-    assert load_settings().BANK_TARGET_PER_KEYWORD == 2
+    monkeypatch.setenv("BANK_TARGET_PER_PRODUCT", "")
+    assert load_settings().BANK_TARGET_PER_PRODUCT == 2
 
 
 def test_morning_anthem_export_dir_defaults_to_the_gold_kernel_tree(monkeypatch):

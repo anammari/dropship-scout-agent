@@ -3,24 +3,28 @@
 pipeline and export the optimal products to the Morning Anthem gold-kernel
 tree.
 
-Every bank keyword runs through CJdropshipping (MCP) — The Morning Anthem's
-sole supplier engine — under its own gates, and what survives the viability
-gate, the margin floor and the 3-image gallery gate is written to:
+Every bank PRODUCT runs through CJdropshipping (MCP) — The Morning Anthem's sole
+supplier engine — under its own gates, and what survives the viability gate, the
+margin floor and the 3-image gallery gate is written to:
 
     <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/…
 
 That tree is a production deliverable, not a repo artefact, and stays
 untracked.
 
+**A product's keywords run in order: its exact title first, then its fallback
+only to fill whatever target slots the exact keyword left open.** A fallback is
+therefore never paid for when the exact title already worked.
+
 Pacing is the point of the pilot flags: one CJ keyword costs up to
-CJ_MAX_PRODUCTS product-detail calls plus a freight quote each, so a full
-60-keyword bank is a long run. Pilot with `--limit 4 --target-per-keyword 1`.
+CJ_MAX_PRODUCTS product-detail calls plus a freight quote each, so a full bank is
+a long run. Pilot with `--limit 4 --target-per-product 1`.
 
 Usage (from the repo root):
 
     source .venv/bin/activate && python scripts/ingest_keyword_bank.py \
         [--keywords outputs/json/morning-anthem-step-4-keyword-bank.json] \
-        [--target-per-keyword 2] [--limit 4] [--export-root <dir>]
+        [--target-per-product 2] [--limit 4] [--export-root <dir>]
 
 Exit codes: 0 complete (a `[PARTIAL]` with fewer exports than the target
 still exits 0), 1 requires human intervention, 2 unexpected error.
@@ -67,8 +71,12 @@ def _print_pilot_banner(
     count: int, target: int, engines: List[str], export_root: str
 ) -> None:
     print(
-        f"\n[STEP 5 PILOT] {count} bank keyword(s) × {len(engines)} engine(s) "
-        f"× target {target} package(s) per (keyword, engine) leg"
+        f"\n[STEP 5] {count} bank keyword(s) × {len(engines)} engine(s) × "
+        f"target {target} package(s) per (product, engine) leg"
+    )
+    print(
+        "  order: each product's exact title first; its fallback only for the "
+        "slots the exact keyword left open"
     )
     print(f"  engines: {', '.join(engines)}")
     print(f"  export root: {export_root}")
@@ -82,8 +90,9 @@ def _print_pilot_banner(
 def _print_summary(summary: BankIngestionSummary, engines: List[str]) -> None:
     print(
         f"\n[BANK INGESTION SUMMARY] keywords={summary.keywords_total} "
-        f"attempted={summary.keywords_attempted} "
-        f"empty={summary.keywords_empty} exported={summary.total_exports}"
+        f"products_attempted={summary.products_attempted} "
+        f"products_empty={summary.products_empty} "
+        f"exported={summary.total_exports}"
     )
     total: Dict[str, int] = {}
     for engine in engines:
@@ -100,7 +109,8 @@ def _print_summary(summary: BankIngestionSummary, engines: List[str]) -> None:
             f"{counters['candidates_exported']} "
             f"(llm_failed={counters['dropped_llm_validation_failed']} "
             f"no_images={counters['dropped_no_valid_images']} "
-            f"duplicate={counters['skipped_duplicate']})")
+            f"duplicate={counters['skipped_duplicate']} "
+            f"fallbacks_skipped={counters['keywords_skipped']})")
         print(f"    -> {summary.export_roots[engine]}")
     print(
         f"  TOTAL: scraped={total.get('candidates_scraped', 0)} "
@@ -124,7 +134,7 @@ def _exhausted_reason(summary: BankIngestionSummary) -> str:
     return (
         f"0 packages exported from {summary.keywords_attempted} bank "
         f"keyword(s) across {len(summary.per_engine)} engine(s) "
-        f"({legs}; {summary.keywords_empty} keyword(s) returned no supplier "
+        f"({legs}; {summary.products_empty} product(s) returned no supplier "
         "product at all). Every gate held and every leg was empty or "
         "rejected — this is a data-quality signal, not a crash."
     )
@@ -251,12 +261,13 @@ def main(argv: List[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
-        "--target-per-keyword",
+        "--target-per-product",
         type=int,
-        default=settings.BANK_TARGET_PER_KEYWORD,
+        default=settings.BANK_TARGET_PER_PRODUCT,
         help=(
-            "packages to export per (keyword, engine) leg (default: "
-            "BANK_TARGET_PER_KEYWORD = %(default)s)"
+            "packages to export per (product, engine) leg — the product's "
+            "exact keyword fills them first, its fallback only what is left "
+            "(default: BANK_TARGET_PER_PRODUCT = %(default)s)"
         ),
     )
     parser.add_argument(

@@ -144,8 +144,9 @@ QUESTIONS: Dict[str, Dict[str, Any]] = {
         "instructions": (
             "Compare `products.{slug}` with every product in `gold_reference`. "
             "How closely does it match the kind, material, mechanism and use "
-            "of the closest gold-standard product? Judge product equivalence "
-            "only — not price, demand or marketing."
+            "of the closest gold-standard product — the same object a "
+            "shopper searching that product would expect to receive? Judge "
+            "product equivalence only — not price, demand or marketing."
         ),
         "criteria": SIMILARITY_LEVELS,
     },
@@ -153,11 +154,12 @@ QUESTIONS: Dict[str, Dict[str, Any]] = {
         "type": "score",
         "instructions": (
             "Judge the commercial value of `products.{slug}` from its own "
-            "suggested retail price, landed cost and projected margin, weighed "
-            "against the demand evidence recorded for comparable products in "
-            "`gold_reference`. Strong margin alone is not demand: a product "
-            "with no demand evidence for its type scores low however healthy "
-            "its margin."
+            "suggested retail price, landed cost and projected gross margin "
+            "in AUD, weighed against the demand evidence recorded for "
+            "comparable gold-standard products in `gold_reference`. Strong "
+            "margin alone is not demand: a product with no demand evidence for "
+            "its type scores low however healthy its margin, and a healthy "
+            "margin on a price Australian shoppers would not pay is not value."
         ),
         "criteria": VALUE_LEVELS,
     },

@@ -36,6 +36,7 @@ from src.keywords.generator import (
     exact_keyword,
     load_gold_products,
     load_prompt_parts,
+    normalized_title_words,
     parse_llm_keywords,
     select_gold_products,
     validate_bank,
@@ -185,11 +186,36 @@ def test_build_exact_rows_makes_one_exact_row_per_product():
     assert rows[0]["pillar"] == "brew_fuel"
 
 
-def test_build_exact_rows_skips_a_title_too_long_to_be_a_search_string(caplog):
-    long_title = " ".join(f"word{i}" for i in range(MAX_EXACT_WORDS + 1))
-    rows = build_exact_rows([_gold(long_title), _gold("Garlic Press")])
-    assert [row["product"] for row in rows] == ["Garlic Press"]
-    assert any("exceeds" in r.message for r in caplog.records)
+def test_a_stuffed_title_is_truncated_rather_than_cost_its_product_a_keyword(caplog):
+    # A stuffed title is still a usable search prefix; dropping the product
+    # entirely would lose it from the bank for no good reason.
+    long_title = " ".join(f"word{i}" for i in range(MAX_EXACT_WORDS + 4))
+    with caplog.at_level("INFO"):  # the notice is INFO: a run logs at INFO
+        rows = build_exact_rows([_gold(long_title), _gold("Garlic Press")])
+    assert [row["product"] for row in rows] == [long_title, "Garlic Press"]
+    assert len(rows[0]["keyword"].split()) == MAX_EXACT_WORDS
+    assert any("truncated a stuffed title" in r.message for r in caplog.records)
+
+
+def test_a_truncated_title_does_not_end_on_a_function_word():
+    # "…mincer with" reads as a cut-off sentence and matches worse than a query
+    # ending on an object word.
+    title = " ".join(["alpha"] * (MAX_EXACT_WORDS - 1) + ["with", "beta", "gamma"])
+    keyword = exact_keyword(title)
+    assert not keyword.endswith(" with")
+    assert keyword.split()[-1] == "alpha"
+
+
+def test_a_title_within_the_bound_is_left_completely_alone():
+    title = " ".join(f"word{i}" for i in range(MAX_EXACT_WORDS))
+    assert len(normalized_title_words(title)) == MAX_EXACT_WORDS
+    assert exact_keyword(title) == title
+
+
+def test_normalized_title_words_is_the_titles_own_words():
+    assert normalized_title_words("Bodum Chambord, 1L — Off White") == [
+        "bodum", "chambord", "1l", "off", "white",
+    ]
 
 
 def test_build_exact_rows_skips_a_product_with_no_usable_title(caplog):

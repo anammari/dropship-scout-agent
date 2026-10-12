@@ -400,37 +400,50 @@ source .venv/bin/activate && python scripts/generate_gold_keywords.py \
 
 ### 2.6 Step 5 — CJ ingestion (the gold kernel)
 
-Ingests **every** Step-4 keyword through the CJdropshipping pipeline and exports
-what survives into the gold-kernel tree:
+Ingests **every** Step-4 product through the CJdropshipping pipeline and exports
+what survives into the gold-kernel tree. **The product is the unit**: its exact
+title runs first and its fallback only fills whatever target slots the exact
+keyword left open, so a fallback is never paid for when the exact title worked.
 
 ```
 <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/{metadata.json, images/}
 ```
 
+```bash
+source .venv/bin/activate && python scripts/ingest_keyword_bank.py \
+    [--keywords outputs/json/morning-anthem-step-4-keyword-bank.json] \
+    [--target-per-product 2] [--limit 4] [--export-root <dir>]
+```
+
 **This is not the general pipeline's fallback chain.** `--extractor auto` stops
-at the first engine that answers; the bank runs *every* keyword because the
-point of the step is to obtain each keyword's optimal product and let Step 6
-rank them. Each (keyword, engine) *leg* is its own call into the existing
+at the first engine that answers; the bank runs *every* product because the point
+of the step is to obtain each product's optimal listing and let Step 6 rank them.
+Each (product, keyword, engine) *leg* is its own call into the existing
 `run_pipeline` with a single-engine list — **no supplier gate is forked or
 relaxed**. Every leg still runs CJ's commercial gate, the MCP liveness gate,
 the mandatory freight quote (to `CJ_DEFAULT_DEST_COUNTRY`), the LLM viability
-gate, the margin floor and the 3-image gallery gate.
+gate, the AUD margin floor and the 3-image gallery gate.
 
 The machinery stays engine-generic (a second supplier would need no rewrite),
 but `BANK_ENGINES` holds **one** engine today: CJdropshipping.
 
+`BANK_TARGET_PER_PRODUCT` is the number of packages one product may contribute
+through one engine: the exact keyword fills them first and the fallback only
+what is left. The summary reports `products_attempted` / `products_empty` and a
+per-engine `fallbacks_skipped` count, so a run's log shows how often the exact
+title was enough.
+
 Failure is **per-leg, not per-run**: an engine that is unconfigured, blocked or
-timed out is skipped for that leg only while the other engine still runs the
-keyword; only when *every* registered engine failed *every* keyword does
-ingestion raise, and the runner renders the intervention block. The two supplier
-folders are numbered independently and each dedupes only against itself, so the
-same product re-offered by a later keyword is skipped as a duplicate.
+timed out is skipped for that leg only; only when *every* registered engine
+failed *every* product does ingestion raise, and the runner renders the
+intervention block. The supplier folder is numbered and deduped against itself,
+so the same product re-offered by a later keyword is skipped as a duplicate.
 
 ```bash
 source .venv/bin/activate && python scripts/ingest_keyword_bank.py \
     [--keywords outputs/json/step-4-gold-keywords.json] \
     [--target-per-keyword 2] [--limit 4] \
-    [--export-root <dir>]
+    [--min-per-pillar N] [--export-root <dir>]
 ```
 
 | Option | Default | Meaning |
@@ -550,9 +563,14 @@ The two trees never interleave: `dropship-candidates/` is the general intake,
 runs every gold keyword. The supplier subfolder is created on its **first
 export**, so an engine that verifies nothing leaves no folder behind.
 
-**Step 6 ranks that gold kernel without touching it** (§2.7): it reads the
-packages and writes its tiered report to the untracked `outputs/` tree beside
-the other research deliverables —
+**Step 6 ranks that gold kernel without touching it** (§2.7): Jev scores every
+package on three questions — is it the same object as a gold-standard product
+(`similarity`), is it worth listing at its own AUD retail and margin against the
+gold reference's demand evidence (`winning_value`), and which pillar is it
+(`pillar`) — then tiers the result `shortlist` / `review` / `disregard`. A
+post-evaluation compliance gate forces any package whose own text carries a banned
+token to `disregard` regardless of score. It writes its tiered report to the
+untracked `outputs/` tree beside the other research deliverables —
 
 ```
 outputs/

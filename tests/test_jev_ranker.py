@@ -887,3 +887,40 @@ def test_write_reports_writes_both_files(tmp_path):
     assert md_path.read_text(encoding="utf-8").startswith(
         "# Step 6 — Jev ranked candidates"
     )
+
+
+# ---------------------------------------------------------------------------
+# Step 6 is the gold kernel's last automated step: its judgement text says which
+# market and which currency it is judging, and its report lands under the
+# Morning Anthem deliverable names.
+# ---------------------------------------------------------------------------
+
+
+def test_the_value_question_states_the_currency_and_the_benchmark():
+    """The pipeline prices in AUD and ranks against AU demand evidence; a model
+    judging "value" has to be told both, or it prices for the wrong market."""
+    instructions = QUESTIONS["winning_value"]["instructions"]
+    assert "AUD" in instructions
+    assert "gold_reference" in instructions
+    # Margin alone is not value — the demand benchmark is the other half.
+    assert "margin alone is not demand" in instructions
+
+
+def test_the_similarity_question_asks_about_the_object_not_the_aisle():
+    instructions = QUESTIONS["similarity"]["instructions"]
+    assert "same object" in instructions
+    assert "gold_reference" in instructions
+
+
+def test_the_ranker_writes_under_the_morning_anthem_deliverable_name():
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "rank_runner_names",
+        Path(__file__).resolve().parents[1] / "scripts" / "rank_optimal_candidates.py",
+    )
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    assert runner.DEFAULT_OUTPUT.name == "morning-anthem-step-6-ranked-candidates.json"
+    assert runner.DEFAULT_OUTPUT.parent.name == "json"
