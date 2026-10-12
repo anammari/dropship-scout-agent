@@ -291,6 +291,33 @@ def test_the_question_never_asks_jev_to_produce_a_string():
     assert set(question) == {"type", "instructions", "criteria"}
 
 
+def test_a_retailer_qualified_survivor_is_screened_by_the_banned_boundary():
+    # The pilot finding: Jev reads "milk frother kmart" as a product search,
+    # because it is one — but the keyword engine's banned-token boundary
+    # forbids the string, so scraping it would spend a Step-3 credit on a
+    # keyword the Step-4 bank could never carry. The deterministic screen
+    # catches it after the verdict and records both facts.
+    client = ScriptedJevClient([_answers(2, ["product_search", "product_search"])])
+    results = TrendIntentGate(client=client, batch_size=8).gate(
+        [
+            TrendCandidate("milk frother machine", "brew_fuel"),
+            TrendCandidate("milk frother kmart", "brew_fuel"),
+        ]
+    )
+    assert [row.kept for row in results] == [True, False]
+    assert results[1].intent == "product_search"  # Jev said yes...
+    assert results[1].note == "banned token 'kmart'"  # ...the boundary said no
+    assert results[0].note == ""
+
+
+def test_the_boundary_screen_costs_no_extra_model_call():
+    client = ScriptedJevClient([_answers(1, ["product_search"])])
+    TrendIntentGate(client=client, batch_size=8).gate(
+        [TrendCandidate("milk frother kmart", "brew_fuel")]
+    )
+    assert len(client.calls) == 1
+
+
 def test_gating_an_empty_list_makes_no_call():
     client = ScriptedJevClient([])
     assert TrendIntentGate(client=client, batch_size=8).gate([]) == []

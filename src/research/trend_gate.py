@@ -18,7 +18,12 @@ all three share one transport, one error taxonomy and one batching idiom:
   an explicit note, so one bad call never voids a whole research pass;
 * a missing `OPENROUTER_API_KEY` raises `JevConfigError`, which the runner
   renders as the intervention block (the step gates on the operator's
-  credential).
+  credential);
+* a survivor is ALSO screened against the keyword engine's banned-token
+  boundary (`carries_banned_token`), because Jev rightly reads a
+  retailer-qualified query ("milk frother kmart") as a product search — it is
+  one — while that string could never become a bank keyword. The screen is
+  deterministic and free, so it runs on every survivor.
 
 Anti-hallucination posture: Jev contributes **a classification and nothing
 else**. The keyword string, its pillar tag and its Trends demand evidence are
@@ -41,7 +46,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from src.config import settings
-from src.keywords.generator import PILLARS
+from src.keywords.generator import PILLARS, carries_banned_token
 from src.ranking.jev_client import (
     JevClient,
     JevConfigError,
@@ -290,6 +295,19 @@ class TrendIntentGate:
                     answers.get(f"{index}__{TREND_GATE_QUESTION}")
                 )
                 kept = verdict == "product_search"
+                note = "" if kept else f"intent {verdict or 'unclassified'}"
+                if kept:
+                    # Defence in depth, and the pilot is what proved it is
+                    # needed: Jev rightly reads a retailer- or brand-qualified
+                    # query ("milk frother kmart") as a product search, because
+                    # it IS one — but the keyword engine's own banned-token
+                    # boundary forbids that string, so scraping it would spend
+                    # a Step-3 credit on a keyword the bank could never carry.
+                    # Deterministic and free, so it runs on every survivor.
+                    banned = carries_banned_token(candidate.keyword)
+                    if banned is not None:
+                        kept = False
+                        note = f"banned token {banned!r}"
                 results.append(
                     GatedKeyword(
                         keyword=candidate.keyword,
@@ -297,7 +315,7 @@ class TrendIntentGate:
                         demand_evidence=candidate.demand_evidence,
                         intent=verdict,
                         kept=kept,
-                        note="" if kept else f"intent {verdict or 'unclassified'}",
+                        note=note,
                     )
                 )
 
