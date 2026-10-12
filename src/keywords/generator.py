@@ -1,10 +1,10 @@
-"""Step 4 (updated multi-step pipeline): GOLD-STANDARD keyword generation.
+"""Step 4 (Morning Anthem pipeline): GOLD-STANDARD keyword generation.
 
 The reasoning LLM turns the Step-3 GOLD-STANDARD product list into the
 supplier search keywords — the "gold-standard keyword bank" — that Step 5
-ingests through BOTH dropship supplier pipelines (CJdropshipping MCP and the
-AliExpress Dropshipping Center, each with its existing gates) and that Step 6
-later ranks the ingested products against.
+ingests through the CJdropshipping MCP pipeline (The Morning Anthem's sole
+supplier, with its existing gates) and that Step 6 later ranks the ingested
+products against.
 
 The bank is generated in **pool chunks**: the eligibility filters leave far
 more products than any one 50–70 pool can name, so the strongest
@@ -20,22 +20,22 @@ per-product floor guarantee.
 
 The prompt is a tracked package resource (`gold_keyword_prompt.md`) whose
 product table is a **template slot**: `{PRODUCT_TABLE}` is rendered at runtime
-from the live Step-3 deliverable (`outputs/json/step-3-gold-standard-products.json`,
-path from `settings.GOLD_PRODUCTS_PATH`), so the gold products are ground truth
-the prompt file never hardcodes. The generator then runs the table in batches
-(default 4 products per call). Batching exists because the endpoint truncates
-long responses — the reasoning model's hidden thinking consumes a variable
-share of the output budget, so a 70-keyword single response came back cut
-mid-JSON (`finish_reason=length`). A response that is still truncated is
-salvaged by trimming the JSON tail back to the last complete row rather than
-losing the batch or spending another call.
+from the live Step-3 deliverable
+(`outputs/json/morning-anthem-step-3-gold-products.json`, path from
+`settings.MORNING_ANTHEM_GOLD_PRODUCTS_PATH`), so the gold products are ground
+truth the prompt file never hardcodes. The generator then runs the table in
+batches (default 4 products per call). Batching exists because the endpoint
+truncates long responses — the reasoning model's hidden thinking consumes a
+variable share of the output budget, so a 70-keyword single response came
+back cut mid-JSON (`finish_reason=length`). A response that is still
+truncated is salvaged by trimming the JSON tail back to the last complete
+row rather than losing the batch or spending another call.
 
 Anti-hallucination posture: the LLM only authors keyword rows against the
-product table it was handed, and every structural rule — broad/modifier
-pairing, pillar membership, the AICIS banned-token boundary, the pool band,
-per-product coverage — is re-validated in code after the call. A pool that
-fails any rule raises `KeywordGenerationError` instead of flowing on to
-Step 5.
+product table it was handed, and every structural rule — pillar membership,
+the AICIS banned-token boundary, the pool band, per-product coverage — is
+re-validated in code after the call. A pool that fails any rule raises
+`KeywordGenerationError` instead of flowing on to Step 5.
 """
 
 from __future__ import annotations
@@ -94,7 +94,17 @@ TEMPERATURE = 0.6
 MAX_TOKENS = 16000
 LLM_TIMEOUT_SECONDS = 900.0
 
-PILLARS = ("curated_home", "self_care_rituals", "other")
+#: The Morning Anthem merchandising pillars. Single source of truth for the
+#: pillar keys used across the pipeline — the Step-3 curator and the Step-6
+#: Jev ranker import this tuple — so every gold product and keyword carries
+#: exactly one of these keys.
+PILLARS = (
+    "brew_fuel",
+    "sunrise_move",
+    "mindful_awakening",
+    "restful_reset",
+    "morning_table",
+)
 ROLES = ("broad", "modifier")
 FIELDS = ("keyword", "product", "pillar", "role", "tightens", "rationale")
 
@@ -110,12 +120,14 @@ TABLE_COLUMNS = ("name", "pillar", "demand_evidence", "attributes", "retail_pric
 # The prompt's hard AICIS boundary (requirement 5) and commodity-replacement
 # exclusion (requirement 6), enforced in code: any keyword carrying one of
 # these substrings fails pool validation, so a violating keyword can never
-# reach a supplier search.
+# reach a supplier search. The retail-saturation tokens are The Morning
+# Anthem's global mass-retail set (the launch is Australia-first, so the AU
+# big-box names stay; the global names guard the later expansion).
 BANNED_TOKENS = (
     "dead sea", "diatomaceous", "jade", "quartz", "crystal", "mud", "salt",
     "soap", "cream", "lotion", "serum", "gel", "shampoo bar", "supplement",
     "vitamin", "oil", "kmart", "bunnings", "coles", "woolworths", "big w",
-    "toilet",
+    "toilet", "walmart", "target", "amazon basics", "ikea",
 )
 
 _DEMAND_RATING_RE = re.compile(r"rating\s+(\d+(?:\.\d+)?)\s*/\s*5", re.I)
@@ -135,7 +147,13 @@ class CandidateKeyword(BaseModel):
 
     keyword: str
     product: str
-    pillar: Literal["curated_home", "self_care_rituals", "other"]
+    pillar: Literal[
+        "brew_fuel",
+        "sunrise_move",
+        "mindful_awakening",
+        "restful_reset",
+        "morning_table",
+    ]
     role: Literal["broad", "modifier"]
     tightens: Optional[str] = None
     rationale: str
@@ -247,7 +265,9 @@ def load_gold_products(path: Optional[Path] = None) -> List[Dict]:
     A missing, malformed or empty file is a hard error naming the fix —
     Step 4 has no ground truth without it.
     """
-    resolved = Path(path) if path is not None else Path(settings.GOLD_PRODUCTS_PATH)
+    resolved = Path(path) if path is not None else Path(
+        settings.MORNING_ANTHEM_GOLD_PRODUCTS_PATH
+    )
     if not resolved.exists():
         raise KeywordGenerationError(
             f"gold-standard product file not found: {resolved}; run Step 3 "

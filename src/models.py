@@ -56,9 +56,11 @@ _CJ_PID_PATTERN = (
 # Known direct-product-page URL shapes per supplier (F.3 extractors emit
 # exactly these shapes; validators enforce them end-to-end). CJdropshipping
 # accepts both the legacy slug-pid shape and the canonical
-# /product/{pid}.html detail URL.
+# /product/{pid}.html detail URL. The Morning Anthem pipeline sources from
+# CJdropshipping exclusively (the AliExpress Dropshipping Center extractor was
+# retired on the feature/morning-anthem-pipeline-update branch), so CJ is the
+# only known supplier.
 _SUPPLIER_PDP_PATTERNS = {
-    "AliExpress": re.compile(r"/item/\d+\.html"),
     "CJdropshipping": re.compile(
         rf"/product/(?:[\w-]+-p-)?{_CJ_PID_PATTERN}\.html"
     ),
@@ -119,7 +121,7 @@ class RawSupplierProduct(BaseModel):
     """
 
     supplier_name: str = Field(
-        description="'AliExpress' or 'CJdropshipping' (canonical name)"
+        description="'CJdropshipping' (canonical name — the pipeline's sole supplier)"
     )
     supplier_retail_url: str = Field(
         description="100% live, direct product-detail page URL from the extractor."
@@ -160,12 +162,11 @@ class RawSupplierProduct(BaseModel):
     def shipping_quoted(self) -> bool:
         """Whether a freight quote backs `shipping_cost_aud` (plan §6).
 
-        Only an extractor that obtained a real quote (CJ) can report a
-        positive shipping cost; AliExpress, which cannot quote freight,
-        leaves it at 0.0 with no service or transit. The distinction is
-        load-bearing: an unquoted figure is a floor, not a verified landed
-        cost, so anything that describes or judges the cost must ask this
-        rather than read a zero as "free shipping".
+        CJ is the pipeline's only extractor and it always quotes freight, so
+        a positive shipping cost means a real quote. The distinction is still
+        load-bearing: an unquoted figure would be a floor, not a verified
+        landed cost, so anything that describes or judges the cost must ask
+        this rather than read a zero as "free shipping".
         """
         return self.shipping_cost_aud > 0
 
@@ -284,7 +285,9 @@ class ProvisionalProductEvaluation(BaseModel):
 # verified any of them, and inventing them is the defect this field exists to
 # close. An operator who wants their own storefront policy wording can edit
 # the copy after export.
-_UNQUOTED_SHIPPING_NOTICE = "Ships to Australia from the supplier."
+_UNQUOTED_SHIPPING_NOTICE = (
+    "Standard tracked international shipping to Australia from China."
+)
 
 
 def _derive_shipping_notice(raw: RawSupplierProduct) -> str:
@@ -296,8 +299,8 @@ def _derive_shipping_notice(raw: RawSupplierProduct) -> str:
     freight cost was AUD 14.52.
 
     A quoted product states the service and window the quote reports. An
-    unquoted one (AliExpress) states only that it ships to Australia,
-    because a transit window asserted without a quote is the same class of
+    unquoted one states only that it ships to Australia from China, because
+    a transit window asserted without a quote is the same class of
     unsupported claim. Neither version says anything about what the customer
     pays, which is a commercial decision this pipeline is not party to.
     """
@@ -306,15 +309,16 @@ def _derive_shipping_notice(raw: RawSupplierProduct) -> str:
     service = f" via {raw.shipping_method}" if raw.shipping_method else ""
     if not raw.shipping_transit_days:
         return (
-            f"Standard tracked international shipping to Australia{service}."
+            "Standard tracked international shipping to Australia from "
+            f"China{service}."
         )
     transit = raw.shipping_transit_days.strip()
     # A quote that already carries its own unit ("6-10 days") must not be
     # given a second one.
     unit = "" if any(char.isalpha() for char in transit) else " business days"
     return (
-        f"Standard tracked international shipping to Australia{service}: "
-        f"{transit}{unit}."
+        f"Standard tracked international shipping to Australia from China"
+        f"{service}: {transit}{unit}."
     )
 
 
@@ -444,16 +448,17 @@ class ProductCandidateEvaluation(BaseModel):
             )
             basis = (
                 f"Supplier listed price AUD ${raw.price_aud:.2f} plus AUD "
-                f"${raw.shipping_cost_aud:.2f} tracked shipping to AU"
-                f"{service}, taken directly from the live "
+                f"${raw.shipping_cost_aud:.2f} tracked shipping to Australia "
+                f"from China{service}, taken directly from the live "
                 f"{raw.supplier_name} listing and its own freight quote."
             )
         else:
             basis = (
                 f"Supplier listed price AUD ${raw.price_aud:.2f} taken "
                 f"directly from the live {raw.supplier_name} listing; the "
-                f"listing API does not quote shipping to AU, so shipping is "
-                f"treated as AUD $0.00 pending fulfillment quotes."
+                f"listing API does not quote shipping to Australia, so "
+                f"shipping is treated as AUD $0.00 pending fulfillment "
+                f"quotes."
             )
         margin = round(provisional.suggested_retail_aud - cogs, 2)
         markup = round(provisional.suggested_retail_aud / cogs, 2) if cogs > 0 else 0.0

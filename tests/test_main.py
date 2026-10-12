@@ -24,24 +24,25 @@ from src.models import (
     ProvisionalProductEvaluation,
     RawSupplierProduct,
 )
-from src.extractors.aliexpress_ds import DsCenterSessionExpiredError
 from src.extractors.base import (
     ExtractorBlockedException,
     ExtractorNotConfiguredError,
 )
 
-_ALI_URL = "https://www.aliexpress.com/item/1005006112233445.html"
+# CJdropshipping is The Morning Anthem's sole supplier, so every fixture is a
+# CJ listing on the canonical /product/{pid}.html PDP shape.
+_CJ_URL = "https://cjdropshipping.com/product/1745360894529376256.html"
 _IMAGES = [
-    "https://ae01.alicdn.com/kf/S1.jpg",
-    "https://ae01.alicdn.com/kf/S2.jpg",
-    "https://ae01.alicdn.com/kf/S3.jpg",
+    "https://cc-west-usa.oss-accelerate.aliyuncs.com/S1.jpg",
+    "https://cc-west-usa.oss-accelerate.aliyuncs.com/S2.jpg",
+    "https://cc-west-usa.oss-accelerate.aliyuncs.com/S3.jpg",
 ]
 
 
 def _raw_product(title="Ergonomic Desk Cable Organiser") -> RawSupplierProduct:
     return RawSupplierProduct(
-        supplier_name="AliExpress",
-        supplier_retail_url=_ALI_URL,
+        supplier_name="CJdropshipping",
+        supplier_retail_url=_CJ_URL,
         product_title=title,
         product_description="A spine.",
         price_aud=12.50,
@@ -127,12 +128,10 @@ def test_extractor_chain_builds_from_configured_priority_order(monkeypatch):
 
     monkeypatch.setattr(
         settings, "SUPPLIER_PRIORITY_ORDER",
-        ["cjdropshipping", "aliexpress"],
+        ["cjdropshipping"],
     )
     chain = _build_extractor_chain()
-    assert [e.engine_name for e in chain] == [
-        "cjdropshipping", "aliexpress_ds_center",
-    ]
+    assert [e.engine_name for e in chain] == ["cjdropshipping"]
 
 
 def test_extractor_chain_skips_unknown_keys(monkeypatch):
@@ -425,21 +424,21 @@ def test_cli_funnel_exhausted_exits_1(monkeypatch, capsys):
     assert "Pipeline Funnel Exhausted" in out
 
 
-def test_cli_ds_center_session_refusal_halts_with_instructions(monkeypatch, capsys):
-    """A refused DS Center session is a config problem, not a crash: halt with
+def test_cli_extraction_failure_halts_with_instructions(monkeypatch, capsys):
+    """Every extractor unavailable is a config problem, not a crash: halt with
     the exact recovery steps rather than a traceback."""
     import src.main as m
 
     async def fake_run(**kwargs):
-        raise DsCenterSessionExpiredError("DS Center refused the request")
+        raise PipelineExtractionFailedError("CJ MCP endpoint unavailable")
 
     monkeypatch.setattr(m, "run_pipeline", fake_run)
     code = m.main(["--keyword", "k", "--target-count", "1"])
     assert code == 1
     out = capsys.readouterr().out
     assert "[ACTION REQUIRED: HUMAN INTERVENTION NEEDED]" in out
-    assert "AliExpress Dropshipping Center Session" in out
-    assert "generate_ali_session.py" in out
+    assert "Supplier Extraction Stage" in out
+    assert "CJ_MCP_TOKEN" in out
 
 
 def test_cli_successful_run_exits_0(monkeypatch, capsys):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit MCP request headers for the trend-research servers.
+"""Emit MCP request headers for the HasData trend-research server.
 
 Claude Code runs this as a project-scope `headersHelper` (see `.mcp.json`): it
 must write a JSON object of string key-value pairs to stdout, which Claude Code
@@ -9,13 +9,16 @@ Why this script exists rather than the usual `${VAR}` expansion: for servers
 declared in a project `.mcp.json`, Claude Code reads credential-looking
 variables (any name containing TOKEN, KEY, SECRET, PASSWORD or AUTH, either
 case) as *empty* in the `url` and `headers` fields, and strips them from the
-environment before running a headers helper. `HASDATA_API_KEY` and
-`APIFY_TOKEN` both match that rule, so the credential has to come off disk.
-This helper therefore parses `.env` itself, matching the project's rule that
-real environment variables win over `.env` (CLAUDE.md §10).
+environment before running a headers helper. `HASDATA_API_KEY` matches that
+rule, so the credential has to come off disk. This helper therefore parses
+`.env` itself, matching the project's rule that real environment variables
+win over `.env` (CLAUDE.md §10).
+
+HasData is the pipeline's exclusive data provider — the Apify trend server
+was retired on the Morning Anthem branch.
 
 Usage:
-    python3 scripts/mcp_headers.py {hasdata|apify}
+    python3 scripts/mcp_headers.py {hasdata}
 
 Writes the header JSON on stdout. Exits non-zero with a plain diagnostic on
 stderr if the credential is missing, so a misconfigured run fails loudly
@@ -36,7 +39,6 @@ _ENV_PATH = _REPO_ROOT / ".env"
 # server key -> (env var holding the credential, header name, value prefix)
 _SERVERS: dict[str, tuple[str, str, str]] = {
     "hasdata": ("HASDATA_API_KEY", "x-api-key", ""),
-    "apify": ("APIFY_TOKEN", "Authorization", "Bearer "),
 }
 
 

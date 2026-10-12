@@ -23,18 +23,20 @@ from src.models import (
     RawSupplierProduct,
 )
 
-_ALI_URL = "https://www.aliexpress.com/item/1005006112233445.html"
+# CJdropshipping is The Morning Anthem's sole supplier, so every fixture is a
+# CJ listing on the canonical /product/{pid}.html PDP shape.
+_CJ_URL = "https://cjdropshipping.com/product/1745360894529376256.html"
 _IMAGES = [
-    "https://ae01.alicdn.com/kf/S1.jpg",
-    "https://ae01.alicdn.com/kf/S2.jpg",
-    "https://ae01.alicdn.com/kf/S3.jpg",
+    "https://cc-west-usa.oss-accelerate.aliyuncs.com/S1.jpg",
+    "https://cc-west-usa.oss-accelerate.aliyuncs.com/S2.jpg",
+    "https://cc-west-usa.oss-accelerate.aliyuncs.com/S3.jpg",
 ]
 
 
 def _raw_product(**overrides) -> RawSupplierProduct:
     base = dict(
-        supplier_name="AliExpress",
-        supplier_retail_url=_ALI_URL,
+        supplier_name="CJdropshipping",
+        supplier_retail_url=_CJ_URL,
         product_title="Ergonomic Desk Cable Spine Organiser",
         product_description="Modular cable spine with steel base.",
         price_aud=12.50,
@@ -127,11 +129,12 @@ def test_system_prompt_interpolates_the_live_margin_floor(monkeypatch):
 
 
 def test_system_prompt_prices_realistically_instead_of_by_multiplier():
-    # Phase 5: the model must price for the AU market in the store's niche and
-    # must not mechanically apply a fixed 3x-4x multiplier to the real cost.
+    # The model must price for the AU market inside The Morning Anthem's five
+    # pillars and must not mechanically apply a fixed 3x-4x multiplier to the
+    # real cost.
     system = build_messages(_raw_product())[0]["content"]
     assert "fixed 3x-4x multiplier" in system
-    assert "Modern Arab-Aussie Lifestyle & Cultural Nostalgia" in system
+    assert "The Morning Anthem" in system
     # The cost is authoritative when a quote backs it: no cheaper basis may
     # be invented.
     assert "VERIFIED" in system
@@ -139,7 +142,7 @@ def test_system_prompt_prices_realistically_instead_of_by_multiplier():
 
 
 def test_system_prompt_distinguishes_an_unquoted_cost_from_a_verified_one():
-    # AliExpress quotes no freight, so its landed cost is a floor.
+    # A supplier that quotes no freight leaves a floor, not a verified cost.
     # Describing it as verified is how margin gets overstated, so the prompt
     # must tell the model which kind of number it is judging.
     system = build_messages(_raw_product())[0]["content"]
@@ -149,7 +152,7 @@ def test_system_prompt_distinguishes_an_unquoted_cost_from_a_verified_one():
 
 def test_payload_carries_the_shipping_quote_state():
     quoted = _raw_product()  # supplier-quoted shipping
-    unquoted = _raw_product(shipping_cost_aud=0.0)  # no quote, as AliExpress
+    unquoted = _raw_product(shipping_cost_aud=0.0)  # no quote behind the figure
     assert '"shipping_quoted": true' in build_messages(quoted)[1]["content"]
     assert '"shipping_quoted": false' in build_messages(unquoted)[1]["content"]
 
@@ -230,8 +233,8 @@ async def test_evaluate_returns_final_evaluation_with_programmatic_fields():
     assert final.verdict == "ACCEPT"
     assert final.marketing_ad_copy == "Tame the cable snake."
     # ...supplier/cost fields mapped from the raw product, never the LLM.
-    assert final.supplier_name == "AliExpress"
-    assert final.supplier_retail_url == _ALI_URL
+    assert final.supplier_name == "CJdropshipping"
+    assert final.supplier_retail_url == _CJ_URL
     assert final.estimated_cogs_aud == 16.80
     assert final.estimated_margin_aud == 33.19
     assert "http" not in final.cogs_estimation_basis.lower()

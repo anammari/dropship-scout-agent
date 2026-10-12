@@ -50,7 +50,7 @@ from src.keywords.generator import (
 GOLD_PRODUCTS = [
     {
         "name": "Stainless garlic press",
-        "pillar": "curated_home",
+        "pillar": "morning_table",
         "demand_evidence": "rating 4.7/5, 1,204 reviews (Google Shopping AU)",
         "description": None,
         "compliance_note": "Inert stainless-steel kitchen tool, AICIS-exempt.",
@@ -58,7 +58,7 @@ GOLD_PRODUCTS = [
     },
     {
         "name": "Olive wood serving board",
-        "pillar": "curated_home",
+        "pillar": "morning_table",
         "demand_evidence": "rating 4.6/5, 880 reviews (Google Shopping AU)",
         "description": "Solid olive wood board, 30 cm, hand-finished.",
         "compliance_note": "Inert wooden tabletop object.",
@@ -66,7 +66,7 @@ GOLD_PRODUCTS = [
     },
     {
         "name": "Ceramic bath tray",
-        "pillar": "self_care_rituals",
+        "pillar": "restful_reset",
         "demand_evidence": "rating 4.5/5, 430 reviews (Google Shopping AU)",
         "description": None,
         "compliance_note": "Inert ceramic bath accessory.",
@@ -74,7 +74,7 @@ GOLD_PRODUCTS = [
     },
     {
         "name": "Bamboo bath caddy",
-        "pillar": "self_care_rituals",
+        "pillar": "restful_reset",
         "demand_evidence": "rating 4.8/5, 2,310 reviews (Google Shopping AU)",
         "description": None,
         "compliance_note": "Inert bamboo bath accessory.",
@@ -82,7 +82,7 @@ GOLD_PRODUCTS = [
     },
     {
         "name": "Brass incense holder",
-        "pillar": "self_care_rituals",
+        "pillar": "restful_reset",
         "demand_evidence": "rating 4.4/5, 260 reviews (Google Shopping AU)",
         "description": None,
         "compliance_note": "Inert brass object.",
@@ -90,7 +90,7 @@ GOLD_PRODUCTS = [
     },
     {
         "name": "Wooden spice rack",
-        "pillar": "curated_home",
+        "pillar": "morning_table",
         "demand_evidence": "rating 4.3/5, 150 reviews (Google Shopping AU)",
         "description": None,
         "compliance_note": "Inert wooden storage object.",
@@ -98,7 +98,7 @@ GOLD_PRODUCTS = [
     },
     {
         "name": "Linen tea towel set",
-        "pillar": "curated_home",
+        "pillar": "morning_table",
         "demand_evidence": "rating 4.9/5, 3,120 reviews (Google Shopping AU)",
         "description": "Set of two stonewashed linen tea towels.",
         "compliance_note": "Inert textile.",
@@ -106,7 +106,7 @@ GOLD_PRODUCTS = [
     },
     {
         "name": "Copper water carafe",
-        "pillar": "other",
+        "pillar": "brew_fuel",
         "demand_evidence": "rating 4.2/5, 96 reviews (Google Shopping AU)",
         "description": None,
         "compliance_note": "Inert copper tabletop object.",
@@ -127,7 +127,7 @@ def _write_gold(tmp_path, products=None, name="gold.json"):
     return path
 
 
-def _keyword_rows(products, per_product=8, pillar="curated_home", prefix="kw"):
+def _keyword_rows(products, per_product=8, pillar="morning_table", prefix="kw"):
     """Build a structurally valid pool: half broad, half modifier per product.
 
     `prefix` namespaces the keyword strings — a later bank chunk passes its
@@ -213,8 +213,9 @@ def test_prompt_parts_is_a_template_with_a_product_slot():
     assert "50–70 supplier" in parts.user_template
     assert "50–70 keywords in total" in parts.requirements
     assert parts.system.startswith("You are a senior dropship supplier-sourcing")
-    for token in ("CJDropshipping", "DSers", "Zendrop"):
-        assert token in parts.system
+    # The Morning Anthem sources from CJdropshipping exclusively.
+    assert "CJdropshipping" in parts.system
+    assert "AliExpress" not in parts.system
 
 
 def test_build_product_table_renders_verbatim_cells():
@@ -226,7 +227,7 @@ def test_build_product_table_renders_verbatim_cells():
     assert lines[1].startswith("| --- |")
     rows = lines[2:]
     assert len(rows) == len(GOLD_PRODUCTS)
-    assert rows[0].startswith(f"| 1 | {GOLD_NAMES[0]} | curated_home |")
+    assert rows[0].startswith(f"| 1 | {GOLD_NAMES[0]} | morning_table |")
     assert "rating 4.7/5, 1,204 reviews (Google Shopping AU)" in rows[0]
     assert "$24.95" in rows[0]
     # `description` is null on every production row, so the compliance note —
@@ -266,12 +267,14 @@ def test_load_gold_products_drops_unnamed_rows(tmp_path):
 def test_select_gold_products_ranks_caps_and_balances_pillars():
     selected = select_gold_products(GOLD_PRODUCTS, limit=4)
     names = [p["name"] for p in selected]
-    # Strongest demand first: linen (3,120) then bamboo (2,310)...
-    assert names[0] == "Linen tea towel set"
-    assert names[1] == "Bamboo bath caddy"
-    # 4 slots round-robin across the three pillars, so `other` is not starved.
+    # 4 slots round-robin across the pillars present in PILLARS order — the
+    # lone `brew_fuel` product leads, then the strongest of each later
+    # pillar, so no pillar is starved by demand ranking alone.
+    assert names[0] == "Copper water carafe"  # brew_fuel
+    assert "Bamboo bath caddy" in names  # strongest restful_reset (2,310)
+    assert "Linen tea towel set" in names  # strongest morning_table (3,120)
     assert len(set(names)) == 4
-    assert any(p["pillar"] == "other" for p in selected)
+    assert len({p["pillar"] for p in selected}) >= 3
 
     # Under the limit, every product survives untouched.
     assert len(select_gold_products(GOLD_PRODUCTS, limit=50)) == len(GOLD_PRODUCTS)
@@ -282,7 +285,7 @@ def test_select_gold_products_excludes_boundary_named_products():
     products = GOLD_PRODUCTS + [
         {
             "name": "Rose Quartz Gua Sha Tool",
-            "pillar": "self_care_rituals",
+            "pillar": "restful_reset",
             "demand_evidence": "rating 4.9/5, 9,000 reviews (Google Shopping AU)",
             "compliance_note": "Inert quartz tool.",
             "retail_price_text": "$30.00",
@@ -306,25 +309,25 @@ def test_select_gold_products_keeps_one_product_per_source_keyword():
     products = [
         {
             "name": "Garlic Press OXO Good Grips",
-            "pillar": "curated_home",
+            "pillar": "morning_table",
             "source_keyword": "garlic press",
             "demand_evidence": "rating 4.8/5, 900 reviews (Google Shopping AU)",
         },
         {
             "name": "Joseph Joseph Helix Garlic Press",
-            "pillar": "curated_home",
+            "pillar": "morning_table",
             "source_keyword": "garlic press",
             "demand_evidence": "rating 4.7/5, 400 reviews (Google Shopping AU)",
         },
         {
             "name": "Dreamfarm Garject Garlic Press",
-            "pillar": "curated_home",
+            "pillar": "morning_table",
             "source_keyword": "garlic crusher",
             "demand_evidence": "rating 4.6/5, 120 reviews (Google Shopping AU)",
         },
         {
             "name": "Ceramic bath tray",
-            "pillar": "self_care_rituals",
+            "pillar": "restful_reset",
             "demand_evidence": "rating 4.5/5, 430 reviews (Google Shopping AU)",
         },
     ]
@@ -418,15 +421,27 @@ def test_generate_returns_validated_pool(tmp_path):
     assert log[0]["auth"] == "Bearer mock-test-llm_api_key"
 
 
-def test_generate_accepts_the_other_pillar(tmp_path):
-    rows = _keyword_rows(GOLD_NAMES, pillar="other")
-    log = []
-    generator = _generator([_batch_json(rows[:32]), _batch_json(rows[32:])], log, tmp_path)
+def test_generate_accepts_every_morning_anthem_pillar(tmp_path):
+    # Every one of the five Morning Anthem pillar keys is valid on a bank row.
+    from src.keywords.generator import PILLARS
 
-    pool = generator.generate()
+    assert set(PILLARS) == {
+        "brew_fuel",
+        "sunrise_move",
+        "mindful_awakening",
+        "restful_reset",
+        "morning_table",
+    }
 
-    assert len(pool) == 64
-    assert {row.pillar for row in pool} == {"other"}
+    for pillar in PILLARS:
+        rows = _keyword_rows(GOLD_NAMES, pillar=pillar)
+        log = []
+        generator = _generator(
+            [_batch_json(rows[:32]), _batch_json(rows[32:])], log, tmp_path
+        )
+        pool = generator.generate()
+        assert len(pool) == 64
+        assert {row.pillar for row in pool} == {pillar}
 
 
 def test_generate_salvages_truncated_batch(tmp_path, caplog):

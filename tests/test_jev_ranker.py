@@ -57,14 +57,14 @@ from src.ranking.jev_product_ranker import (
 GOLD_PRODUCTS = [
     {
         "name": "Stainless garlic press",
-        "pillar": "curated_home",
+        "pillar": "morning_table",
         "demand_evidence": "rating 4.7/5, 1,204 reviews (Google Shopping AU)",
         "description": "Zinc-alloy press with a silicone garlic peeler.",
         "retail_price_text": "$24.95",
     },
     {
         "name": "Bamboo bath caddy",
-        "pillar": "self_care_rituals",
+        "pillar": "restful_reset",
         "demand_evidence": "rating 4.8/5, 2,310 reviews (Google Shopping AU)",
         "description": None,
         "retail_price_text": "$39.95",
@@ -134,7 +134,7 @@ class ScriptedJevClient:
         return list(self.calls[call]["questions"])
 
 
-def _perfect_answers(questions, similarity=4, value=4, pillar="curated_home"):
+def _perfect_answers(questions, similarity=4, value=4, pillar="morning_table"):
     """Answer every question in `questions` with the given RAW score levels."""
     answers = {}
     for qid in questions:
@@ -296,7 +296,7 @@ def test_answer_readers_reject_unusable_answers():
     assert answer_noul({"noul": None}) is None
     assert answer_noul({"noul": False}) is None
 
-    assert answer_choice({"choice": "curated_home"}) == "curated_home"
+    assert answer_choice({"choice": "morning_table"}) == "morning_table"
     assert answer_noul({"noul": 0.99}) == pytest.approx(0.99)
 
 
@@ -304,9 +304,11 @@ def test_question_constants_are_the_judgement_surface():
     assert len(SIMILARITY_LEVELS) == 5
     assert len(VALUE_LEVELS) == 5
     assert set(PILLAR_OPTIONS) == {
-        "curated_home",
-        "self_care_rituals",
-        "other",
+        "brew_fuel",
+        "sunrise_move",
+        "mindful_awakening",
+        "restful_reset",
+        "morning_table",
         "discard",
     }
     assert set(QUESTIONS) == {"similarity", "winning_value", "pillar"}
@@ -331,24 +333,22 @@ def test_thresholds_are_positive_and_ordered():
 # --- intake ---------------------------------------------------------------
 
 
-def test_collect_packages_spans_both_suppliers_and_qualifies_slugs(tmp_path):
+def test_collect_packages_scans_the_supplier_folder_and_qualifies_slugs(tmp_path):
     root = _export_root(
         tmp_path,
         packages=(
             ("cjdropshipping", "product-04"),
             ("cjdropshipping", "product-25"),
-            ("aliexpress", "product-04"),
         ),
     )
     ranker = _ranker(tmp_path, ScriptedJevClient(), export_root=root)
     packages = ranker.collect_packages()
 
-    # The same physical folder name in two suppliers is two packages, and the
-    # slugs stay distinct -- question ids are `<slug>__<question>`, so a
-    # collision would silently overwrite one supplier's answers.
+    # The slug is engine-qualified: question ids are `<slug>__<question>`, and
+    # the qualification is what would keep a second supplier's identically
+    # numbered folders from colliding in one state.
     slugs = sorted(p.slug for p in packages)
     assert slugs == [
-        "aliexpress_product_04",
         "cjdropshipping_product_04",
         "cjdropshipping_product_25",
     ]
@@ -356,15 +356,26 @@ def test_collect_packages_spans_both_suppliers_and_qualifies_slugs(tmp_path):
     assert all(json.loads(Path(p.package_dir, "metadata.json").read_text()) for p in packages)
 
 
+def test_collect_packages_ignores_a_retired_supplier_folder(tmp_path):
+    # The bank/ranker scan SUPPLIER_DIRS, so a leftover folder from a retired
+    # supplier is not walked at all — its packages can never enter a ranking.
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-04"),))
+    _write_package(root, "aliexpress", "product-04")
+
+    ranker = _ranker(tmp_path, ScriptedJevClient(), export_root=root)
+    assert [p.slug for p in ranker.collect_packages()] == [
+        "cjdropshipping_product_04"
+    ]
+
+
 def test_collect_packages_skips_non_packages_and_unreadable_metadata(tmp_path, caplog):
     root = _export_root(tmp_path, packages=(("cjdropshipping", "product-04"),))
     # Decoys the scan must ignore: a non product-named dir, a stray file, and
-    # a package whose metadata.json is not valid JSON.
+    # packages whose metadata.json is missing, not valid JSON, or not an object.
     (root / "cjdropshipping" / "notes").mkdir()
     (root / "cjdropshipping" / "README.md").write_text("hi", encoding="utf-8")
-    _write_package(root, "aliexpress", "product-03", raw="{not json")
-    # Non-object JSON is equally unusable.
-    _write_package(root, "aliexpress", "product-09", raw="[1, 2, 3]")
+    _write_package(root, "cjdropshipping", "product-03", raw="{not json")
+    _write_package(root, "cjdropshipping", "product-09", raw="[1, 2, 3]")
 
     ranker = _ranker(tmp_path, ScriptedJevClient(), export_root=root)
     with caplog.at_level(logging.WARNING):
@@ -478,7 +489,7 @@ def test_rank_scores_and_tier_boundaries(tmp_path):
             elif question == "winning_value":
                 answers[qid] = {"type": "score", "score": value}
             else:
-                answers[qid] = {"type": "choice", "choice": "curated_home"}
+                answers[qid] = {"type": "choice", "choice": "morning_table"}
         return answers
 
     client = ScriptedJevClient(answers_for)
@@ -592,7 +603,7 @@ def test_a_review_package_with_a_usb_copy_is_demoted_too(tmp_path):
     })
     client = ScriptedJevClient(
         lambda state, questions, i: _perfect_answers(
-            questions, similarity=2, value=2, pillar="curated_home"
+            questions, similarity=2, value=2, pillar="morning_table"
         )
     )
     ranker = _ranker(tmp_path, client, export_root=root)
@@ -618,7 +629,7 @@ def test_clean_packages_keep_their_tier_and_a_discard_note_composes(tmp_path):
         for qid in questions:
             slug, name = qid.rsplit("__", 1)
             if name == "pillar":
-                choice = "discard" if slug.endswith("product_06") else "curated_home"
+                choice = "discard" if slug.endswith("product_06") else "morning_table"
                 out[qid] = {"type": "choice", "choice": choice}
             else:
                 out[qid] = {"type": "score", "score": 4}
@@ -645,7 +656,7 @@ def test_missing_answer_keys_land_as_disregard_with_a_note(tmp_path):
             "cjdropshipping_product_04__similarity": {"type": "score", "score": 4},
             "cjdropshipping_product_04__pillar": {
                 "type": "choice",
-                "choice": "curated_home",
+                "choice": "morning_table",
             },
         }
     )
@@ -765,7 +776,7 @@ def _ranked_samples():
             metadata=METADATA,
             similarity_score=5.0,
             value_score=4.5,
-            pillar="curated_home",
+            pillar="morning_table",
             rank_score=4.8,
             tier="shortlist",
         ),
@@ -774,7 +785,7 @@ def _ranked_samples():
             metadata={**METADATA, "product_title": "Bath caddy", "supplier_name": "AliExpress"},
             similarity_score=3.0,
             value_score=2.5,
-            pillar="self_care_rituals",
+            pillar="restful_reset",
             rank_score=2.8,
             tier="review",
         ),

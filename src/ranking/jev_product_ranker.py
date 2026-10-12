@@ -1,15 +1,17 @@
-"""Step 6 — rank the Step-5 gold-kernel packages against the gold products.
+"""Step 6 — rank the Step-5 Morning Anthem packages against the gold products.
 
 Intake is the gold-kernel tree written by Step 5
-(`<OPTIMAL_EXPORT_DIR>/{cjdropshipping,aliexpress}/product-NN/`, each a
-`metadata.json` + `images/` package) plus the Step-3 gold-standard product list
-(`outputs/json/step-3-gold-standard-products.json`). Every package in both
-supplier folders is ranked; nothing is filtered on the way in.
+(`<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/`, each a
+`metadata.json` + `images/` package — CJdropshipping is The Morning Anthem's
+sole supplier) plus the Step-3 gold-standard product list
+(`outputs/json/morning-anthem-step-3-gold-products.json`). Every package in
+the supplier folder is ranked; nothing is filtered on the way in.
 
 **Ranking is a report, not a deletion.** The ranker never moves or deletes a
 package directory — it writes a tiered report (shortlist / review / disregard)
-to `outputs/json/step-6-ranked-candidates.json` (+ `outputs/md/…md`) and lets
-the operator (Step 7) decide what to validate and link.
+to `outputs/json/morning-anthem-step-6-ranked-candidates.json` (+
+`outputs/md/…md`) and lets the operator (Step 7) decide what to validate and
+link.
 
 Batching (plan §8.2): one System One call carries a single shared state (the
 gold reference plus the batch's products) and three questions per product —
@@ -50,8 +52,8 @@ from src.ranking.jev_client import (
 
 logger = logging.getLogger(__name__)
 
-#: The supplier subfolders Step 5 writes, scanned in this order.
-SUPPLIER_DIRS = ("cjdropshipping", "aliexpress")
+#: The supplier subfolder Step 5 writes (CJdropshipping is the sole supplier).
+SUPPLIER_DIRS = ("cjdropshipping",)
 
 #: A package directory is `product-NN` (two or more digits), same shape the
 #: exporter allocates and the duplicate scan matches.
@@ -162,9 +164,8 @@ def _slug(engine: str, dir_name: str) -> str:
     """A question-id-safe, engine-qualified key for a package.
 
     Question ids are `<slug>__<question>`, so the slug must not itself contain
-    `__`; and because two suppliers number their folders independently, the
-    engine has to qualify the slug or `aliexpress/product-04` and
-    `cjdropshipping/product-04` would collide in one state.
+    `__`; and the engine qualifies the slug so packages from independently
+    numbered supplier folders can never collide in one state.
     """
     safe = re.sub(r"[^a-z0-9_]", "_", f"{engine}_{dir_name}".lower())
     return safe
@@ -183,9 +184,11 @@ class JevProductRanker:
         review_min_score: Optional[float] = None,
     ) -> None:
         self.gold_products_path = Path(
-            gold_products_path or settings.GOLD_PRODUCTS_PATH
+            gold_products_path or settings.MORNING_ANTHEM_GOLD_PRODUCTS_PATH
         )
-        self.export_root = Path(export_root or settings.OPTIMAL_EXPORT_DIR)
+        self.export_root = Path(
+            export_root or settings.MORNING_ANTHEM_EXPORT_DIR
+        )
         self.batch_size = (
             batch_size if batch_size is not None else settings.JEV_BATCH_SIZE
         )
@@ -217,7 +220,7 @@ class JevProductRanker:
             raise JevRankingError(str(exc)) from exc
 
     def collect_packages(self) -> List[PackageRef]:
-        """Every `product-NN` package under the two supplier folders.
+        """Every `product-NN` package under the supplier folder(s).
 
         A package whose `metadata.json` is missing or unreadable is skipped
         with a warning rather than aborting the run — the same tolerance the

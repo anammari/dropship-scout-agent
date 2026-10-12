@@ -30,12 +30,12 @@ DEFAULT_EXPORT_DIR = (
     "/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates"
 )
 
-# Step-5 gold-kernel intake destination (plan §7.2). One supplier subfolder
-# per engine, each numbered independently; this is the gold-kernel tree the
-# updated pipeline produces, distinct from the general `dropship-candidates/`
-# intake above.
-DEFAULT_OPTIMAL_EXPORT_DIR = (
-    "/Users/ahmadammari/PD/my-store-build/inspiration/optimal-dropship-candidates"
+# Step-5 Morning Anthem gold-kernel intake destination (plan §7.2). One
+# supplier subfolder per engine (CJdropshipping only), numbered independently;
+# this is the gold-kernel tree the Morning Anthem pipeline produces, distinct
+# from the general `dropship-candidates/` intake above.
+DEFAULT_MORNING_ANTHEM_EXPORT_DIR = (
+    "/Users/ahmadammari/PD/my-store-build/inspiration/morning-anthem-candidates"
 )
 
 # Deliverable layout of the untracked `outputs/` tree. A run writes three
@@ -71,12 +71,6 @@ def digest_path(structured_path: Path) -> Path:
 # Remote CJdropshipping MCP server (StreamableHTTP). The MCP token is
 # appended as a path segment at connect time — see cj_mcp_client.py.
 DEFAULT_CJ_MCP_BASE_URL = "https://developers.cjdropshipping.com/mcp"
-
-# Saved AliExpress login (`storage_state`) for the Dropshipping Center
-# extractor; produced by `scripts/generate_ali_session.py`, git-ignored, and
-# injected only when the file exists — the DS Center answers these calls
-# anonymously, so its absence is never an error.
-DEFAULT_ALI_DS_STATE_PATH = "ali_ds_state.json"
 
 
 # Blank or absent values resolve to the caller's default, so a `.env` key that
@@ -120,39 +114,31 @@ class Settings:
         self.CJ_MCP_BASE_URL: str = (
             os.getenv("CJ_MCP_BASE_URL") or DEFAULT_CJ_MCP_BASE_URL
         )
-        # --- AliExpress Dropshipping Center ingestion ---
-        # Playwright `storage_state` JSON holding the operator's AliExpress
-        # login; injected into the extractor's browser context when the file
-        # exists, never required (the DS Center answers anonymously).
-        self.ALI_DS_STATE_PATH: str = (
-            os.getenv("ALI_DS_STATE_PATH") or DEFAULT_ALI_DS_STATE_PATH
-        )
-        # Catalogue-search page size per keyword: also the ceiling on how many
-        # items one keyword expands through the per-item record call.
-        self.ALI_DS_MAX_PRODUCTS: int = _parse_int(
-            os.getenv("ALI_DS_MAX_PRODUCTS"), default=20
-        )
-        # Quantitative "winning product" gate. Both floors must be cleared by
-        # every candidate before it reaches the LLM or the image stage; a
-        # metric the DS Center does not report counts as unproven, and the
-        # item is dropped.
-        self.MIN_DS_ORDER_COUNT: int = _parse_int(
-            os.getenv("MIN_DS_ORDER_COUNT"), default=500
-        )
-        self.MIN_DS_RATING: float = _parse_float(
-            os.getenv("MIN_DS_RATING"), default=4.5
-        )
         # Supplier extractors are tried in this order when the orchestrator
         # runs in auto mode; a comma-separated env override reorders or
-        # narrows the chain. Defaults to CJ's MCP server first (no bot
-        # walls, no scraping surface).
+        # narrows the chain. Defaults to CJ's MCP server — The Morning
+        # Anthem's sole supplier (the AliExpress Dropshipping Center engine
+        # was retired on the morning-anthem branch).
         self.SUPPLIER_PRIORITY_ORDER: List[str] = self._parse_supplier_order()
-        # Supplier list prices are quoted in USD on AliExpress/CJ by
-        # default; extractors convert to AUD with this rate so every
-        # price_aud / margin figure is a like-for-like AUD number.
+        # CJ quotes list prices and freight in USD; the extractors convert to
+        # AUD with this rate so every price_aud / margin figure is a
+        # like-for-like AUD number (the store prices, carts and customer
+        # payments are strictly in AUD at launch).
         self.USD_TO_AUD: float = _parse_float(os.getenv("USD_TO_AUD"), default=1.55)
 
+        # The Morning Anthem launches selling and shipping to Australia
+        # first; every freight quote and demand signal targets AU until the
+        # store expands globally via Shopify Markets.
         self.TARGET_COUNTRY: str = os.getenv("TARGET_COUNTRY", "AU")
+        # The CJ freight quote's destination lane (and the liveness gate's
+        # preferred stock country). All launch products ship from CJ's China
+        # warehouse directly into Australia, so the quote must name an
+        # Australian delivery lane (e.g. CJPacket EUB). Kept as its own key
+        # rather than reusing TARGET_COUNTRY: the ship-to lane and the demand
+        # geography can diverge once the store opens more markets.
+        self.CJ_DEFAULT_DEST_COUNTRY: str = (
+            os.getenv("CJ_DEFAULT_DEST_COUNTRY") or "AU"
+        )
         self.EXPORT_DIR: str = os.getenv("EXPORT_DIR", DEFAULT_EXPORT_DIR)
         self.USER_AGENT: str = os.getenv("USER_AGENT", DEFAULT_USER_AGENT)
 
@@ -183,87 +169,89 @@ class Settings:
             os.getenv("CJ_MAX_PRODUCTS"), default=10
         )
 
-        # --- Step 3: Google Shopping gold-standard research (updated
-        # multi-step pipeline) ---
-        # Apify token, shared with the trends fallback MCP (both bill the same
-        # Apify account). The actor is pay-per-result ($3.50/1,000 results
-        # observed), so the per-keyword result cap is the spend ceiling.
-        self.APIFY_TOKEN: Optional[str] = os.getenv("APIFY_TOKEN") or None
-        # The Google Shopping actor id; overridable for a replacement actor
-        # without a code change.
-        self.APIFY_GS_ACTOR: str = (
-            os.getenv("APIFY_GS_ACTOR") or "damilo/google-shopping-apify"
-        )
-        # Results requested per keyword (actor `num` field; closed set
-        # 10/20/30/40/50/100 — anything else fails the run before spending).
-        # NOTE (observed live 2026-09-28): the actor returns a full ~40-row
-        # SERP page per keyword REGARDLESS of this value, so spend is
-        # governed by keywords × ~40 × $0.0035, not by this cap.
-        self.APIFY_GS_MAX_RESULTS_PER_KEYWORD: int = _parse_int(
-            os.getenv("APIFY_GS_MAX_RESULTS_PER_KEYWORD"), default=10
-        )
-        # Hard spend ceiling, enforced by Apify itself (the run's
-        # `max_total_charge_usd` option): the actor run aborts rather than
-        # exceed it. Sized from the OBSERVED envelope (2026-09-28 pilot: the
-        # actor returns a full ~40-row SERP page per keyword regardless of
-        # `num`, so the full 40-keyword bank is ~1,600 results ≈ $5.60): the
-        # ceiling must sit ABOVE that or the production run is aborted by its
-        # own safety net, and it stays within the free-tier remainder
-        # ($7.58 as of 2026-09-28) so even the worst case bills no real money.
-        self.APIFY_GS_MAX_CHARGE_USD: float = _parse_float(
-            os.getenv("APIFY_GS_MAX_CHARGE_USD"), default=7.5
-        )
-        # --- Step 3, HasData source (the optional Apify alternative,
-        # src/extractors/google_shopping_hasdata.py) ---
+        # --- Step 3: Google Shopping gold-standard research (Morning
+        # Anthem pipeline). HasData is the EXCLUSIVE data provider — the
+        # Apify actor wrapper and every APIFY_* key were retired on the
+        # morning-anthem branch. ---
         # The same credential the Step-2 Google Trends MCP server uses
         # (`.mcp.json` reads it through scripts/mcp_headers.py; the Step-3
         # source reads it here to call the REST API directly). Optional — a
         # missing key makes the HasData source raise
-        # HasDataNotConfiguredError, and the Apify source is unaffected.
+        # HasDataNotConfiguredError.
         self.HASDATA_API_KEY: Optional[str] = os.getenv("HASDATA_API_KEY") or None
         # HasData REST base; the client appends `/scrape/google/shopping`.
         self.HASDATA_GS_BASE_URL: str = (
             os.getenv("HASDATA_GS_BASE_URL") or "https://api.hasdata.com"
         )
-        # LOCAL cap on rows kept per keyword. Unlike the Apify actor's `num`,
-        # this is NOT an API parameter: one HasData request returns the whole
-        # shopping grid for a query (~65 rows observed live 2026-10-07) and
-        # costs 10 credits whatever the slice. The cap therefore bounds
-        # downstream LLM curation cost, never HasData spend; 40 mirrors the
-        # ~40-row SERP page the Apify path yields, so the two sources hand
-        # the curator a comparable pool.
+        # LOCAL cap on rows kept per keyword. This is NOT an API parameter:
+        # one HasData request returns the whole shopping grid for a query
+        # (~65 rows observed live 2026-10-07) and costs 10 credits whatever
+        # the slice. The cap therefore bounds downstream LLM curation cost,
+        # never HasData spend. 20 keeps the curation budget tight under the
+        # Morning Anthem credit envelope.
         self.HASDATA_GS_MAX_RESULTS_PER_KEYWORD: int = _parse_int(
-            os.getenv("HASDATA_GS_MAX_RESULTS_PER_KEYWORD"), default=40
+            os.getenv("HASDATA_GS_MAX_RESULTS_PER_KEYWORD"), default=20
+        )
+        # Demand geography for the Step-2 Trends research (agent-side) and
+        # the Step-3 Google Shopping scrape. The Morning Anthem launches
+        # Australia-first, so both default to the AU market — demand signals
+        # and price benchmarks reflect Australian shopper behaviour and AUD
+        # retail pricing. Re-point them when the store expands globally.
+        self.TRENDS_GEO: str = os.getenv("TRENDS_GEO", "AU")
+        self.SHOPPING_GL: str = os.getenv("SHOPPING_GL", "au")
+        self.SHOPPING_DOMAIN: str = (
+            os.getenv("SHOPPING_DOMAIN") or "google.com.au"
+        )
+        # HasData free-tier budget guardrails (credits/month). A full
+        # production run must stay within HASDATA_PRODUCTION_CAP of the
+        # monthly budget; the Step-3 runner refuses to start a scrape whose
+        # planned keyword count would exceed HASDATA_GS_MAX_KEYWORDS or push
+        # the run past the production cap, before any credit moves.
+        self.HASDATA_MONTHLY_BUDGET: int = _parse_int(
+            os.getenv("HASDATA_MONTHLY_BUDGET"), default=1000
+        )
+        self.HASDATA_PRODUCTION_CAP: int = _parse_int(
+            os.getenv("HASDATA_PRODUCTION_CAP"), default=250
+        )
+        self.HASDATA_GS_MAX_KEYWORDS: int = _parse_int(
+            os.getenv("HASDATA_GS_MAX_KEYWORDS"), default=20
         )
         # Step-3 deliverable path (untracked outputs/ tree — all production
-        # deliverables of the updated pipeline live there, never a repo
-        # artefact); Steps 4 and 6 read the gold product list from here.
-        self.GOLD_PRODUCTS_PATH: str = (
-            os.getenv("GOLD_PRODUCTS_PATH")
-            or "outputs/json/step-3-gold-standard-products.json"
+        # deliverables of the Morning Anthem pipeline live there, never a
+        # repo artefact); Steps 4 and 6 read the gold product list from here.
+        self.MORNING_ANTHEM_GOLD_PRODUCTS_PATH: str = (
+            os.getenv("MORNING_ANTHEM_GOLD_PRODUCTS_PATH")
+            or "outputs/json/morning-anthem-step-3-gold-products.json"
         )
-        # Step-4 deliverable path — the Step-5 "keyword bank": the 50-70
-        # supplier search keywords Step 4 generated from the gold products,
-        # which Step 5 ingests through BOTH supplier pipelines (CJ MCP and the
-        # AliExpress DS Center) and Step 6 ranks against the gold list. Same
-        # untracked outputs/ tree as every other production deliverable.
-        self.KEYWORD_BANK_PATH: str = (
-            os.getenv("KEYWORD_BANK_PATH")
-            or "outputs/json/step-4-gold-keywords.json"
+        # Step-4 deliverable path — the Step-5 "keyword bank": the supplier
+        # search keywords Step 4 generated from the gold products, which
+        # Step 5 ingests through the CJdropshipping MCP pipeline and Step 6
+        # ranks against the gold list. Same untracked outputs/ tree as every
+        # other production deliverable.
+        self.MORNING_ANTHEM_KEYWORD_BANK_PATH: str = (
+            os.getenv("MORNING_ANTHEM_KEYWORD_BANK_PATH")
+            or "outputs/json/morning-anthem-step-4-keyword-bank.json"
+        )
+        # Step-2 deliverable path — the Jev-gated trend keyword list that
+        # feeds Step 3's Google Shopping scrape.
+        self.MORNING_ANTHEM_TREND_KEYWORDS_PATH: str = (
+            os.getenv("MORNING_ANTHEM_TREND_KEYWORDS_PATH")
+            or "outputs/json/morning-anthem-step-2-trend-keywords.json"
         )
         # Step-5 export target PER ENGINE: the number of ACCEPTed packages
         # one (keyword, engine) leg may write. It is a per-leg target, so the
         # bank's keyword count multiplies it — 2 keeps a 60-keyword bank from
         # turning into hundreds of packages, while still giving each keyword
-        # a real chance to contribute to both supplier folders.
+        # a real chance to contribute to the supplier folder.
         self.BANK_TARGET_PER_KEYWORD: int = _parse_int(
             os.getenv("BANK_TARGET_PER_KEYWORD"), default=2
         )
-        # Step-5 gold-kernel intake root: the two supplier subfolders are
-        # created under it by the runner, each numbered independently
-        # (`cjdropshipping/product-NN`, `aliexpress/product-NN`).
-        self.OPTIMAL_EXPORT_DIR: str = (
-            os.getenv("OPTIMAL_EXPORT_DIR") or DEFAULT_OPTIMAL_EXPORT_DIR
+        # Step-5 Morning Anthem gold-kernel intake root: the supplier
+        # subfolder is created under it by the runner, numbered independently
+        # (`cjdropshipping/product-NN`).
+        self.MORNING_ANTHEM_EXPORT_DIR: str = (
+            os.getenv("MORNING_ANTHEM_EXPORT_DIR")
+            or DEFAULT_MORNING_ANTHEM_EXPORT_DIR
         )
 
         # --- Step 6: Jev product ranking (TypeSafe System One via OpenRouter;
@@ -313,14 +301,10 @@ class Settings:
 
         # --- Margin floor (the deterministic half of gate 2) ---
         # An ACCEPT must clear markup_multiplier >= MIN_MARKUP_MULTIPLIER OR
-        # estimated_margin_aud > MIN_MARGIN_AUD against the real landed cost;
-        # anything else is downgraded to REJECT. Relaxed from the original
-        # 3.0x / AUD 25 so realistic premium AU pricing survives (a real DS
-        # Center cost is far higher than the welcome-deal prices the retired
-        # Apify path reported, so a blind 3x on true cost over-prices the
-        # store); the margin leg was widened again to AUD 10 on 2026-09-29 to
-        # match the operator's Step-3 $10 target, which the old AUD 20
-        # silently overrode.
+        # estimated_margin_aud > MIN_MARGIN_AUD against the real landed cost
+        # (CJ's USD list price + freight, converted to AUD); anything else is
+        # downgraded to REJECT. AUD 10.00 is the operator's target gross
+        # margin per unit, supporting the >= 20% margin threshold at launch.
         self.MIN_MARKUP_MULTIPLIER: float = _parse_float(
             os.getenv("MIN_MARKUP_MULTIPLIER"), default=2.5
         )
@@ -328,15 +312,35 @@ class Settings:
             os.getenv("MIN_MARGIN_AUD"), default=10.0
         )
 
+        # --- Step 2: Jev product-intent gate (Morning Anthem pipeline) ---
+        # Candidate trend strings per System One call. One choice question
+        # rides each candidate (`<i>__product_intent`); 8 strings = 8
+        # questions per call, inside the docs' efficient batch envelope.
+        self.TREND_GATE_BATCH_SIZE: int = _parse_int(
+            os.getenv("TREND_GATE_BATCH_SIZE"), default=8
+        )
+        # Step-2 Trends research hard cap: at most this many Trends calls
+        # (5 credits each) per production research pass, protecting the
+        # 250-credit production envelope (50 of the 250 go to Step 2).
+        self.TRENDS_MAX_CALLS: int = _parse_int(
+            os.getenv("TRENDS_MAX_CALLS"), default=10
+        )
+        # --- Step 3: Jev pillar gate (Morning Anthem pipeline) ---
+        # Candidate products per System One call. One choice question rides
+        # each product (`<i>__pillar`); 4 products = 4 questions per call.
+        self.PILLAR_GATE_BATCH_SIZE: int = _parse_int(
+            os.getenv("PILLAR_GATE_BATCH_SIZE"), default=4
+        )
+
     @staticmethod
     def _parse_supplier_order() -> List[str]:
         raw = os.getenv("SUPPLIER_PRIORITY_ORDER")
         if not raw or not raw.strip():
-            # CJ's official MCP server first (no anti-bot surface), then the
-            # AliExpress Dropshipping Center. A stale key that names no
-            # registered extractor is skipped with a warning by the chain
-            # builder rather than failing the run.
-            return ["cjdropshipping", "aliexpress"]
+            # CJ's official MCP server — The Morning Anthem's sole supplier
+            # (no anti-bot surface). A stale key that names no registered
+            # extractor is skipped with a warning by the chain builder
+            # rather than failing the run.
+            return ["cjdropshipping"]
         return [key.strip().lower() for key in raw.split(",") if key.strip()]
 
 

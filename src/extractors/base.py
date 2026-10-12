@@ -39,9 +39,9 @@ class ExtractorNotConfiguredError(Exception):
 class BaseSupplierExtractor(abc.ABC):
     """Interface every supplier extractor implements.
 
-    Subclasses override `engine_name` (e.g. "cjdropshipping",
-    "aliexpress_apify") so downstream records can trace which engine
-    produced them.
+    Subclasses override `engine_name` (e.g. "cjdropshipping") so downstream
+    records can trace which engine produced them. The Morning Anthem pipeline
+    registers one engine — CJdropshipping's official MCP server.
     """
 
     engine_name: str = "base"

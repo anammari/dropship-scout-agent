@@ -16,10 +16,10 @@ Hard 3-image minimum: fewer than 3 distinct validated images means the
 function returns None and the exporter drops the candidate entirely —
 no fallback tier to another site exists.
 
-AliExpress alicdn URLs in a supplier gallery array are size-suffixed
-thumbnail variants; `strip_size_suffix` upgrades them to the original
-full-resolution asset before downloading (the original is tried first,
-the as-served URL kept as fallback ordering).
+Supplier CDN URLs in a gallery array can be size-suffixed thumbnail
+variants; `strip_size_suffix` upgrades them to the original full-resolution
+asset before downloading (the original is tried first, the as-served URL
+kept as fallback ordering).
 """
 
 from __future__ import annotations
@@ -66,15 +66,15 @@ MAX_IMAGE_BYTES = 15 * 1024 * 1024
 FORMAT_EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 
 # Marketplace CDN size suffixes on filenames: Shopify `photo_800x800.jpg` /
-# `photo_800x.jpg`, AliExpress alicdn `photo.jpg_640x640.jpg` — stripped to
-# request the original, largest asset.
+# `photo_800x.jpg`, alicdn `photo.jpg_640x640.jpg` — stripped to request the
+# original, largest asset.
 _SIZE_SUFFIX_RE = re.compile(r"(_\d+x\d+|_\d+x)$")
 
-# AliExpress alicdn's mid-filename form: the size/quality marker sits
-# BETWEEN extensions (`Sxxxx.jpg_960x960q75.jpg_.avif`) so the end-anchored
-# regex never matches and the pipeline would ship 220px AVIF thumbnails —
-# every one rejected by the >= 800px gate. The original asset is everything
-# before the marker.
+# alicdn's mid-filename form: the size/quality marker sits BETWEEN
+# extensions (`Sxxxx.jpg_960x960q75.jpg_.avif`) so the end-anchored regex
+# never matches and the pipeline would ship 220px AVIF thumbnails — every
+# one rejected by the >= 800px gate. The original asset is everything before
+# the marker.
 _ALICDN_SIZE_MARKER_RE = re.compile(r"_\d+x\d+(?:q\d+)?")
 
 
@@ -98,7 +98,7 @@ def strip_size_suffix(url: str) -> str:
     """Strip a marketplace `_{w}x{h}` size suffix to request the original asset.
 
     `_800x800` / `_800x` at the end of the filename stem (Shopify CDN), a
-    trailing `_640x640` segment (AliExpress alicdn thumbnails), and alicdn's
+    trailing `_640x640` segment (alicdn thumbnails), and alicdn's
     mid-filename `photo.jpg_960x960q75.jpg_.avif` form. Crop variants and
     extension-less paths are left as-is.
     """
@@ -253,9 +253,9 @@ async def source_product_images(
     verified CDN gallery, or None.
 
     The candidate URLs come exclusively from `RawSupplierProduct.image_urls`
-    (the extractor-captured gallery of the live listing). Size-suffixed
-    alicdn variants are upgraded to the original asset first, with the
-    as-served URL kept as fallback ordering. Hard failure rule: fewer than
+    (the extractor-captured gallery of the live listing). Size-suffixed CDN
+    variants are upgraded to the original asset first, with the as-served
+    URL kept as fallback ordering. Hard failure rule: fewer than
     `min_images` distinct validated images -> None, and the exporter drops
     the candidate — no fallback tier exists.
     """

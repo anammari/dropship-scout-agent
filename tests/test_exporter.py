@@ -22,11 +22,13 @@ from src.models import (
 from io import BytesIO
 import os
 
-_ALI_URL = "https://www.aliexpress.com/item/1005006112233445.html"
+# CJdropshipping is The Morning Anthem's sole supplier, so every fixture is a
+# CJ listing on the canonical /product/{pid}.html PDP shape.
+_CJ_URL = "https://cjdropshipping.com/product/1745360894529376256.html"
 _IMAGES = [
-    "https://ae01.alicdn.com/kf/S1.jpg",
-    "https://ae01.alicdn.com/kf/S2.jpg",
-    "https://ae01.alicdn.com/kf/S3.jpg",
+    "https://cc-west-usa.oss-accelerate.aliyuncs.com/S1.jpg",
+    "https://cc-west-usa.oss-accelerate.aliyuncs.com/S2.jpg",
+    "https://cc-west-usa.oss-accelerate.aliyuncs.com/S3.jpg",
 ]
 
 _blob_cache = {}
@@ -67,8 +69,8 @@ class FakeAsyncClient:
 
 def _raw_product() -> RawSupplierProduct:
     return RawSupplierProduct(
-        supplier_name="AliExpress",
-        supplier_retail_url=_ALI_URL,
+        supplier_name="CJdropshipping",
+        supplier_retail_url=_CJ_URL,
         product_title="Ergonomic Desk Cable Spine Organiser",
         product_description="Modular cable spine.",
         price_aud=12.50,
@@ -107,7 +109,7 @@ async def test_exports_accepted_candidate_with_metadata_and_images(tmp_path):
     result = results[0]
     product_dir = Path(result.product_dir)
     assert product_dir.name == "product-01"
-    assert result.supplier_retail_url == _ALI_URL
+    assert result.supplier_retail_url == _CJ_URL
 
     image_files = sorted((product_dir / "images").iterdir())
     assert [f.name for f in image_files] == ["image-1.jpg", "image-2.jpg", "image-3.jpg"]
@@ -123,8 +125,8 @@ async def test_exports_accepted_candidate_with_metadata_and_images(tmp_path):
         "Modular segments", "Steel base", "Under-desk mount",
     ]
     assert metadata["target_tags"] == ["dropship", "workspace"]
-    assert metadata["supplier_name"] == "AliExpress"
-    assert metadata["supplier_retail_url"] == _ALI_URL
+    assert metadata["supplier_name"] == "CJdropshipping"
+    assert metadata["supplier_retail_url"] == _CJ_URL
     assert metadata["image_source"] == IMAGE_SOURCE == "supplier_gallery"
     # The old Meta-ad flow's competitor field is gone from the contract.
     assert "competitor_retail_url" not in metadata
@@ -200,7 +202,7 @@ def _write_package(export_dir: Path, name: str, supplier_retail_url: str) -> Pat
 
 
 async def test_duplicate_url_is_skipped_and_creates_no_directory(tmp_path):
-    _write_package(tmp_path, "product-01", _ALI_URL)
+    _write_package(tmp_path, "product-01", _CJ_URL)
     client = FakeAsyncClient()
     for i, url in enumerate(_IMAGES):
         client.serve(url, _jpeg(850 + i, 850))
@@ -217,10 +219,10 @@ async def test_duplicate_url_is_skipped_and_creates_no_directory(tmp_path):
 
 
 async def test_fresh_url_still_exports_next_to_a_duplicate(tmp_path):
-    _write_package(tmp_path, "product-01", _ALI_URL)
+    _write_package(tmp_path, "product-01", _CJ_URL)
     fresh_raw = RawSupplierProduct(
-        supplier_name="AliExpress",
-        supplier_retail_url="https://www.aliexpress.com/item/1005006999888777.html",
+        supplier_name="CJdropshipping",
+        supplier_retail_url="https://cjdropshipping.com/product/1005006999888777.html",
         product_title="Fresh product",
         product_description="Another spine.",
         price_aud=9.00,
@@ -315,7 +317,7 @@ async def test_counters_accumulate_across_export_calls(tmp_path):
 
 
 async def test_unreadable_package_is_ignored_rather_than_aborting(tmp_path):
-    _write_package(tmp_path, "product-01", _ALI_URL)
+    _write_package(tmp_path, "product-01", _CJ_URL)
     (tmp_path / "product-02").mkdir()
     (tmp_path / "product-02" / "metadata.json").write_text("{ not json")
     client = FakeAsyncClient()
@@ -335,7 +337,7 @@ async def test_non_product_directories_are_not_scanned_for_duplicates(tmp_path):
     # A stray directory that is not a product-NN package must not be read.
     stray = tmp_path / "notes"
     stray.mkdir()
-    (stray / "metadata.json").write_text(json.dumps({"supplier_retail_url": _ALI_URL}))
+    (stray / "metadata.json").write_text(json.dumps({"supplier_retail_url": _CJ_URL}))
     client = FakeAsyncClient()
     for i, url in enumerate(_IMAGES):
         client.serve(url, _jpeg(850 + i, 850))
@@ -349,8 +351,8 @@ async def test_non_product_directories_are_not_scanned_for_duplicates(tmp_path):
 
 async def test_one_broken_candidate_does_not_abort_the_batch(tmp_path):
     second_raw = RawSupplierProduct(
-        supplier_name="AliExpress",
-        supplier_retail_url="https://www.aliexpress.com/item/9999.html",
+        supplier_name="CJdropshipping",
+        supplier_retail_url="https://cjdropshipping.com/product/9999.html",
         product_title="Second product",
         product_description="Another spine.",
         price_aud=8.00,

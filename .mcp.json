@@ -4,11 +4,6 @@
       "type": "http",
       "url": "https://mcp.hasdata.com/mcp?apis=google_trends",
       "headersHelper": "python3 scripts/mcp_headers.py hasdata"
-    },
-    "apify-trends": {
-      "type": "http",
-      "url": "https://mcp.apify.com/?tools=data_xplorer/google-trends-fast-scraper",
-      "headersHelper": "python3 scripts/mcp_headers.py apify"
     }
   }
 }

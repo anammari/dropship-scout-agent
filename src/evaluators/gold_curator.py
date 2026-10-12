@@ -1,4 +1,4 @@
-"""Step 3 (updated multi-step pipeline): LLM curation of Google Shopping rows.
+"""Step 3 (Morning Anthem pipeline): LLM curation of Google Shopping rows.
 
 The reasoning LLM turns the scraped Google Shopping AU rows into the
 GOLD-STANDARD product list — but under the repo's anti-hallucination posture
@@ -28,11 +28,20 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from src.config import settings
-from src.extractors.google_shopping import ShoppingRow
+from src.extractors.shopping_row import ShoppingRow
 
 logger = logging.getLogger(__name__)
 
-PILLARS = ("curated_home", "self_care_rituals", "other")
+#: The Morning Anthem merchandising pillars. Single source of truth shared
+#: with the Step-4 keyword generator and the Step-6 Jev ranker (which imports
+#: this tuple): every gold product carries exactly one of these keys.
+PILLARS = (
+    "brew_fuel",
+    "sunrise_move",
+    "mindful_awakening",
+    "restful_reset",
+    "morning_table",
+)
 
 TEMPERATURE = 0.3
 #: The configured model (`deepseek-v4.x-flash:cloud`) is a *reasoning* model:
@@ -48,9 +57,10 @@ ROWS_PER_CALL = 10
 
 SYSTEM_MESSAGE = (
     "You are a senior e-commerce market research expert specializing in the "
-    "Australian e-commerce market. You select GOLD-STANDARD product winners "
-    "from scraped Google Shopping AU rows: on-demand, high value-proposition, "
-    "inert physical goods purchased or sought recently by Australians."
+    "Australian e-commerce market for The Morning Anthem, a premium morning "
+    "lifestyle brand. You select GOLD-STANDARD product winners from scraped "
+    "Google Shopping AU rows: on-demand, high value-proposition, inert "
+    "physical goods purchased or sought recently by Australian shoppers."
 )
 
 USER_TEMPLATE = """### Hard rules
@@ -64,14 +74,22 @@ USER_TEMPLATE = """### Hard rules
    formulated products, or mineral-sourcing claims (no Dead Sea mud and the
    like). NO consumables, even as an accessory. Inert physical tools only. No
    celebrity/cultural-icon IP and no counterfeit-friendly branded goods.
-4. Economics: prefer rows whose visible price can plausibly leave at least a
-   2.5x markup or AUD $10.00+ gross margin over a landed supplier cost with
-   standard AU packet shipping (7-12 business days). When the row gives no
-   basis, set `unit_economics_note` to null — never estimate from imagination.
-5. `pillar` is exactly one of `curated_home` (functional/aesthetic kitchen,
-   preparation, dining/tabletop objects), `self_care_rituals` (non-electric,
-   durable wellness, relaxation, bath accessories), or `other` (only when the
-   row itself evidences high AU demand).
+4. Economics: prefer rows whose visible AUD price can plausibly leave at
+   least a 2.5x markup or AUD $10.00+ gross margin over a landed supplier
+   cost with standard AU packet shipping (7-12 business days). When the row
+   gives no basis, set `unit_economics_note` to null — never estimate from
+   imagination.
+5. `pillar` is exactly one of The Morning Anthem's five merchandising pillars:
+   `brew_fuel` (manual coffee tools, espresso distribution gear, portable milk
+   frothers, minimalist tumblers, matcha accessories), `sunrise_move`
+   (aesthetic active gear, commuter backpacks, waterproof pouches, hands-free
+   dog leashes, sand-free towels), `mindful_awakening` (backflow incense
+   burners, digital gratitude journals, shower steamers, meditation
+   accessories), `restful_reset` (silk eye masks, ergonomic recovery pillows,
+   sunrise alarm clocks, facial ice rollers), or `morning_table` (cutting
+   boards, garlic presses/mashers, breakfast preparation and serving kitchen
+   aids). A product that fits none of the five is not a Morning Anthem
+   product — leave it out.
 6. `compliance_note` is one short sentence on why the item is an AICIS-exempt
    inert accessory and IP-clean — only when true; otherwise leave the product
    out entirely.
@@ -80,7 +98,7 @@ USER_TEMPLATE = """### Hard rules
 8. Output strict JSON only — no markdown fence, no commentary, and always
    close the JSON (a truncated response is unusable):
 
-   {"products": [{"url": "https://...", "pillar": "curated_home",
+   {"products": [{"url": "https://...", "pillar": "brew_fuel",
    "compliance_note": "...", "unit_economics_note": "... or null"}]}
 
 ### Rows (Google Shopping AU, scraped live)
@@ -185,7 +203,7 @@ def _demand_evidence(row: ShoppingRow) -> str:
         return f"rating {row.rating:g}/5 (review count not reported)"
     if row.rating_count:
         return f"{row.rating_count} reviews (Google Shopping AU)"
-    # The actor carries no purchased-recently KPI; say so rather than invent.
+    # The scrape carries no purchased-recently KPI; say so rather than invent.
     return "not_available_from_source"
 
 
@@ -283,7 +301,7 @@ class GoldProductCurator:
         if not rows:
             raise GoldCurationError("no scraped rows to curate")
         # Demand-evidence filter (operator decision 2026-09-28): a row with
-        # neither a rating nor a review count has no verifiable AU demand
+        # neither a rating nor a review count has no verifiable demand
         # signal and is filtered out pre-LLM, saving the reasoning tokens too.
         demand_rows = [
             row for row in rows if row.rating is not None or row.rating_count

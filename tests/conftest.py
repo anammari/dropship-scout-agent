@@ -26,8 +26,11 @@ from src.extractors import cj_mcp_extractor
 
 # Live credentials the developer keeps in `.env`. `LLM_API_KEY` (Ollama
 # Cloud) is the same class of secret as the rest, so it is scrubbed with them.
+# HasData is the pipeline's exclusive data provider (the Apify token was
+# retired on the Morning Anthem branch) and OpenRouter's key is now shared by
+# three steps: the Step-2 product-intent gate, the Step-3 pillar gate and the
+# Step-6 ranking.
 _SENSITIVE_ENV_VARS = (
-    "APIFY_TOKEN",
     "HASDATA_API_KEY",
     "LLM_API_KEY",
     "OPENROUTER_API_KEY",

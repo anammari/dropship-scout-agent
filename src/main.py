@@ -1,7 +1,7 @@
 """End-to-end CLI orchestrator (Phase 6, rewritten per plan F.5).
 
-Supplier-First pipeline: supplier extractors (CJdropshipping MCP server,
-AliExpress Dropshipping Center) fetch verified
+Supplier-First pipeline: the CJdropshipping MCP server — The Morning
+Anthem's sole supplier engine — fetches verified
 `RawSupplierProduct`s -> LLM viability evaluation (the LLM authors only
 marketing/viability fields) -> deterministic CDN image download with the
 3-image gate -> workspace export -> printed summary with per-run drop
@@ -31,10 +31,6 @@ from typing import Any, List, Optional
 from src.config import settings
 from src.exporter import CandidateExporter, ExportResult
 from src.evaluators.llm_filter import LLMConfigError, LLMEvaluationFilter
-from src.extractors.aliexpress_ds import (
-    AliExpressDsCenterExtractor,
-    DsCenterSessionExpiredError,
-)
 from src.extractors.base import (
     BaseSupplierExtractor,
     ExtractorBlockedException,
@@ -47,10 +43,10 @@ from src.models import ProductCandidateEvaluation, RawSupplierProduct
 logger = logging.getLogger(__name__)
 
 # Extractor registry keyed by the same supplier keys SUPPLIER_PRIORITY_ORDER
-# uses; auto mode tries them in that configured order.
+# uses; auto mode tries them in that configured order. The Morning Anthem
+# pipeline registers CJdropshipping only.
 _EXTRACTOR_REGISTRY = {
     "cjdropshipping": CjMcpExtractor,
-    "aliexpress": AliExpressDsCenterExtractor,
 }
 
 
@@ -260,8 +256,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m src.main",
         description=(
-            "Dropship Scout Agent: ingest live supplier listings "
-            "(CJdropshipping / AliExpress), filter winners through "
+            "Dropship Scout Agent (The Morning Anthem): ingest live "
+            "CJdropshipping supplier listings, filter winners through "
             "the LLM viability gate, and export them to the Shopify "
             "workspace."
         ),
@@ -370,32 +366,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 step="Supplier Extraction Stage",
                 reason=str(exc),
                 instructions=[
-                    "Check that at least one supplier extractor is "
-                    "configured: CJ_MCP_TOKEN (CJdropshipping MCP server) in "
-                    ".env — the AliExpress Dropshipping Center engine needs "
-                    "no credential of its own",
-                    "Verify each configured credential manually against its "
-                    "API (auth endpoint ping) before re-running",
+                    "Check that the CJdropshipping MCP extractor is "
+                    "configured: CJ_MCP_TOKEN (CJdropshipping MCP server) "
+                    "in .env — CJ is the pipeline's only supplier engine",
+                    "Verify the credential manually against the CJ MCP "
+                    "endpoint before re-running",
                     "Re-run the pipeline after any manual fix: python -m "
                     f"src.main --keyword {args.keyword!r} --target-count "
                     f"{args.target_count}",
-                ],
-            )
-        )
-        return 1
-    except DsCenterSessionExpiredError as exc:
-        print(
-            render_intervention_block(
-                step="AliExpress Dropshipping Center Session",
-                reason=str(exc),
-                instructions=[
-                    "Refresh the saved AliExpress login: python "
-                    "scripts/generate_ali_session.py",
-                    "Or run anonymously by removing the saved session file "
-                    "(ALI_DS_STATE_PATH) — the DS Center answers these "
-                    "calls without a login",
-                    "Re-run the pipeline: python -m src.main --keyword "
-                    f"{args.keyword!r} --target-count {args.target_count}",
                 ],
             )
         )

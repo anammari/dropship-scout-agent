@@ -103,7 +103,7 @@ def main() -> None:
     parser.add_argument(
         "--gold-products",
         type=Path,
-        default=Path(settings.GOLD_PRODUCTS_PATH),
+        default=Path(settings.MORNING_ANTHEM_GOLD_PRODUCTS_PATH),
         help="Step-3 deliverable to derive the bank from",
     )
     parser.add_argument(
@@ -131,7 +131,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path(settings.KEYWORD_BANK_PATH),
+        default=Path(settings.MORNING_ANTHEM_KEYWORD_BANK_PATH),
         help="structured bank destination",
     )
     parser.add_argument(

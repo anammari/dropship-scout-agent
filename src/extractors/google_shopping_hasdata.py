@@ -1,11 +1,10 @@
-"""Step 3 (updated multi-step pipeline): HasData Google Shopping scraper.
+"""Step 3 (Morning Anthem pipeline): HasData Google Shopping scraper.
 
-The OPTIONAL alternative to the Apify actor in `google_shopping.py`, for
-operators who would rather spend HasData credits than Apify credit. It is a
-drop-in peer of `GoogleShoppingScraper`: same `scrape_keywords(keywords) ->
-List[ShoppingRow]` contract, the same `ShoppingRow` dataclass, and therefore
-the same downstream curation (`src.evaluators.gold_curator`) and the same
-`--dump-raw` / `--from-raw` replay. Only the transport differs.
+The pipeline's SOLE Google Shopping source — the Apify actor wrapper was
+retired on the Morning Anthem branch and HasData is the exclusive data
+provider. It hands `scrape_keywords(keywords) -> List[ShoppingRow]` to the
+same downstream curation (`src.evaluators.gold_curator`) and supports the
+same `--dump-raw` / `--from-raw` replay.
 
 Why an HTTP client and not the MCP server (finding, 2026-10-07): the HasData
 MCP gateway (`https://mcp.hasdata.com/mcp?apis=...`) enumerates 27 API groups
@@ -25,6 +24,13 @@ not a fixed page size. `results_per_keyword` is therefore a LOCAL slice of
 that grid, not an API parameter — it bounds curation cost, never API spend.
 One keyword = one request regardless of the slice.
 
+Geography: The Morning Anthem launches selling to Australia first, so the
+scrape is pinned to the AU market by default — `gl` comes from
+`SHOPPING_GL` (default `au`) and the Google domain from `SHOPPING_DOMAIN`
+(default `google.com.au`), so price benchmarks and demand signals reflect
+Australian shopper behaviour and AUD retail pricing. Both are configurable
+for the later global expansion.
+
 Schema source: the live payload (2026-10-07 probe, `/scrape/google/shopping`,
 `q=french press&gl=au&domain=google.com.au`). The reference guide's example
 row lists `link` / `productLink` / `seller` / `ratingCount`; NONE of those
@@ -33,8 +39,7 @@ category, productId, price, extractedPrice, originalPrice,
 extractedOriginalPrice, rating, reviews, source, thumbnail, delivery,
 extensions, hasdataLink, immersiveProductPageToken — so `source` is the
 seller and `reviews` is the review count, and the parser reads both the
-documented and the live spellings rather than trusting either alone. That is
-the same posture as the Apify module's live-vs-README findings.
+documented and the live spellings rather than trusting either alone.
 """
 
 from __future__ import annotations
@@ -45,27 +50,27 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from src.config import settings
-from src.extractors.google_shopping import ShoppingRow
+from src.extractors.shopping_row import ShoppingRow
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.hasdata.com"
 REQUEST_TIMEOUT_SECONDS = 60.0
 
-#: Google's regional domain per pipeline country. The DS Center/Step-2 work
-#: is AU-pinned, so the AU entry is the one that matters; the rest keep the
-#: module honest if TARGET_COUNTRY is changed.
+#: Google's regional domain per `gl` country code. The Morning Anthem launch
+#: is Australia-first, so `au`/`google.com.au` is the default; the rest keep
+#: the module honest when SHOPPING_GL/SHOPPING_DOMAIN point elsewhere as the
+#: store expands globally.
 GOOGLE_DOMAINS = {
-    "AU": "google.com.au",
-    "US": "google.com",
-    "GB": "google.co.uk",
-    "UK": "google.co.uk",
-    "NZ": "google.co.nz",
-    "CA": "google.ca",
-    "IE": "google.ie",
-    "IN": "google.co.in",
+    "au": "google.com.au",
+    "us": "google.com",
+    "gb": "google.co.uk",
+    "uk": "google.co.uk",
+    "nz": "google.co.nz",
+    "ca": "google.ca",
+    "ie": "google.ie",
+    "in": "google.co.in",
 }
-DEFAULT_GOOGLE_DOMAIN = "google.com"
 
 
 class HasDataShoppingError(Exception):
@@ -83,7 +88,7 @@ class HasDataShoppingRunFailedError(HasDataShoppingError):
 def parse_response(
     payload: Dict[str, Any],
     source_keyword: str,
-    country: str = "AU",
+    gl: str = "au",
 ) -> List[ShoppingRow]:
     """Map one HasData shopping response onto the shared ShoppingRow shape.
 
@@ -92,13 +97,16 @@ def parse_response(
     and a row is dropped only when it carries no usable title or identity.
     Rows without a product identity cannot serve as the anti-hallucination
     join key, so they are unusable rather than merely thin.
+
+    `gl` is the market's country code (lowercase, matching the `gl` request
+    parameter); the derived identity URL's Google domain is looked up from it.
     """
     items = []
     for key in ("shoppingResults", "inlineShoppingResults"):
         value = payload.get(key)
         if isinstance(value, list):
             items.extend(value)
-    domain = GOOGLE_DOMAINS.get(country.upper(), DEFAULT_GOOGLE_DOMAIN)
+    domain = GOOGLE_DOMAINS.get(gl.lower(), settings.SHOPPING_DOMAIN)
 
     rows: List[ShoppingRow] = []
     for item in items:
@@ -210,13 +218,13 @@ class HasDataShoppingScraper:
         return httpx.Client(timeout=self.timeout_seconds)
 
     def _fetch_keyword(
-        self, client: httpx.Client, keyword: str, country: str
+        self, client: httpx.Client, keyword: str, gl: str
     ) -> List[ShoppingRow]:
         """One shopping request; returns the keyword's parsed rows."""
         params = {
             "q": keyword,
-            "gl": country.lower(),
-            "domain": GOOGLE_DOMAINS.get(country.upper(), DEFAULT_GOOGLE_DOMAIN),
+            "gl": gl.lower(),
+            "domain": GOOGLE_DOMAINS.get(gl.lower(), settings.SHOPPING_DOMAIN),
             "hl": "en",
             "deviceType": "desktop",
             "start": 0,
@@ -258,27 +266,34 @@ class HasDataShoppingScraper:
             raise HasDataShoppingRunFailedError(
                 f"HasData shopping request status {status!r} for {keyword!r}"
             )
-        return parse_response(payload, keyword, country)
+        return parse_response(payload, keyword, gl)
 
     def scrape_keywords(self, keywords: List[str]) -> List[ShoppingRow]:
         """One request per keyword; returns the parsed listings.
 
-        Fails closed on the FIRST keyword that cannot be read, matching the
-        Apify scraper's single-run posture: a half-scraped gold list would
-        silently under-represent the Step-2 keywords it claims to cover.
+        Fails closed on the FIRST keyword that cannot be read: a half-scraped
+        gold list would silently under-represent the Step-2 keywords it
+        claims to cover.
+
+        The keyword count is also the credit spend (10 per request), so the
+        caller is expected to bound it — the Step-3 runner enforces
+        `HASDATA_GS_MAX_KEYWORDS` and the `HASDATA_PRODUCTION_CAP` envelope
+        before the first request.
         """
         if not keywords:
             raise HasDataShoppingError("no keywords provided to scrape")
 
         client = self._client_or_build()
+        gl = settings.SHOPPING_GL
         logger.info(
             "HasData Google Shopping run: %d keyword(s) at %d credit(s) each "
-            "(local row cap %d)",
-            len(keywords), self.CREDITS_PER_REQUEST, self.results_per_keyword,
+            "(gl=%s, local row cap %d)",
+            len(keywords), self.CREDITS_PER_REQUEST, gl,
+            self.results_per_keyword,
         )
         rows: List[ShoppingRow] = []
         for keyword in keywords:
-            keyword_rows = self._fetch_keyword(client, keyword, settings.TARGET_COUNTRY)
+            keyword_rows = self._fetch_keyword(client, keyword, gl)
             if not keyword_rows:
                 raise HasDataShoppingRunFailedError(
                     f"HasData shopping produced no usable rows for {keyword!r}"

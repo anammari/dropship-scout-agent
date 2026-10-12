@@ -4,8 +4,7 @@ gold-standard products with Jev (TypeSafe System One via OpenRouter).
 
 Reads the gold-kernel tree Step 5 wrote —
 
-    <OPTIMAL_EXPORT_DIR>/cjdropshipping/product-NN/…
-    <OPTIMAL_EXPORT_DIR>/aliexpress/product-NN/…
+    <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/…
 
 — and the Step-3 deliverable (`outputs/json/step-3-gold-standard-products.json`),
 asks Jev for a similarity score, a winning-value score and a pillar per
@@ -25,7 +24,7 @@ Usage (from the repo root):
 
     source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
         [--gold-products outputs/json/step-3-gold-standard-products.json] \
-        [--export-root <OPTIMAL_EXPORT_DIR>] [--batch-size 4] \
+        [--export-root <MORNING_ANTHEM_EXPORT_DIR>] [--batch-size 4] \
         [--output outputs/json/step-6-ranked-candidates.json]
 
 Exit codes: 0 complete, 1 requires human intervention, 2 unexpected error.
@@ -95,14 +94,14 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument(
         "--gold-products",
         type=Path,
-        default=Path(settings.GOLD_PRODUCTS_PATH),
-        help="Step-3 gold-standard products (default: GOLD_PRODUCTS_PATH)",
+        default=Path(settings.MORNING_ANTHEM_GOLD_PRODUCTS_PATH),
+        help="Step-3 gold-standard products (default: MORNING_ANTHEM_GOLD_PRODUCTS_PATH)",
     )
     parser.add_argument(
         "--export-root",
         type=Path,
-        default=Path(settings.OPTIMAL_EXPORT_DIR),
-        help="Step-5 gold-kernel root (default: OPTIMAL_EXPORT_DIR)",
+        default=Path(settings.MORNING_ANTHEM_EXPORT_DIR),
+        help="Step-5 gold-kernel root (default: MORNING_ANTHEM_EXPORT_DIR)",
     )
     parser.add_argument(
         "--batch-size",
@@ -166,8 +165,8 @@ def main(argv: List[str] | None = None) -> int:
                     "outputs/json/step-3-gold-standard-products.json (re-run "
                     "scripts/run_gold_standard_research.py if not)",
                     "Confirm the Step-5 gold-kernel tree holds product-NN "
-                    "packages: <OPTIMAL_EXPORT_DIR>/{cjdropshipping,"
-                    "aliexpress}/ (re-run scripts/ingest_keyword_bank.py if not)",
+                    "packages: <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/ "
+                    "(re-run scripts/ingest_keyword_bank.py if not)",
                     "Re-run the ranking: python scripts/rank_optimal_candidates.py",
                 ],
             )

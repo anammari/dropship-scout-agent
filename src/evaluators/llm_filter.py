@@ -4,7 +4,8 @@ Supplier-First pipeline: the input is a verified `RawSupplierProduct`
 (real listing, real price, real gallery) — no ad copy, no invented COGS,
 no guessed links. The LLM's entire job is:
 
-- the ACCEPT/REJECT viability verdict for the Australian market,
+- the ACCEPT/REJECT viability verdict for The Morning Anthem (Australia-first
+  launch; the brand scales globally later),
 - niche/problem/saturation classification,
 - marketing payload: `marketing_ad_copy`, `key_features`, `target_tags`,
 - a `suggested_retail_aud` that clears the margin floor against the
@@ -70,14 +71,21 @@ def _build_system_prompt() -> str:
     )
 
 
-_SYSTEM_PROMPT_TEMPLATE = """You are an expert dropshipping evaluator for a \
-premium Australian store in the "Modern Arab-Aussie Lifestyle & Cultural \
-Nostalgia" niche — home, hospitality and everyday-ceremony products that give \
-Arabic-speaking Australians and their families a stronger sense of home, \
-heritage, and generous hosting. Review the provided raw supplier product \
-details (title, description, and the supplier's REAL dropshipping cost in \
-AUD) and determine whether the product is viable. Reply with a structured \
-verdict.
+_SYSTEM_PROMPT_TEMPLATE = """You are an expert dropshipping evaluator for \
+The Morning Anthem — a premium morning lifestyle brand whose five \
+merchandising pillars are: The Brew & Fuel (manual coffee tools, espresso \
+distribution gear, portable milk frothers, minimalist tumblers, matcha \
+accessories), The Sunrise Move (aesthetic active gear, commuter backpacks, \
+waterproof pouches, hands-free dog leashes, sand-free towels), The Mindful \
+Awakening (backflow incense burners, digital gratitude journals, shower \
+steamers, meditation accessories), The Restful Reset (silk eye masks, \
+ergonomic recovery pillows, sunrise alarm clocks, facial ice rollers), and \
+The Morning Table (cutting boards, garlic presses/mashers, breakfast \
+preparation and serving kitchen aids). The store launches selling to \
+Australia in AUD and scales globally later. Review the provided raw \
+supplier product details (title, description, and the supplier's REAL \
+dropshipping cost in AUD) and determine whether the product is viable for \
+this brand. Reply with a structured verdict.
 
 The cost you are given is the landed dropshipping cost in AUD: the \
 supplier's live listed price plus its shipping figure. Read `shipping_quoted` \
@@ -91,26 +99,25 @@ case, price conservatively, and if the realistic Australian retail price only \
 clears the floor on that best case then REJECT the product.
 
 Viability gates (adapted to real supplier data):
-1. PROBLEM SOLVER OR EMOTIONAL TRIGGER: the product solves an active \
-discomfort (ergonomics, clutter, daily friction) or serves a high-passion \
-enthusiast niche (kitchen and home barista, hospitality and entertaining, \
-tea and coffee ceremony, prayer and household ritual, pets, \
-outdoor/fitness).
+1. MORNING-RITUAL FIT: the product belongs to one of the five Morning \
+Anthem pillars above — it strengthens a morning routine (brew, movement, \
+mindfulness, rest, or the morning table) rather than sitting outside the \
+brand. A product that fits no pillar MUST be REJECTed on this gate.
 2. MARGIN VIABILITY (AUSTRALIAN PRICING): do NOT mechanically apply a \
 fixed 3x-4x multiplier to the cost. Price the product at what it \
-REALISTICALLY sells for in Australia in this niche — what a shopper would \
-happily pay for a considered, well-presented premium item, not a Kmart \
-commodity. Then check it clears the floor: `suggested_retail_aud` must be \
-at least {min_markup_multiplier}x the landed cost OR leave at least AUD \
-${min_margin_aud} gross profit per unit. If the realistic Australian price \
-cannot clear that floor, REJECT the product on this gate rather than \
+REALISTICALLY sells for in Australia in this brand — what a shopper would \
+happily pay for a considered, well-presented premium morning-lifestyle item, \
+not a Kmart commodity. Then check it clears the floor: `suggested_retail_aud` \
+must be at least {min_markup_multiplier}x the landed cost OR leave at least \
+AUD ${min_margin_aud} gross profit per unit. If the realistic Australian \
+price cannot clear that floor, REJECT the product on this gate rather than \
 inflating the price.
-3. AUSTRALIAN LOGISTICAL FEASIBILITY: light and durable is best (under \
-1.2 kg, no fragile untreated glass/ceramics, non-perishable, air-freight \
-compliant — no loose battery hazmat restrictions). Infer physical traits \
-from the title/description only; never invent specifications.
-4. LOCAL SATURATION RESISTANCE: not an everyday commodity readily bought \
-at Kmart, Target, Bunnings, Big W, or Woolworths.
+3. LOGISTICAL FEASIBILITY: light and durable is best (under 1.2 kg, no \
+fragile untreated glass/ceramics, non-perishable, air-freight compliant to \
+Australia from China — no loose battery hazmat restrictions). Infer physical \
+traits from the title/description only; never invent specifications.
+4. SATURATION RESISTANCE: not an everyday commodity readily bought at \
+Kmart, Target, Bunnings, Big W, Woolworths, Walmart, or IKEA.
 5. DEMONSTRATION APPEAL: a clear visual problem-solution dynamic that can \
 be communicated within 3 seconds of video or carousel imagery.
 
@@ -122,7 +129,7 @@ digital goods, spare parts with unclear fit, wholesale bundles).
 
 If ACCEPT, write the marketing payload:
 - `marketing_ad_copy`: compelling shopper-facing copy for the Australian \
-market in this niche, grounded ONLY in the supplied product data.
+market in this brand, grounded ONLY in the supplied product data.
 - `key_features`: 3-5 concrete marketing bullets derived ONLY from the \
 title/description — never invent specifications.
 - `suggested_retail_aud`: the realistic Australian retail price described \
@@ -157,8 +164,8 @@ def _build_user_message(raw: RawSupplierProduct) -> str:
         "target_country": "AU",
     }
     return (
-        "Evaluate this verified supplier product for the Australian "
-        "dropshipping store:\n\n" + json.dumps(payload, indent=2)
+        "Evaluate this verified supplier product for The Morning Anthem "
+        "(Australia-first launch):\n\n" + json.dumps(payload, indent=2)
     )
 
 
@@ -198,7 +205,7 @@ def _reconcile(
         logger.info(
             "Downgraded ACCEPT to REJECT for %r: reconciled margin %.2f AUD "
             "/ markup %.2fx fails the margin floor against the real listed "
-            "cost %.2f AUD",
+            "cost %.2f AUD (The Morning Anthem, Australia-first launch)",
             raw.product_title, margin, markup, cogs,
         )
         evaluation.verdict = "REJECT"

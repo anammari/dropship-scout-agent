@@ -1,38 +1,33 @@
-"""Step 5 — the keyword bank and its dual-supplier ingestion (plan §7).
+"""Step 5 — the keyword bank and its CJ-only ingestion (plan §7).
 
-The bank is the Step-4 deliverable (`outputs/json/step-4-gold-keywords.json`,
-untracked): gold-standard supplier search keywords, each typed with the
-gold product it came from, its pillar, its role (broad/modifier) and the
-broad term a modifier tightens. The widened Step-4 run generates the bank in
-pool chunks (~300 keywords at the default table); the loader is size-agnostic
-— it validates structure, not a bank-size band.
+The bank is the Step-4 deliverable
+(`outputs/json/morning-anthem-step-4-keyword-bank.json`, untracked):
+gold-standard supplier search keywords, each typed with the gold product it
+came from, its pillar, and its match kind (`exact` verbatim title or
+`tight_fallback`). The loader is size-agnostic — it validates structure,
+not a bank-size band.
 
-Step 5 ingests EVERY bank keyword through BOTH supplier pipelines — the CJ
-MCP server and the AliExpress Dropshipping Center — and exports what
-survives into per-supplier folders of the gold-kernel tree:
+Step 5 ingests EVERY bank keyword through the CJdropshipping MCP pipeline —
+The Morning Anthem's sole supplier engine (the AliExpress Dropshipping
+Center extractor was retired on this branch) — and exports what survives
+into the gold-kernel tree:
 
-    <OPTIMAL_EXPORT_DIR>/cjdropshipping/product-NN/…
-    <OPTIMAL_EXPORT_DIR>/aliexpress/product-NN/…
+    <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/…
 
-**This is not `run_pipeline`'s fallback chain.** Auto mode stops at the first
-engine that answers; the bank needs both engines to run for every keyword,
-because the point of the step is to obtain the optimal product from each
-supplier and let Step 6 rank them against each other. So each (keyword,
-engine) leg is its own call into the existing `run_pipeline` with a
-single-engine list, a shared evaluator and a per-engine exporter:
+The per-(keyword, engine) leg is its own call into the existing
+`run_pipeline` with a single-engine list, a shared evaluator and a
+per-engine exporter:
 
 * an engine that is unconfigured/blocked/timeout for a leg is logged and
-  skipped **for that leg only** — the other engine still runs that keyword;
-* an engine that fails every keyword is recorded in the summary;
+  skipped **for that leg only**;
 * only when **every** registered engine failed **every** keyword does
   ingestion raise, which the runner renders as the intervention block.
 
 Every gate of the supplier core still applies untouched, because the legs run
-the real extractors and the real exporter: CJ's commercial gate (§6.2), MCP
-payload liveness gate (§5) and mandatory freight quote (§6.3); the DS
-Center's winning-product gate (§6.1) and AU market pin; the LLM viability
-gate, the margin floor, and the 3-image gallery gate before anything is
-written.
+the real extractor and the real exporter: CJ's commercial gate (§6.2), MCP
+payload liveness gate (§5) and mandatory freight quote (§6.3, quoted to
+Australia from China at launch); the LLM viability gate, the margin floor,
+and the 3-image gallery gate before anything is written.
 """
 
 from __future__ import annotations
@@ -49,14 +44,14 @@ from src.keywords.generator import carries_banned_token
 
 logger = logging.getLogger(__name__)
 
-# The two supplier engines the bank ingests through, in default order, and
-# the subfolder each one writes into under OPTIMAL_EXPORT_DIR. The keys are
-# the same supplier keys SUPPLIER_PRIORITY_ORDER and the CLI's --extractor
-# use, so the registry in src.main needs no translation.
-BANK_ENGINES = ("cjdropshipping", "aliexpress")
+# The supplier engine the bank ingests through (CJdropshipping is The Morning
+# Anthem's sole supplier), and the subfolder it writes into under
+# MORNING_ANTHEM_EXPORT_DIR. The key is the same supplier key
+# SUPPLIER_PRIORITY_ORDER and the CLI's --extractor use, so the registry in
+# src.main needs no translation.
+BANK_ENGINES = ("cjdropshipping",)
 OPTIMAL_SUPPLIER_DIRS = {
     "cjdropshipping": "cjdropshipping",
-    "aliexpress": "aliexpress",
 }
 
 # PipelineSummary counters folded into the per-engine funnel. Kept as an
@@ -98,17 +93,19 @@ class BankKeyword:
     """One row of the Step-4 keyword bank.
 
     `product` and `pillar` are provenance (they tie the keyword back to the
-    gold product it came from and stay in the bank file); `role`/`tightens`
-    describe how the keyword sits against its broad term. Only `keyword`
+    gold product it came from and stay in the bank file); `match` records
+    whether the keyword is the verbatim product title (`exact`) or a
+    tightly-specific LLM-authored variant (`tight_fallback`). Only `keyword`
     reaches a supplier query.
     """
 
     keyword: str
     product: str
     pillar: str
-    role: str
-    tightens: Optional[str]
-    rationale: str
+    match: str = "exact"
+    role: str = ""
+    tightens: Optional[str] = None
+    rationale: str = ""
 
 
 @dataclass
@@ -139,7 +136,7 @@ def load_keyword_bank(path: Optional[Path] = None) -> List[BankKeyword]:
     depth — the Step-4 generator's pool validator already enforces it, so a
     hit here means the bank file was hand-edited or generated elsewhere.
     """
-    bank_path = Path(path or settings.KEYWORD_BANK_PATH)
+    bank_path = Path(path or settings.MORNING_ANTHEM_KEYWORD_BANK_PATH)
     try:
         raw = bank_path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -193,16 +190,24 @@ def load_keyword_bank(path: Optional[Path] = None) -> List[BankKeyword]:
                 "python scripts/generate_gold_keywords.py"
             )
         tightens = row.get("tightens")
+        match = str(row.get("match") or "exact").strip().lower()
+        if match not in ("exact", "tight_fallback"):
+            match = "exact"
         keywords.append(
             BankKeyword(
                 keyword=keyword,
                 product=str(row.get("product") or ""),
                 pillar=str(row.get("pillar") or ""),
+                match=match,
                 role=str(row.get("role") or ""),
                 tightens=str(tightens).strip() if tightens else None,
                 rationale=str(row.get("rationale") or ""),
             )
         )
+    # Exact-title keywords ingest before their tight fallbacks, so the
+    # highest-precision query gets the first chance at the per-keyword
+    # export slots and a fallback only fills what the exact title could not.
+    keywords.sort(key=lambda kw: 0 if kw.match == "exact" else 1)
     return keywords
 
 
@@ -234,11 +239,9 @@ def _default_extractor_factories() -> Dict[str, Callable[[], Any]]:
 def _default_exporters(export_root: Path, engines: Sequence[str]) -> Dict[str, Any]:
     """One exporter per engine, each bound to its own supplier subfolder.
 
-    Numbering and the already-exported duplicate check are per exporter, so
-    the two suppliers number their packages independently and a product
-    landing from both suppliers is exported twice — intentionally, as two
-    fulfilment options (§7.2). The supplier subfolder is created on the first
-    write, so a run that exports nothing leaves no empty directory behind.
+    Numbering and the already-exported duplicate check are per exporter. The
+    subfolder is created on the first write, so a run that exports nothing
+    leaves no empty directory behind.
     """
     return {
         engine: CandidateExporter(
@@ -268,9 +271,9 @@ async def ingest_keyword_bank(
     fast on the first leg rather than after supplier quota is spent).
 
     Raises `BankIngestionFailedError` when every registered engine failed
-    every keyword, and lets `LLMConfigError` / `DsCenterSessionExpiredError`
-    from the leg propagate — both are boundary conditions the runner renders
-    as interventions rather than per-keyword drops.
+    every keyword, and lets `LLMConfigError` from the leg propagate — both
+    are boundary conditions the runner renders as interventions rather than
+    per-keyword drops.
     """
     from src.main import PipelineExtractionFailedError, run_pipeline
 
@@ -280,7 +283,7 @@ async def ingest_keyword_bank(
     extractor_factories = extractor_factories or _default_extractor_factories()
     engines = _resolve_engines(extractor_factories)
 
-    export_root = Path(export_root or settings.OPTIMAL_EXPORT_DIR)
+    export_root = Path(export_root or settings.MORNING_ANTHEM_EXPORT_DIR)
     exporters = exporters if exporters is not None else _default_exporters(
         export_root, engines
     )
@@ -320,8 +323,7 @@ async def ingest_keyword_bank(
                     exporter=exporter,
                 )
             except PipelineExtractionFailedError as exc:
-                # Unconfigured / blocked / timed out for this leg only — the
-                # other engine still runs this keyword (plan §7.1).
+                # Unconfigured / blocked / timed out for this leg only.
                 counters["leg_failures"] += 1
                 logger.warning(
                     "Bank leg %s/%r failed — skipping this leg: %s",
@@ -360,7 +362,7 @@ async def ingest_keyword_bank(
             raise BankIngestionFailedError(
                 f"Every registered bank engine failed every one of the "
                 f"{summary.keywords_attempted} keyword(s): {reasons}. Nothing "
-                "could be read from either supplier."
+                "could be read from the supplier."
             )
     return summary
 

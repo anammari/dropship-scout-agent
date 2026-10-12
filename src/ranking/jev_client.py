@@ -92,22 +92,43 @@ SIMILARITY_LEVELS: List[str] = [
 
 #: Winning-value levels, ordered worst -> best. Margin/markup are the real
 #: figures carried in a package's `metadata.json`; demand evidence is what the
-#: gold reference records. The bar wants BOTH: strong AU demand evidence AND
+#: gold reference records. The bar wants BOTH: strong demand evidence AND
 #: strong gated economics, never one propping up the other.
 VALUE_LEVELS: List[str] = [
     "no sale evidence and weak economics",
     "weak evidence and marginal economics",
     "moderate demand evidence or acceptable economics",
     "good demand evidence and strong gated economics",
-    "strong AU demand evidence plus strong gated economics",
+    "strong demand evidence plus strong gated economics",
 ]
 
-#: Pillar options for the per product choice question, keyed by the pillar
-#: value used across the pipeline; `discard` is a real verdict, not an error.
+#: The Morning Anthem merchandising pillars, with their product lines, as
+#: Jev choice options. Single source of truth for the pillar keys used across
+#: the pipeline (the Step-3 curator and the Step-4 keyword generator import
+#: this set); `discard` is a real verdict, not an error — a cosmetic or
+#: consumable, a product carrying celebrity or cultural-icon IP, or an item
+#: that cannot be air-freighted to Australia.
 PILLAR_OPTIONS: Dict[str, str] = {
-    "curated_home": "home, kitchen or lifestyle goods for the modern day to day",
-    "self_care_rituals": "personal care, grooming and wellbeing ritual tools",
-    "other": "a genuine product that fits neither named pillar",
+    "brew_fuel": (
+        "The Brew & Fuel: manual coffee tools, espresso distribution gear, "
+        "portable milk frothers, minimalist tumblers, matcha accessories"
+    ),
+    "sunrise_move": (
+        "The Sunrise Move: aesthetic active gear, commuter backpacks, "
+        "waterproof pouches, hands-free dog leashes, sand-free towels"
+    ),
+    "mindful_awakening": (
+        "The Mindful Awakening: backflow incense burners, digital gratitude "
+        "journals, shower steamers, meditation accessories"
+    ),
+    "restful_reset": (
+        "The Restful Reset: silk eye masks, ergonomic recovery pillows, "
+        "sunrise alarm clocks, facial ice rollers"
+    ),
+    "morning_table": (
+        "The Morning Table: cutting boards, garlic presses/mashers, "
+        "breakfast preparation and serving kitchen aids"
+    ),
     "discard": (
         "fails the store's boundaries: a cosmetic or consumable, celebrity or "
         "cultural-icon IP, or an item that cannot be air-freighted to Australia"
@@ -143,10 +164,11 @@ QUESTIONS: Dict[str, Dict[str, Any]] = {
     "pillar": {
         "type": "choice",
         "instructions": (
-            "Classify `products.{slug}` into exactly one pillar. Choose "
-            "`discard` when it fails the store's boundaries — a cosmetic or "
-            "consumable, a product carrying celebrity or cultural-icon IP, or "
-            "an item that cannot be air-freighted to Australia."
+            "Classify `products.{slug}` into exactly one of The Morning "
+            "Anthem's five merchandising pillars. Choose `discard` when it "
+            "fails the store's boundaries — a cosmetic or consumable, a "
+            "product carrying celebrity or cultural-icon IP, or an item that "
+            "cannot be air-freighted to Australia."
         ),
         "criteria": PILLAR_OPTIONS,
     },

@@ -18,7 +18,7 @@ import pytest
 
 from src.config import settings
 from src.evaluators.gold_curator import GoldProductCurator
-from src.extractors.google_shopping import ShoppingRow
+from src.extractors.shopping_row import ShoppingRow
 from src.extractors.google_shopping_hasdata import (
     GOOGLE_DOMAINS,
     HasDataNotConfiguredError,
@@ -129,8 +129,29 @@ def test_each_row_is_attributed_to_its_own_keyword():
     assert [row.source_keyword for row in rows] == ["french press", "tea infuser"]
 
 
-def test_google_domain_follows_the_pipeline_country(monkeypatch):
-    monkeypatch.setattr(settings, "TARGET_COUNTRY", "GB")
+def test_default_scrape_is_pinned_to_the_au_market(monkeypatch):
+    # Australia-first launch: demand signals and price benchmarks reflect
+    # Australian shopper behaviour and AUD retail pricing.
+    monkeypatch.delenv("SHOPPING_GL", raising=False)
+    monkeypatch.delenv("SHOPPING_DOMAIN", raising=False)
+    from src.config import load_settings
+
+    monkeypatch.setattr(settings, "SHOPPING_GL", load_settings().SHOPPING_GL)
+    monkeypatch.setattr(
+        settings, "SHOPPING_DOMAIN", load_settings().SHOPPING_DOMAIN
+    )
+    scraper, requests = _scraper()
+    scraper.scrape_keywords(["french press"])
+    (request,) = requests
+    assert request.url.params["gl"] == "au"
+    assert request.url.params["domain"] == "google.com.au"
+
+
+def test_google_domain_follows_the_configured_market(monkeypatch):
+    # The market pin is configurable so the later global expansion is a config
+    # change, not a code change.
+    monkeypatch.setattr(settings, "SHOPPING_GL", "gb")
+    monkeypatch.setattr(settings, "SHOPPING_DOMAIN", "google.co.uk")
     scraper, requests = _scraper()
     scraper.scrape_keywords(["french press"])
     (request,) = requests
@@ -138,13 +159,14 @@ def test_google_domain_follows_the_pipeline_country(monkeypatch):
     assert request.url.params["domain"] == "google.co.uk"
 
 
-def test_unknown_country_falls_back_to_google_com(monkeypatch):
-    monkeypatch.setattr(settings, "TARGET_COUNTRY", "ZZ")
+def test_an_unmapped_market_falls_back_to_the_configured_domain(monkeypatch):
+    monkeypatch.setattr(settings, "SHOPPING_GL", "zz")
+    monkeypatch.setattr(settings, "SHOPPING_DOMAIN", "google.com")
     scraper, requests = _scraper()
     scraper.scrape_keywords(["french press"])
     (request,) = requests
     assert request.url.params["domain"] == "google.com"
-    assert "AU" in GOOGLE_DOMAINS  # the pinned market stays mapped
+    assert "au" in GOOGLE_DOMAINS  # the launch market stays mapped
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +444,7 @@ def test_parsed_rows_clear_the_curators_demand_evidence_filter():
                                             "products": [
                                                 {
                                                     "url": row.url,
-                                                    "pillar": "curated_home",
+                                                    "pillar": "brew_fuel",
                                                     "compliance_note": "Inert kitchen tool.",
                                                     "unit_economics_note": None,
                                                 }
@@ -467,37 +489,40 @@ def _runner():
     return runner
 
 
-def test_build_scraper_selects_the_requested_source():
-    from src.extractors.google_shopping import GoogleShoppingScraper
-
+def test_spend_plan_prices_hasdata_in_credits(capsys):
     runner = _runner()
-    assert isinstance(runner.build_scraper("apify", 10), GoogleShoppingScraper)
-    assert isinstance(
-        runner.build_scraper("hasdata", 40), HasDataShoppingScraper
-    )
-
-
-def test_spend_plan_prices_hasdata_in_credits_and_apify_in_usd(capsys):
-    runner = _runner()
-    runner.print_spend_plan("hasdata", ["a", "b"], 40)
+    runner.print_spend_plan(["a", "b"], 20)
     hasdata = capsys.readouterr().out
     assert "2 keyword(s) x 1 request" in hasdata
     assert "20 credit(s)" in hasdata
     assert "$" not in hasdata
 
-    runner.print_spend_plan("apify", ["a", "b"], 10)
-    apify = capsys.readouterr().out
-    assert "planned Apify spend" in apify
-    assert "$" in apify
 
-
-def test_source_label_names_the_active_source():
+def test_runner_has_no_apify_source_left():
+    # HasData is the pipeline's exclusive data provider — the Apify actor
+    # wrapper and the --source switch were retired on the Morning Anthem
+    # branch, so the runner must not offer a second source.
     runner = _runner()
-    assert runner.source_label("hasdata") == "hasdata-google-shopping"
-    assert runner.source_label("apify") == settings.APIFY_GS_ACTOR
+    assert not hasattr(runner, "SOURCES")
+    assert not hasattr(runner, "build_scraper")
+    assert not hasattr(runner, "source_label")
 
 
-def test_default_source_is_apify():
-    # An existing invocation must be unchanged by the module gaining a source.
+def test_runner_enforces_the_keyword_cap_and_pilot_budget(monkeypatch, tmp_path):
+    """The planned spend is checked BEFORE any credit moves: the keyword cap
+    and the pilot cap both fail closed rather than letting a run overspend."""
+    import sys
+
     runner = _runner()
-    assert runner.SOURCES[0] == "apify"
+    path = tmp_path / "step2.json"
+    path.write_text(
+        json.dumps({"keywords": [{"keyword": f"kw{i}"} for i in range(5)]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner.settings, "HASDATA_GS_MAX_KEYWORDS", 2)
+    monkeypatch.setattr(sys, "argv", [
+        "run_gold_standard_research.py", "--keywords", str(path),
+    ])
+    with pytest.raises(SystemExit) as exc:
+        runner.main()
+    assert exc.value.code == 1
