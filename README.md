@@ -238,13 +238,14 @@ its MTOP/Playwright machinery, its AU market pin, its winning-product gate and
 its saved-session script were deleted in the 2026-10 rebrand: CJ became the
 pipeline's only supplier. See `CLAUDE.md` §1 and §6.1.
 
-### 2.3 Step 2 — trend keywords and the Jev product-intent gate
+### 2.3 Step 2 — trend keywords: Jev gate, then Jev selection
 
 Turns the HasData Google Trends research into the AU product-search strings
-Step 3 scrapes. **Google Trends answers "what are people searching", not "what
-are people buying"** — the same series carries how-to queries, news topics,
-brand controversies and service/digital goods — so every candidate string is
-classified by Jev before it may cost a Google Shopping request.
+Step 3 scrapes, through **two Jev passes**: a product-intent gate, then a
+quality-ranked selection. **Google Trends answers "what are people searching",
+not "what are people buying"** — the same series carries how-to queries, news
+topics, brand controversies and service/digital goods — so every candidate
+string is classified before it may cost a Google Shopping request.
 
 ```bash
 source .venv/bin/activate && python scripts/gate_trend_keywords.py \
@@ -270,11 +271,28 @@ source .venv/bin/activate && python scripts/gate_trend_keywords.py \
   credit. Brand-manufacturer queries (`nespresso frother`) still pass — they are
   genuine product searches, and excluding branded *goods* is Step 3's curator's
   job.
-- **Deliverable**: the gated list overwrites
-  `MORNING_ANTHEM_TREND_KEYWORDS_PATH`; the pre-gate candidates are kept beside
-  it as `…-raw.json` with the verdict on every row, so each drop is auditable.
-  Jev is billed by OpenRouter in **USD**, not HasData credits — this step does
-  not touch the 1,000-credit envelope.
+- **The selection pass** (`src/research/trend_select.py`). The gated pool is
+  wider than the scrape can afford, so Jev scores every survivor along five
+  ordered *sourcing-quality* levels — one `score` question per candidate — and
+  **code** cuts the best `TREND_SELECT_TARGET` (30). The state hands the model
+  everything it can use: each query, its pillar, its Trends evidence verbatim
+  and the kind of figure it is (a 5-year mean and a rising query are different
+  claims), plus the brand line and all five pillar descriptions. A per-pillar
+  floor (`TREND_SELECT_MIN_PER_PILLAR`, 2) is applied before the score fill, so
+  a crowded pillar cannot consume every paid slot. Scoring is batched at 12 per
+  call; a failed batch retries once, then its rows rank last — and if *nothing*
+  scored, nothing is selected and the runner halts, because scraping an unranked
+  pool would spend the budget on no basis.
+- **Deliverables**: the **selected** keywords go to
+  `MORNING_ANTHEM_TREND_KEYWORDS_PATH` (Step 3's intake, so its credit envelope
+  is exactly that list); the full gated pool goes beside it as `…-gated.json`
+  (the re-run reserve — it already cost its trends credits, so a different
+  `--target` needs no new Trends spend); the pre-gate candidates as `…-raw.json`
+  with the verdict on every row. Jev is billed by OpenRouter in **USD**, not
+  HasData credits — neither pass touches the 1,000-credit envelope.
+- **`--skip-selection`** keeps every survivor as the intake (gate only), and
+  `--target` / `--min-per-pillar` override the cut for a pilot. `--target` **is**
+  the Step-3 budget: 10 credits per keyword.
 
 ### 2.4 Step 3 — gold-standard product research
 

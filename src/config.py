@@ -346,6 +346,20 @@ class Settings:
         self.TRENDS_MAX_CALLS: int = _parse_int(
             os.getenv("TRENDS_MAX_CALLS"), default=10
         )
+        # Step-2 Jev SELECTION pass: the gated pool is wider than the Step-3
+        # scrape can afford (one Google Shopping request per keyword), so Jev
+        # scores every survivor and code cuts the best TREND_SELECT_TARGET of
+        # them, with a per-pillar floor so a strong pillar cannot crowd a
+        # weaker one out of the launch. The target IS the Step-3 budget.
+        self.TREND_SELECT_BATCH_SIZE: int = _parse_int(
+            os.getenv("TREND_SELECT_BATCH_SIZE"), default=12
+        )
+        self.TREND_SELECT_TARGET: int = _parse_int(
+            os.getenv("TREND_SELECT_TARGET"), default=30
+        )
+        self.TREND_SELECT_MIN_PER_PILLAR: int = _parse_int(
+            os.getenv("TREND_SELECT_MIN_PER_PILLAR"), default=2
+        )
         # --- Step 3: Jev pillar gate (Morning Anthem pipeline) ---
         # Candidate products per System One call. One choice question rides
         # each product (`<i>__pillar`); 4 products = 4 questions per call.

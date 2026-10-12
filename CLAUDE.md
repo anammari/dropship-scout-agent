@@ -535,6 +535,9 @@ with the AliExpress extractor (§1). CJ's MCP server needs only its token.
 | `JEV_SHORTLIST_MIN_SCORE` | `3.5` | Step-6 tier floor: `rank_score` ≥ this → shortlist (1–5 scale) |
 | `JEV_REVIEW_MIN_SCORE` | `2.5` | Step-6 tier floor: `rank_score` ≥ this → review, else disregard |
 | `TREND_GATE_BATCH_SIZE` | `8` | Step-2 Jev product-intent gate: candidate strings per System One call |
+| `TREND_SELECT_BATCH_SIZE` | `12` | Step-2 Jev **selection** pass: candidates per System One call |
+| `TREND_SELECT_TARGET` | `30` | how many keywords the selection picks for the Step-3 scrape — **this IS the Step-3 budget** (10 credits each) |
+| `TREND_SELECT_MIN_PER_PILLAR` | `2` | per-pillar floor in the selection cut, so a crowded pillar cannot consume every paid slot (0 = pure best-of) |
 | `PILLAR_GATE_BATCH_SIZE` | `4` | Step-3 Jev pillar gate: candidate products per System One call |
 | `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter (general intake §9) |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads |
@@ -1636,9 +1639,50 @@ HasData Shopping request:
    they are genuine product searches, and excluding branded goods is the
    Step-3 curator's job.
 
-The gated list overwrites the Step-2 deliverable; the pre-gate candidates are
-kept beside it as `…-raw.json` with the verdict on each row, so every drop is
-auditable.
+The pre-gate candidates are kept as `…-raw.json` with the verdict on each row,
+so every drop is auditable.
+
+#### Step 2 — the Jev selection pass (`src/research/trend_select.py`)
+
+The gated pool is wider than the Step-3 scrape can afford (one Google Shopping
+request per keyword, 10 HasData credits each), so the narrowing is a **decision
+made by Jev**, not a hand-pick — the same call shape the Step-6 ranker uses:
+
+* **One score question per candidate**, `<i>__keyword_quality`, over five
+  ordered levels measuring one axis: how good the string is as a
+  supplier-sourcing keyword for its pillar.
+* **The state carries the context a decision model needs**: per candidate the
+  query, its pillar, its Trends evidence **verbatim** and the *kind* of evidence
+  (5-year mean vs rising/related-query figure — not the same claim); once per
+  call the brand line, the task, the selection size and the five pillar
+  descriptions.
+* **The cut is code**: sort by score, tie-break on evidence-then-string (so the
+  selection is reproducible), take the top `TREND_SELECT_TARGET` (30) with a
+  per-pillar floor (`TREND_SELECT_MIN_PER_PILLAR`, 2) applied first, so a
+  crowded pillar cannot consume every paid slot. Batched at
+  `TREND_SELECT_BATCH_SIZE` (12), inside the vendor's ~13-question envelope.
+* **Fail-closed**: a failed batch retries once, then its candidates are
+  unclassified and rank last. If **nothing** scored, **nothing is selected** and
+  the runner raises `Step 2 Selection Failed` — spending the Step-3 budget on an
+  unranked pool is the failure this pass prevents.
+* Deliverables: the selected N go to
+  `MORNING_ANTHEM_TREND_KEYWORDS_PATH` (Step 3's intake, so its credit envelope
+  is exactly that list); the full gated pool goes to `…-gated.json` as the
+  **re-run reserve** — it already cost its HasData credits, so a different
+  `--target` can be tried without paying for trends again.
+
+**Pilot evidence (2026-10-12, live, 3 Jev calls, no HasData credits)** over the
+13-candidate pool: gate kept 12; selection scored them 4.95 (`hand held milk
+frother`), 4.69 (`matcha whisk`), 4.51, 4.00, 3.67, 3.67, 3.20, 3.10, 3.08,
+2.80, 2.24, 1.56 (`breville barista express`). Two findings:
+
+1. **The brand-query problem is solved here, not by a blacklist.** The brand and
+   comparison strings were not merely outscored for the top N — they scored at
+   the *bottom of the pool* (`breville barista express` lowest of all twelve),
+   because a brand-plus-model query is a poor sourcing keyword. No brand rule is
+   needed.
+2. **The pillar floor works**: three low-scoring rows from three pillars entered
+   on the floor while four higher-scoring `brew_fuel` rows stayed in reserve.
 
 #### Live pilot evidence (2026-10-12) — read-only, 20 HasData credits
 
@@ -1685,6 +1729,9 @@ equivalent.
 2. **Step 4's exact-title-first strategy is not built** — the bank still emits
    broad/modifier pairs.
 3. **`sunrise_move` seeds** for the production Step-2 research pass.
-4. **Branded-goods handling at the Step-3 curator** — the gate admits brand
-   product searches, so the curator's rule is what excludes them.
+4. **`TREND_SELECT_TARGET` is the Step-3 budget.** 30 keywords = 300 credits;
+   changing it changes the scrape size, not just the list.
+5. **The production Step-2 research pass** (≤ 10 Trends calls) has not been run
+   — the pilot pool is 13 candidates, so the selection has only been exercised
+   on a small pool (a `--target` wider than the pool selects everything).
 

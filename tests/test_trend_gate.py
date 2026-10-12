@@ -534,6 +534,11 @@ def test_runner_writes_the_filtered_file_and_reports_the_tally(
             [_answers(2, ["product_search", "news_or_brand"])], batch_size=batch_size
         ),
     )
+    # The runner now also runs the selection pass; stub it so this test drives
+    # the GATE, and no real Jev client is ever built.
+    monkeypatch.setattr(
+        runner, "TrendKeywordSelector", lambda **kwargs: _PassthroughSelect()
+    )
     code = runner.main(
         ["--input", str(source), "--output", str(output), "--batch-size", "8"]
     )
@@ -547,6 +552,25 @@ def test_runner_writes_the_filtered_file_and_reports_the_tally(
     assert [row["keyword"] for row in gated["keywords"]] == [
         "portable milk frother"
     ]
+
+
+class _PassthroughSelect:
+    """Selects everything, so a gate test exercises only the gate."""
+
+    def select(self, candidates):
+        from src.research.trend_select import ScoredKeyword
+
+        return [
+            ScoredKeyword(
+                keyword=row.keyword,
+                pillar=row.pillar,
+                demand_evidence=row.demand_evidence,
+                quality_score=5.0,
+                rank=index,
+                selected=True,
+            )
+            for index, row in enumerate(candidates, start=1)
+        ]
 
 
 def test_runner_all_dropped_halts_with_the_exhausted_block(
@@ -564,6 +588,9 @@ def test_runner_all_dropped_halts_with_the_exhausted_block(
         lambda batch_size=None: _gate(
             [_answers(1, ["informational"])], batch_size=batch_size
         ),
+    )
+    monkeypatch.setattr(
+        runner, "TrendKeywordSelector", lambda **kwargs: _PassthroughSelect()
     )
     code = runner.main(
         ["--input", str(source), "--output", str(output)]
