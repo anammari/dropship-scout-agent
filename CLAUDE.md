@@ -184,7 +184,7 @@ dropship-scout-agent/
 │   ├── generate_gold_keywords.py     # Step-4 keyword bank runner (§13.3)
 │   ├── ingest_keyword_bank.py        # Step-5 CJ ingestion runner (§13.6)
 │   └── rank_optimal_candidates.py    # Step-6 Jev ranking runner (report only, no deletion)
-└── tests/                   # 534 hermetic tests, zero network (14 modules + conftest)
+└── tests/                   # 690 hermetic tests, zero network (19 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
@@ -580,7 +580,7 @@ it refuses to run with a scratch directory anywhere inside the real workspace tr
 to a runner — it is the only thing that exercises the *seams* between the steps.
 `tests/test_rehearsal.py` keeps it from rotting.
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — **534
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — **690
   tests, zero network** (httpx.MockTransport + fake MCP sessions + scripted
   LLM/System One transports). Every module's count is pinned against the
   pre-rebrand baseline except the two retired test modules, and the conftest
@@ -615,17 +615,41 @@ to a runner — it is the only thing that exercises the *seams* between the step
   of the only other supplier. It writes to `tmp_path` and never touches the
   real supplier trees — see §13.6.
 - `tests/test_keyword_generator.py` covers the Step-4 gold-keyword engine:
-  the template prompt (the product table is a `{PRODUCT_TABLE}` slot, never
-  a hardcoded list), the table rendering (cells verbatim, `null` → `—`), the
-  gold-deliverable read with its remediation errors, the demand-ranked
-  selection with its boundary-name exclusion, its one-row-per-normalised-title
-  collapse and its `MAX_PER_SOURCE_KEYWORD` per-topic cap, the adaptive
-  per-product target and floor, batching with the
-  per-batch note and the carried do-not-repeat list, the merged-pool
-  validation contract (broad/modifier pairing, banned tokens, band,
-  coverage, floor), the neediest-first duplicate collapse, and salvaging; it
-  uses a tmp_path gold fixture and never reads the real `outputs/` tree —
-  see §13.3.
+  the exact-title derivation (`exact_keyword` is the title's own words in its
+  own order, lowercased, apostrophes removed rather than splitting the word,
+  runs of non-alphanumerics collapsed, idempotent, adding and reordering
+  nothing, and empty for an unusable title), the **20-word truncation bound**
+  (a stuffed title is truncated rather than costing its product a keyword, the
+  cut never lands on a trailing function word, and a title inside the bound is
+  left completely alone), `normalized_title_words`, and `build_exact_rows`
+  (exactly one `exact` row per product, a titleless product skipped); the
+  template prompt (the product table is a `{PRODUCT_TABLE}` slot, never a
+  hardcoded list, stating the AICIS boundary and the at-most-one-fallback rule
+  and asking for no `pillar` or `match` field), the table rendering (cells
+  verbatim, `null` → `—`), and the gold-deliverable read with its remediation
+  errors naming Step 3. The demand-ranked selection is covered for its
+  boundary-name exclusion, its one-row-per-normalised-title collapse and its
+  `MAX_PER_SOURCE_KEYWORD` per-topic cap (the cap keeping a topic's strongest
+  rows and never its whole pool). `validate_bank` is covered on both sides of
+  its split: the **code invariants that fail the run** (an exact keyword that
+  does not match its own title, a product with no exact row, a row naming an
+  unknown product, a duplicate keyword, a row claiming another product's
+  pillar) and the **model slips that cost only their own row** (a fallback
+  outside the word bounds, punctuated or capitalised, carrying a banned token,
+  or sharing no concrete word with its own title), plus a valid variant being
+  accepted. `generate_bank` is covered for the exact-row-plus-fallbacks
+  hand-off, an empty fallback list, the per-batch note and carried
+  do-not-repeat list, each batch table carrying only its own products, a model
+  row claiming `match="exact"` or naming an unknown product being ignored, a
+  failed fallback dropped rather than fatal, a fallback duplicating another
+  product's exact keyword deduped, fenced and truncated responses, an
+  empty-completion error naming the finish reason, HTTP and transport
+  failures, and that a failed bank **never writes a partial result**. Also
+  covered: the neediest-first duplicate collapse and its tie-break, the
+  `parse_llm_keywords` salvage, the banned-token screen, the five pillars,
+  the generator's own config guards, and the runner's plan/write/halt paths.
+  It uses a tmp_path gold fixture and never reads the real `outputs/` tree —
+  see §13.8.
   (`tests/test_google_shopping.py` — the retired Apify wrapper's module —
   and `tests/test_aliexpress_ds.py` are deleted with their subjects; the gold
   curator's coverage lives in `tests/test_google_shopping_hasdata.py`.)
