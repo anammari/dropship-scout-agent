@@ -40,7 +40,7 @@ official **MCP server** (StreamableHTTP) — see §5 — and it is the pipeline'
           Liveness Gate (§5) and the mandatory Freight Quote (§6.3)
                          │  List[RawSupplierProduct]  (verified ground truth)
                          ▼
-[Stage 2] LLM viability & marketing evaluation (deepseek-v4-flash:cloud)
+[Stage 2] LLM viability & marketing evaluation (deepseek-v4.1-flash)
                          ▼
 [Stage 3] Deterministic CDN image download (image_sourcing.py, zero LLM)
                          ▼
@@ -506,7 +506,7 @@ with the AliExpress extractor (§1). CJ's MCP server needs only its token.
 | `CJ_MCP_TOKEN` | — | cj_mcp_client / cj_mcp_extractor (the sole supplier; token in URL path) |
 | `CJ_MCP_BASE_URL` | `https://developers.cjdropshipping.com/mcp` | cj_mcp_client (token appended) |
 | `LLM_BASE_URL` / `LLM_API_KEY` | — | llm_filter |
-| `LLM_MODEL` | `deepseek-v4-flash:cloud` | llm_filter |
+| `LLM_MODEL` | `deepseek-v4.1-flash` | llm_filter |
 | `SUPPLIER_PRIORITY_ORDER` | `cjdropshipping` | extractor chain (one engine; the chain machinery stays) |
 | `USD_TO_AUD` | `1.55` | all USD→AUD price math (CJ quotes USD; the store sells in AUD) |
 | `MIN_CJ_LISTED_COUNT` | `150` | CJ commercial gate (minimum `listedNum`; CJ reports no sales figure) |

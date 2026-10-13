@@ -100,9 +100,13 @@ class Settings:
         # --- Credentials (all optional; extractors validate at use time) ---
         self.LLM_BASE_URL: str = os.getenv("LLM_BASE_URL") or ""
         self.LLM_API_KEY: str = os.getenv("LLM_API_KEY") or ""
-        # Plan Part C: defaults to deepseek-v4-flash:cloud when unset or
-        # empty; an explicit LLM_MODEL in .env / the environment still wins.
-        self.LLM_MODEL: str = os.getenv("LLM_MODEL") or "deepseek-v4-flash:cloud"
+        # Plan Part C: defaults to deepseek-v4.1-flash when unset or empty; an
+        # explicit LLM_MODEL in .env / the environment still wins. The pinned
+        # build matters: ollama.com retired `deepseek-v4-flash:0731` on
+        # 2026-09-25, so the old `deepseek-v4-flash:cloud` alias now answers
+        # HTTP 410 Gone on every call. `deepseek-v4.1-flash` is the live
+        # successor in the same tier.
+        self.LLM_MODEL: str = os.getenv("LLM_MODEL") or "deepseek-v4.1-flash"
         # CJdropshipping MCP token (src/pipeline/cj_mcp_client.py). Generated
         # on CJ's API Authorization page; embedded in the MCP endpoint URL as
         # a path segment. Optional — a missing token makes the CJ engine

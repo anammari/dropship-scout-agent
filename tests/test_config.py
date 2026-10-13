@@ -17,9 +17,9 @@ from src.config import digest_path, load_settings
 # ----------------------------------------------------------------------
 
 
-def test_llm_model_defaults_to_deepseek_v4_flash(monkeypatch):
+def test_llm_model_defaults_to_the_live_deepseek_flash_build(monkeypatch):
     monkeypatch.delenv("LLM_MODEL", raising=False)
-    assert load_settings().LLM_MODEL == "deepseek-v4-flash:cloud"
+    assert load_settings().LLM_MODEL == "deepseek-v4.1-flash"
 
 
 def test_llm_model_env_override_still_respected(monkeypatch):
@@ -30,7 +30,7 @@ def test_llm_model_env_override_still_respected(monkeypatch):
 def test_llm_model_empty_string_normalises_to_default(monkeypatch):
     # An empty pin is treated as unset, not as a literal empty model name.
     monkeypatch.setenv("LLM_MODEL", "")
-    assert load_settings().LLM_MODEL == "deepseek-v4-flash:cloud"
+    assert load_settings().LLM_MODEL == "deepseek-v4.1-flash"
 
 
 def test_missing_credentials_resolve_to_empty_strings(monkeypatch):
