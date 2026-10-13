@@ -23,6 +23,7 @@ from src.keywords.generator import (
     DEFAULT_MAX_PRODUCTS,
     MAX_EXACT_WORDS,
     MAX_FALLBACK_WORDS,
+    MAX_PER_SOURCE_KEYWORD,
     PILLARS,
     CandidateKeyword,
     KeywordGenerationConfigError,
@@ -322,7 +323,13 @@ def test_select_gold_products_excludes_boundary_named_products():
     assert len(names) == len(GOLD)
 
 
-def test_select_gold_products_collapses_to_one_row_per_source_keyword():
+def test_select_gold_products_caps_products_per_source_keyword():
+    """Different products sharing a Step-2 keyword now coexist — up to the cap.
+
+    The exact-title primary keyword removed the reason the old rule kept only the
+    strongest row: distinct titles no longer collide in the bank, so a topic may
+    supply several products without one swallowing the table.
+    """
     products = [
         _gold("Garlic Press A", source="garlic press",
               evidence="rating 4.9/5, 900 reviews"),
@@ -331,8 +338,39 @@ def test_select_gold_products_collapses_to_one_row_per_source_keyword():
         _gold("Eye Mask", source="silk eye mask"),
     ]
     names = [p["name"] for p in select_gold_products(products, limit=50)]
-    # The strongest row for that source keyword survives; the weaker is out.
-    assert sorted(names) == ["Eye Mask", "Garlic Press A"]
+    assert sorted(names) == ["Eye Mask", "Garlic Press A", "Garlic Press B"]
+
+
+def test_select_gold_products_cap_keeps_the_strongest_rows_of_a_topic():
+    products = [
+        _gold(f"Harness {label}", source="no pull dog harness", evidence=evidence)
+        for label, evidence in [
+            ("A", "rating 4.9/5, 4,000 reviews"),
+            ("B", "rating 4.8/5, 3,000 reviews"),
+            ("C", "rating 4.7/5, 2,000 reviews"),
+            ("D", "rating 4.6/5, 1,000 reviews"),
+        ]
+    ]
+    names = [p["name"] for p in select_gold_products(products, limit=50)]
+    # MAX_PER_SOURCE_KEYWORD strong rows survive; the weakest of the topic is out.
+    assert names == ["Harness A", "Harness B", "Harness C"]
+    assert len(names) == MAX_PER_SOURCE_KEYWORD
+
+
+def test_select_gold_products_collapses_rows_sharing_a_normalised_title():
+    """Two rows whose titles normalise alike emit the same exact keyword.
+
+    The dedupe key is now the title the primary keyword is derived from, so
+    rows differing only in case or punctuation cannot both spend a slot.
+    """
+    products = [
+        _gold("Silk Sleep Eye Mask", source="silk eye mask",
+              evidence="rating 4.9/5, 900 reviews"),
+        _gold("silk sleep eye mask!!", source="silk eye mask",
+              evidence="rating 4.2/5, 90 reviews"),
+    ]
+    names = [p["name"] for p in select_gold_products(products, limit=50)]
+    assert names == ["Silk Sleep Eye Mask"]
 
 
 def test_select_gold_products_under_the_cap_returns_everything():

@@ -618,8 +618,9 @@ to a runner — it is the only thing that exercises the *seams* between the step
   the template prompt (the product table is a `{PRODUCT_TABLE}` slot, never
   a hardcoded list), the table rendering (cells verbatim, `null` → `—`), the
   gold-deliverable read with its remediation errors, the demand-ranked
-  selection with its boundary-name exclusion and one-per-`source_keyword`
-  type collapse, the adaptive per-product target and floor, batching with the
+  selection with its boundary-name exclusion, its one-row-per-normalised-title
+  collapse and its `MAX_PER_SOURCE_KEYWORD` per-topic cap, the adaptive
+  per-product target and floor, batching with the
   per-batch note and the carried do-not-repeat list, the merged-pool
   validation contract (broad/modifier pairing, banned tokens, band,
   coverage, floor), the neediest-first duplicate collapse, and salvaging; it

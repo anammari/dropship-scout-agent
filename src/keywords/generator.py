@@ -25,7 +25,7 @@ keyword is the product's own title, uniqueness is free, coverage is one row per
 product, and a band has nothing left to enforce.
 
 What it keeps: the prompt template with its `{PRODUCT_TABLE}` slot, the
-demand-ranked / type-diverse / pillar-balanced product selection, the AICIS
+demand-ranked / title-diverse / pillar-balanced product selection, the AICIS
 banned-token boundary, the batched calls with JSON-tail salvage, and the
 neediest-first duplicate collapse.
 
@@ -63,6 +63,11 @@ DEFAULT_BATCH_SIZE = 4
 #: A safety bound on the product table, not a tuning knob: the gold list is
 #: expected to be ~55 rows, so this only bites if a run produces something wild.
 DEFAULT_MAX_PRODUCTS = 150
+#: How many distinct products one Step-2 `source_keyword` may contribute to the
+#: table. The per-topic cap that replaced the one-product-per-source collapse:
+#: a saturated topic should still yield its several genuinely different products,
+#: but not the whole table.
+MAX_PER_SOURCE_KEYWORD = 3
 #: A fallback keyword is supplier search vocabulary, 2–7 words.
 MIN_FALLBACK_WORDS = 2
 MAX_FALLBACK_WORDS = 7
@@ -348,17 +353,24 @@ def carries_banned_token(text: object) -> Optional[str]:
 def select_gold_products(
     products: Sequence[Dict], limit: int = DEFAULT_MAX_PRODUCTS
 ) -> List[Dict]:
-    """The strongest `limit` products: demand-ranked, type-diverse, pillar-balanced.
+    """The strongest `limit` products: demand-ranked, title-diverse, pillar-balanced.
 
     Deterministic. Products whose own NAME carries an AICIS boundary token
     (jade/quartz/salt tools and the like) are not eligible: their exact keyword
     would BE the banned token, so no keyword could both match the product and
     clear the code's fatal boundary rule. They stay in the Step-3 deliverable —
-    Step 4 simply cannot name them. The rest are ordered by review volume, then
-    rating, then name; listings naming the same product are collapsed to their
-    strongest row, and at most one row survives per Step-2 `source_keyword` so a
-    capped table spends its slots on distinct products. The selection then
-    round-robins across pillars so a capped table still covers every pillar.
+    Step 4 simply cannot name them.
+
+    The rest are ordered by review volume, then rating, then name, and collapsed
+    to one row per **normalised exact title** — the very string the exact keyword
+    is derived from, so two rows that would emit the identical bank keyword
+    (differing only in case or punctuation) cannot both spend a table slot.
+    Since the exact title is now the primary keyword, a saturated topic need not
+    be bottlenecked to a single product: `MAX_PER_SOURCE_KEYWORD` caps how many
+    rows one Step-2 `source_keyword` may contribute, so a category like "no pull
+    dog harness" can supply several genuinely distinct products without
+    swallowing the whole table. The selection then round-robins across pillars so
+    a capped table still covers every pillar.
     """
     ranked: Dict[str, Dict] = {}
     for product in products:
@@ -367,8 +379,9 @@ def select_gold_products(
             continue
         if carries_banned_token(name):
             continue
-        if name not in ranked:
-            ranked[name] = product
+        key = exact_keyword(name) or name.lower()
+        if key not in ranked:
+            ranked[key] = product
     ordered = sorted(
         ranked.values(),
         key=lambda p: (
@@ -377,14 +390,16 @@ def select_gold_products(
             str(p.get("name")),
         ),
     )
-    seen_types: set = set()
+    per_source: Dict[str, int] = defaultdict(int)
     diverse: List[Dict] = []
     for product in ordered:
         source = str(product.get("source_keyword") or "").strip().lower()
-        key = source or str(product.get("name") or "").strip().lower()
-        if key in seen_types:
+        # A row with no Step-2 keyword is its own bucket (its title is already
+        # unique here), so the cap only ever throttles a shared topic.
+        bucket = source or str(product.get("name") or "").strip().lower()
+        if per_source[bucket] >= MAX_PER_SOURCE_KEYWORD:
             continue
-        seen_types.add(key)
+        per_source[bucket] += 1
         diverse.append(product)
     ordered = diverse
     if limit <= 0 or len(ordered) <= limit:
@@ -703,7 +718,7 @@ class KeywordGenerator:
         if not self.products:
             raise KeywordGenerationError(
                 "no eligible gold products after the boundary-name exclusion "
-                "and the type collapse; run Step 3 first"
+                "and the per-topic cap; run Step 3 first"
             )
 
         # Set unconditionally: an injected client skips config *resolution*,
