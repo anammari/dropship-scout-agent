@@ -3,10 +3,16 @@
 **Stats only.** The per-step narrative (schemas, gate rules, why each design
 decision was made) lives in `CLAUDE.md` §13.8; this page is the numbers.
 
-Current state: **2026-10-13**, branch `feature/morning-anthem-pipeline-update`.
-The full launch run completed end-to-end, Steps 1 → 7, with Step 7 applied.
+Current state: **2026-10-16**, branch `feature/morning-anthem-pipeline-update`.
 
-## Pipeline — Steps 1 → 7
+Two states are reported below, because the second is not finished:
+
+| | What | Status |
+|---|---|---|
+| **Run A** (2026-10-13) | the launch run, Steps 1 → 7 | complete, applied |
+| **Run B** (2026-10-16) | the catalogue review — compliance scope + family cap | re-ranked, **cleanup dry-run only** |
+
+## Pipeline — Steps 1 → 7 (Run A)
 
 | Step | What | In | Out | HasData credits |
 |---|---|---|---|---|
@@ -22,7 +28,7 @@ The full launch run completed end-to-end, Steps 1 → 7, with Step 7 applied.
 Only Steps 1 and 3 spend HasData credits; the CJ side is free in credits and
 bounded by pacing. 580 of the 1,000-credit monthly tier remains.
 
-## Step 5 — ingestion funnel
+## Step 5 — ingestion funnel (Run A)
 
 Two runs, both CJ-only, accumulating into one `product-NN` sequence.
 
@@ -38,30 +44,50 @@ Run 2's drops: `duplicate` **309** (re-offered products from run 1, skipped by
 Run 2's `duplicate` count is the duplicate-skip logic working, not waste: the
 80-product bank re-offers the 30 run-1 products, whose packages already exist.
 
-## Step 6/7 — tiers
+## Run B — re-rank and planned cleanup (2026-10-16)
 
-| Tier | Ranked | Deleted by Step 7 | Retained |
-|---|---|---|---|
-| `shortlist` | 23 | 0 | **23** |
-| `review` | 10 | 0 | **10** |
-| `disregard` | 45 | 45 | 0 |
-| **Total** | **78** | **45** | **33** |
+Two code changes drove this run; both are applied to the 33 survivors.
 
-Review landed on exactly the `CLEANUP_REVIEW_KEEP` cap of 10, so the
-"delete the 11th and below" rule had nothing to act on this run.
+**Compliance gate is now field-scoped.** A banned token in `product_title` is
+supplier fact and still forces `disregard`. A token in `marketing_ad_copy` or
+`features` is the pipeline's own wording: the note is recorded, the tier is
+left to the score.
 
-Retained-`rank_score` range **2.65 – 4.30**; retained projected margin
-**AUD 13.58 / 20.39 / 29.34** (min / median / max).
+**Family cap is global.** `CLEANUP_MAX_PER_FAMILY` (5) caps one product family
+anywhere in the tree, derived from the package title. It runs last, so it
+**overrides the shortlist keep**.
 
-## Pillar coverage — retained packages
+| Stage | Result |
+|---|---|
+| Re-rank (Step 6) | 33 packages → shortlist 23 · review 9 · disregard 1 |
+| Advisory demotions after the scope fix | **0** |
+| Family cap in the plan (Step 7 dry run) | dog-gear 21 survivors → **5** kept |
+| **Step 7 dry-run plan** | **16 kept · 17 to delete** (16 dog-gear beyond cap + 1 disregard) |
+
+Step 7 has **not** been applied. The 17 deletions are pending confirmation,
+because 16 of them are `shortlist`/`review` packages and the act is
+irreversible.
+
+### Run B — what survives the plan
+
+| Pillar | Retained (Run A) | Kept under the plan |
+|---|---|---|
+| `sunrise_move` | 23 | **6** (5 dog gear + 1 beach towel) |
+| `restful_reset` | 6 | **6** |
+| `mindful_awakening` | 3 | **3** |
+| `brew_fuel` | 1 | **1** |
+| `morning_table` | 0 | **0** |
+| **Total** | **33** | **16** |
+
+## Pillar coverage — Run A
 
 | Pillar | Step-2 keywords | Step-3 gold | Step-4 keywords | Step-5 packages | Retained |
 |---|---|---|---|---|---|
-| `sunrise_move` | 11 | 43 | 58 | 37 | **23** |
-| `restful_reset` | 4 | 16 | 20 | 13 | **6** |
-| `mindful_awakening` | 4 | 12 | 20 | 6 | **3** |
-| `brew_fuel` | 6 | 23 | 32 | 10 | **1** |
-| `morning_table` | 5 | 23 | 26 | 11 | **0** |
+| `sunrise_move` | 11 | 43 | 58 | 37 | 23 |
+| `restful_reset` | 4 | 16 | 20 | 13 | 6 |
+| `mindful_awakening` | 4 | 12 | 20 | 6 | 3 |
+| `brew_fuel` | 6 | 23 | 32 | 10 | 1 |
+| `morning_table` | 5 | 23 | 26 | 11 | 0 |
 | *(no pillar)* | — | — | — | 1 | 0 |
 | **Total** | **30** | **117** | **156** | **78** | **33** |
 
@@ -69,21 +95,33 @@ The Step-4 column is the 156-keyword bank (from 80 eligible products); the
 Step-5/retained columns are tagged by Jev at Step 6, so the one package Jev
 classified `discard` sits outside the five pillars.
 
-`morning_table` retained **nothing** — all 11 of its packages ranked
-`disregard`. Step 2 spent 5 of its 30 paid slots on that pillar, so this is
-where the funnel's biggest drop-off sits.
+`morning_table` retained **nothing**. Diagnosed, not guessed: of its 11
+packages, 10 scored similarity 1.06–1.84 — CJ returned meat grinders and grape
+peelers against designer cutting boards. One scored 4.58 and was deleted by
+the old compliance gate.
 
-## Compliance gate
+## Compliance gate — Run A, by field
 
-**24 of 78** packages carried a banned-token match; 7 of those were demoted
-out of `shortlist`/`review`, the rest were already `disregard` on score.
+**24 of 78** packages carried a banned-token match; 7 of those were demoted out
+of `shortlist`/`review`.
 
-By field — 19 matches sit in `product_title` (supplier fact: `electric` ×10,
-`cream` ×5, `gel` ×3, `salt` ×1); **12 sit in the LLM-authored fields**
-(`marketing_ad_copy` and `features`: `oil` ×4, `usb` ×3, `target` ×2, `mud`,
-`rechargeable`, `cream`). The highest-scoring package in the whole run
-(`304 stainless steel cutting board`, 4.34) was deleted on an `oil` match in
-its own generated ad copy.
+| Field | Matches | Kind | Effect now |
+|---|---|---|---|
+| `product_title` | 19 (`electric` ×10, `cream` ×5, `gel` ×3, `salt` ×1) | supplier fact | still deletes |
+| `marketing_ad_copy`, `features` | 12 (`oil` ×4, `usb` ×3, `target` ×2, `mud`, `rechargeable`, `cream`) | our own copy | note only |
+
+The highest-scoring package in the whole run — `304 stainless steel cutting
+board`, 4.34 — was deleted on an `oil` match in its own generated ad copy.
+Under the new scope it would have been **shortlist**. It is already gone from
+disk, so the fix is forward-looking only.
+
+## Export hygiene changes (2026-10-16)
+
+| Issue | Fix |
+|---|---|
+| `dropship` tag on all 33 packages | stripped at export — it is an internal ACCEPT marker, not a customer-facing tag |
+| `"6-10 business days"` on all 33 | now `"6-10 days"` — CJ quotes calendar days, so the old label promised delivery about a third sooner than quoted |
+| Category is LLM prose ("Pet Gear — Dog Walking") | **not fixed** — needs the pillar plumbed to the exporter |
 
 ## Where the artefacts live
 
