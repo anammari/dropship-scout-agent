@@ -41,6 +41,7 @@ from src.ranking.jev_client import (
 from src.keywords.generator import BANNED_TOKENS
 from src.ranking.jev_product_ranker import (
     COMPLIANCE_BANNED_TOKENS,
+    ELECTRICAL_ESCALATION_TOKENS,
     GOLD_REFERENCE_FIELDS,
     PRODUCT_STATE_FIELDS,
     SIMILARITY_WEIGHT,
@@ -552,10 +553,25 @@ def test_composite_weights_are_the_configured_split():
 
 def test_compliance_tokens_are_the_union_specified():
     # The AICIS boundary tokens are the keyword engine's own tuple (one
-    # source of truth); the electrical/logistics terms ride on top.
-    for token in ("electric", "usb", "rechargeable", "jade", "quartz", "salt"):
+    # source of truth); the battery terms ride on top.
+    for token in ("jade", "quartz", "salt", "cream", "oil"):
         assert token in COMPLIANCE_BANNED_TOKENS
     assert all(token in COMPLIANCE_BANNED_TOKENS for token in BANNED_TOKENS)
+    for token in ("battery", "batteries", "lithium"):
+        assert token in COMPLIANCE_BANNED_TOKENS
+
+
+def test_electrical_goods_are_no_longer_deleted():
+    """Operator directive 2026-10-16: mains and USB goods are sellable.
+
+    They need a certification check, not a deletion — so the tokens moved out
+    of the compliance list and into the escalation list.
+    """
+    for token in ("electric", "usb", "rechargeable", "cordless"):
+        assert token not in COMPLIANCE_BANNED_TOKENS
+        assert token in ELECTRICAL_ESCALATION_TOKENS
+    # A battery is a shipping hazard whatever it powers, so it stays banned.
+    assert "battery" in COMPLIANCE_BANNED_TOKENS
 
 
 def test_compliance_hit_names_the_field_and_the_token():
@@ -564,17 +580,16 @@ def test_compliance_hit_names_the_field_and_the_token():
     assert "matched in product_title" in hit.note
     assert "'jade'" in hit.note
     assert hit.decisive is True  # a supplier-fact field: this one deletes
-    usb = {
+    oily = {
         **METADATA,
-        "marketing_ad_copy": "Charge it once with any cable — USB ready.",
+        "marketing_ad_copy": "Rub with a little oil to keep the grain fed.",
     }
-    hit = _compliance_hit(usb)
-    assert "'usb'" in hit.note
+    hit = _compliance_hit(oily)
+    assert "'oil'" in hit.note
     assert "matched in marketing_ad_copy" in hit.note
     assert hit.decisive is False  # our own copy: note only, tier stays
-    rechar = {**METADATA, "features": ["Rechargeable motor", "Soft head"]}
-    hit = _compliance_hit(rechar)
-    assert "'rechargeable'" in hit.note
+    battery = {**METADATA, "features": ["Runs on 2 AA battery cells", "Soft head"]}
+    hit = _compliance_hit(battery)
     assert "matched in features" in hit.note
     assert hit.decisive is False
     # The clean reference package has no hit on any scanned field.
@@ -627,7 +642,7 @@ def test_a_match_in_our_own_copy_notes_but_does_not_demote(tmp_path):
     root = _export_root(tmp_path, packages=(("cjdropshipping", "product-05"),))
     _write_package(root, "cjdropshipping", "product-05", metadata={
         **METADATA,
-        "marketing_ad_copy": "Recharge quickly — one USB cable included.",
+        "marketing_ad_copy": "Rub with a little oil to keep the grain fed.",
     })
     client = ScriptedJevClient(
         lambda state, questions, i: _perfect_answers(
@@ -639,7 +654,7 @@ def test_a_match_in_our_own_copy_notes_but_does_not_demote(tmp_path):
 
     # raw 2 -> 3.0 both questions -> rank 3.0: review, and it STAYS review.
     assert package.tier == "review"
-    assert "banned token 'usb' matched in marketing_ad_copy" in package.notes
+    assert "banned token 'oil' matched in marketing_ad_copy" in package.notes
 
 
 def test_an_advisory_match_cannot_rescue_a_low_score(tmp_path):
@@ -647,7 +662,7 @@ def test_an_advisory_match_cannot_rescue_a_low_score(tmp_path):
     root = _export_root(tmp_path, packages=(("cjdropshipping", "product-06"),))
     _write_package(root, "cjdropshipping", "product-06", metadata={
         **METADATA,
-        "features": ["Rechargeable motor"],
+        "features": ["Contains a lithium cell"],
     })
     client = ScriptedJevClient(
         lambda state, questions, i: _perfect_answers(
@@ -658,7 +673,7 @@ def test_an_advisory_match_cannot_rescue_a_low_score(tmp_path):
     (package,) = ranker.rank()
 
     assert package.tier == "disregard"
-    assert "banned token 'rechargeable' matched in features" in package.notes
+    assert "banned token 'lithium' matched in features" in package.notes
 
 
 def test_clean_packages_keep_their_tier_and_a_discard_note_composes(tmp_path):
@@ -1013,3 +1028,35 @@ def test_a_missing_or_zero_cost_yields_no_markup_rather_than_a_crash():
     assert _markup_multiplier(
         {"suggested_price_aud": 12.0, "estimated_cogs_aud": 4.0}
     ) == pytest.approx(3.0)
+
+
+def test_an_electrical_shortlist_is_escalated_not_deleted(tmp_path):
+    """The package keeps its tier and gains a certification note."""
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-08"),))
+    _write_package(root, "cjdropshipping", "product-08", metadata={
+        **METADATA,
+        "product_title": "Electric Gooseneck Kettle 1L",
+    })
+    client = ScriptedJevClient(lambda state, questions, i: _perfect_answers(questions))
+    ranker = _ranker(tmp_path, client, export_root=root)
+    (package,) = ranker.rank()
+
+    assert package.tier == "shortlist"          # kept, not deleted
+    assert "[ESCALATE]" in package.notes
+    assert "EESS/ACMA" in package.notes
+
+
+def test_a_battery_powered_product_is_still_deleted(tmp_path):
+    """Batteries are a shipping hazard, so they stay contraband."""
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-09"),))
+    _write_package(root, "cjdropshipping", "product-09", metadata={
+        **METADATA,
+        "product_title": "Rechargeable Lithium Battery Desk Lamp",
+    })
+    client = ScriptedJevClient(lambda state, questions, i: _perfect_answers(questions))
+    ranker = _ranker(tmp_path, client, export_root=root)
+    (package,) = ranker.rank()
+
+    assert package.tier == "disregard"
+    assert "compliance gate: banned token" in package.notes
+    assert "matched in product_title" in package.notes

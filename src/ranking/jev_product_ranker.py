@@ -163,16 +163,44 @@ def _product_state(
     return state
 
 
-#: The post-evaluation compliance gate (operator directive 2026-09-30): the
-#: AICIS boundary tokens — one source of truth with the keyword engine — plus
-#: the electrical/logistics terms (`electric`, `usb`, `rechargeable`, so a
-#: battery-powered PDP's logistics burden is caught the same way). A package
-#: whose human text matches one lands `disregard` with an explicit note,
-#: regardless of its Jev score: contraband never reaches shortlist/review.
-COMPLIANCE_BANNED_TOKENS = tuple(BANNED_TOKENS) + (
+#: The post-evaluation compliance gate: the AICIS boundary tokens — one source
+#: of truth with the keyword engine — plus the battery terms. A package whose
+#: human text matches one lands `disregard` with an explicit note, regardless of
+#: its score: contraband never reaches shortlist/review.
+#:
+#: **Electrical goods were REMOVED from this list on 2026-10-16** (operator
+#: directive). The store sells to Australia but is not an AU-registered
+#: electrical retailer, so mains and USB goods are no longer auto-deleted —
+#: they are ESCALATED instead (`ELECTRICAL_ESCALATION_TOKENS` below), and the
+#: operator checks compliance with the Electrical Equipment Safety System and
+#: ACMA standards against CJ before linking anything.
+#:
+#: **Batteries stay banned outright**, and they are a different case from a
+#: mains appliance: a cell is a shipping hazard regardless of certification.
+BATTERY_TOKENS = (
+    "battery",
+    "batteries",
+    "li-ion",
+    "lithium",
+    "aa battery",
+    "aaa battery",
+)
+
+COMPLIANCE_BANNED_TOKENS = tuple(BANNED_TOKENS) + BATTERY_TOKENS
+
+#: Terms that flag a package for a MANUAL electrical-safety check rather than
+#: deleting it. A shortlisted match keeps its tier and gains an `[ESCALATE]`
+#: note naming the standard, so the operator sees it in the report and on the
+#: row rather than discovering it after a live listing.
+ELECTRICAL_ESCALATION_TOKENS = (
     "electric",
+    "electrical",
     "usb",
     "rechargeable",
+    "cordless",
+    "mains",
+    "adapter",
+    "led",
 )
 
 #: Fields whose text is SUPPLIER FACT — copied from the CJ listing. A banned
@@ -224,6 +252,30 @@ def _scan_compliance_fields(metadata: Dict[str, Any], fields: Sequence[str]) -> 
                         f"in {field}"
                     )
     return ""
+
+
+def _electrical_hit(metadata: Dict[str, Any]) -> Optional[str]:
+    """The `[ESCALATE]` note for an electrical product, or None.
+
+    Not a compliance failure: mains and USB goods are sellable, they simply
+    need the operator to confirm the supplier's certification against the
+    Electrical Equipment Safety System and ACMA standards before a listing goes
+    live. Scanning the same three human-text fields keeps the two checks
+    consistent; supplier fields are scanned first so the note names the
+    strongest evidence.
+    """
+    for field in COMPLIANCE_SCAN_FIELDS:
+        value = metadata.get(field)
+        texts = value if isinstance(value, list) else (value,)
+        for text in texts:
+            lowered = str(text or "").lower()
+            for token in ELECTRICAL_ESCALATION_TOKENS:
+                if token in lowered:
+                    return (
+                        f"[ESCALATE] electrical ({token!r} in {field}) — confirm "
+                        "EESS/ACMA compliance with CJ before linking"
+                    )
+    return None
 
 
 def _compliance_hit(metadata: Dict[str, Any]) -> Optional[ComplianceHit]:
@@ -510,6 +562,19 @@ class JevProductRanker:
                 logger.info(
                     "Compliance gate advisory on %s (tier left at %s): %s",
                     ref.slug, tier, compliance.note,
+                )
+
+        if tier in ("shortlist", "review"):
+            escalation = _electrical_hit(ref.metadata)
+            if escalation:
+                # Kept, not deleted — but flagged so an uncertified mains or
+                # USB good cannot reach a live listing unnoticed.
+                if notes:
+                    notes += "; "
+                notes += escalation
+                logger.warning(
+                    "Electrical escalation on %s (%s): %s",
+                    ref.slug, tier, escalation,
                 )
         logger.info(
             "Ranked %s: similarity=%.2f value=%.2f rank=%.2f tier=%s pillar=%s",
