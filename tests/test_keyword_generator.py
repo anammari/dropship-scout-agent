@@ -34,8 +34,10 @@ from src.keywords.generator import (
     build_product_table,
     carries_banned_token,
     dedupe_keywords,
+    build_ladder_rows,
     exact_keyword,
     fallback_budgets,
+    sub_terms,
     load_gold_products,
     load_prompt_parts,
     normalized_title_words,
@@ -529,8 +531,11 @@ def test_generate_bank_emits_an_exact_row_per_product_plus_the_models_fallbacks(
 
 def test_generate_bank_accepts_an_empty_fallback_list(tmp_path):
     # "An empty list is a valid and common answer" — most products need none.
+    # An empty fallback list still leaves the code-derived ladder in place.
     bank = _generator(tmp_path, [[]]).generate_bank()
-    assert [c.match for c in bank] == ["exact"] * len(GOLD)
+    assert [c.match for c in bank].count("tight_fallback") == 0
+    assert [c.match for c in bank].count("exact") == len(GOLD)
+    assert {c.match for c in bank} <= {"exact", "sub_term", "head_term"}
 
 
 def test_the_batch_note_asks_for_the_budget_and_lists_what_is_taken(tmp_path):
@@ -596,7 +601,9 @@ def test_a_fallback_that_fails_validation_is_dropped_not_fatal(tmp_path, caplog)
         [[{"keyword": "kitchen tools", "product": "Bodum Chambord French Press"}]],
     )
     bank = generator.generate_bank()
-    assert all(c.match == "exact" for c in bank)
+    # The bad fallback is gone; the exact rows and the code-derived ladder stand.
+    assert "kitchen tools" not in [c.keyword for c in bank]
+    assert "tight_fallback" not in {c.match for c in bank}
 
 
 def test_a_fallback_duplicating_another_products_exact_keyword_is_deduped(tmp_path):
@@ -1018,3 +1025,46 @@ def test_validate_bank_drops_a_fallback_past_its_budget():
     assert len(past) == 1
     assert past[0].droppable is True
     assert "budget of 1 fallback(s)" in past[0].message
+
+
+# ---------------------------------------------------------------------------
+# The descent ladder (operator directive 2026-10-16)
+#
+# An exact title is high-precision and near-zero recall: the CJ catalogue does
+# not stock "Epicurean Kitchen Series Cutting Board" but stocks plenty of
+# chopping boards. The ladder falls from the title down to the pillar's own
+# head term, in code, so the descent costs no model call.
+# ---------------------------------------------------------------------------
+
+
+def test_sub_terms_are_trailing_windows_narrowest_first():
+    assert sub_terms("Epicurean Kitchen Series Cutting Board") == [
+        "cutting board",
+        "series cutting board",
+        "kitchen series cutting board",
+    ]
+
+
+def test_sub_terms_are_capped_and_skip_short_titles():
+    assert len(sub_terms("A Very Long Descriptive Product Title Here")) == 3
+    # Two words leave no room for a window that is not the whole title.
+    assert sub_terms("Cutting Board") == []
+
+
+def test_ladder_rows_end_with_the_pillar_head_term():
+    rows = build_ladder_rows([_gold("Epicurean Kitchen Series Cutting Board",
+                                    pillar="morning_table")])
+    assert [r["match"] for r in rows] == ["sub_term", "sub_term", "sub_term", "head_term"]
+    assert rows[-1]["keyword"] == "breakfast"
+
+
+def test_the_head_term_shares_no_word_with_the_title():
+    """It is the one rung not derived from the title, so coupling never applies."""
+    rows = build_ladder_rows([_gold("Bodum Chambord French Press", pillar="brew_fuel")])
+    head = rows[-1]
+    assert head["match"] == "head_term"
+    assert head["keyword"] == "coffee"
+
+
+def test_a_product_with_no_usable_title_gets_no_ladder():
+    assert build_ladder_rows([_gold("   ")]) == []

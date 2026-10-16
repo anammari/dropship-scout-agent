@@ -192,7 +192,7 @@ def load_keyword_bank(path: Optional[Path] = None) -> List[BankKeyword]:
                 "python scripts/generate_gold_keywords.py"
             )
         match = str(row.get("match") or "exact").strip().lower()
-        if match not in ("exact", "tight_fallback"):
+        if match not in MATCH_ORDER:
             match = "exact"
         keywords.append(
             BankKeyword(
@@ -203,11 +203,19 @@ def load_keyword_bank(path: Optional[Path] = None) -> List[BankKeyword]:
                 rationale=str(row.get("rationale") or ""),
             )
         )
-    # Exact-title keywords ingest before their tight fallbacks, so the
-    # highest-precision query gets the first chance at the per-keyword
-    # export slots and a fallback only fills what the exact title could not.
-    keywords.sort(key=lambda kw: 0 if kw.match == "exact" else 1)
+    # The DESCENT LADDER, highest-precision rung first: the product's own
+    # title, then the model's tight fallbacks, then the code-derived sub-terms,
+    # then the pillar's head term. Each rung runs only while the product still
+    # has export slots open, so a product that matches on its title never pays
+    # for a broader search, and one that the exact title cannot find still gets
+    # a chance at every level down to the category word.
+    keywords.sort(key=lambda kw: MATCH_ORDER.index(kw.match))
     return keywords
+
+
+#: The ladder's rungs, highest precision first. `keyword_bank` sorts by this
+#: order, so a product's rows always run title -> fallback -> sub-term -> head.
+MATCH_ORDER = ("exact", "tight_fallback", "sub_term", "head_term")
 
 
 def _by_product(keywords: Sequence[BankKeyword]) -> List[tuple]:

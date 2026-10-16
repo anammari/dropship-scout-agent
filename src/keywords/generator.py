@@ -111,7 +111,7 @@ PILLARS = (
     "restful_reset",
     "morning_table",
 )
-MATCHES = ("exact", "tight_fallback")
+MATCHES = ("exact", "tight_fallback", "sub_term", "head_term")
 FIELDS = ("keyword", "product", "pillar", "match", "rationale")
 
 #: The rendered product table's columns. Every cell is copied verbatim from
@@ -147,6 +147,34 @@ FALLBACK_BUDGET_TOP = 5
 FALLBACK_BUDGET_MID = 3
 FALLBACK_BUDGET_LOW = 1
 
+#: The DESCENT LADDER (operator directive 2026-10-16). A gold product is
+#: searched by its own title first, then by the model's fallbacks, then by
+#: progressively broader sub-terms of that title, and finally by its pillar's
+#: head term. Step 5 runs a product's rows in order and stops as soon as the
+#: product's target slots fill, so this IS the "fall down until CJ matches"
+#: behaviour — built in code, so it costs no model call and cannot hallucinate.
+#:
+#: Why the descent is needed: an exact title is high-precision and near-zero
+#: recall. `Epicurean Kitchen Series Cutting Board` finds nothing in CJ, while
+#: `chopping board` finds hundreds. The operator proved it by hand — a manual CJ
+#: search for `breakfast` returned niche breakfast goods that 143 generated
+#: keywords had missed.
+#: How many sub-terms one product may contribute, after its exact row and its
+#: fallbacks. Each is one word shorter than the last, so three covers a title
+#: down to its head noun.
+MAX_SUB_TERMS = 3
+
+#: The head term a pillar's CJ search should fall back to. Deliberately a plain
+#: category word, not a phrase: CJ indexes titles, and the operator's manual
+#: searches that worked were one word wide.
+PILLAR_HEAD_TERMS: Dict[str, str] = {
+    "brew_fuel": "coffee",
+    "sunrise_move": "towel",
+    "mindful_awakening": "incense burner",
+    "restful_reset": "sleep mask",
+    "morning_table": "breakfast",
+}
+
 #: Words too short or too generic to prove a fallback is about the same object
 #: as its product's title.
 _STOPWORD_RE = re.compile(r"[a-z0-9]{3,}")
@@ -173,9 +201,12 @@ class CandidateKeyword(BaseModel):
         "restful_reset",
         "morning_table",
     ]
-    #: `exact` — the product's own title, code-derived. `tight_fallback` — one
-    #: model-authored variant, used only if the exact title finds nothing.
-    match: Literal["exact", "tight_fallback"]
+    #: Which rung of the descent ladder this row is:
+    #: `exact` — the product's own title, code-derived;
+    #: `tight_fallback` — a model-authored variant of it;
+    #: `sub_term` — a code-derived trailing window of the title, broader;
+    #: `head_term` — the pillar's own category word, the last resort.
+    match: Literal["exact", "tight_fallback", "sub_term", "head_term"]
     rationale: str
 
 
@@ -497,6 +528,70 @@ def build_exact_rows(products: Sequence[Dict]) -> List[Dict]:
     return rows
 
 
+def sub_terms(title: object, limit: int = MAX_SUB_TERMS) -> List[str]:
+    """A title's trailing windows, narrowest first: the descent's middle rungs.
+
+    The last two words, then the last three, and so on — so the most probable
+    match is tried before the broader ones. `Epicurean Kitchen Series Cutting
+    Board` yields `cutting board`, then `series cutting board`, then `kitchen
+    series cutting board`.
+
+    Deterministic and free, so it needs no model call and cannot hallucinate.
+    Single-word windows are deliberately excluded: `board` alone is a category,
+    and the pillar head term already fills that role in a more useful form.
+    """
+    words = normalized_title_words(title)
+    if len(words) < 3:
+        return []
+    out: List[str] = []
+    for length in range(2, len(words)):
+        candidate = " ".join(words[-length:])
+        if candidate not in out:
+            out.append(candidate)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def build_ladder_rows(products: Sequence[Dict]) -> List[Dict]:
+    """The rows that come AFTER a product's exact title and its fallbacks.
+
+    One pass of sub-terms, then the pillar's head term — the last rung, and the
+    only row whose string need not share a word with the title. Step 5 runs a
+    product's rows in order and stops when the target fills, so a product that
+    matches on its title never pays for any of these.
+    """
+    rows: List[Dict] = []
+    for product in products:
+        name = str(product.get("name") or "").strip()
+        exact = exact_keyword(name)
+        if not name or not exact:
+            continue
+        pillar = str(product.get("pillar") or "")
+        for term in sub_terms(name):
+            rows.append(
+                {
+                    "keyword": term,
+                    "product": name,
+                    "pillar": pillar,
+                    "match": "sub_term",
+                    "rationale": "code-derived descent from the title",
+                }
+            )
+        head = PILLAR_HEAD_TERMS.get(pillar)
+        if head:
+            rows.append(
+                {
+                    "keyword": head,
+                    "product": name,
+                    "pillar": pillar,
+                    "match": "head_term",
+                    "rationale": f"the {pillar} head term",
+                }
+            )
+    return rows
+
+
 def _direct_candidates(text: str) -> List[str]:
     candidates = [text]
     start, end = text.find("{"), text.rfind("}")
@@ -671,6 +766,30 @@ def validate_bank(rows: Sequence[dict], products: Sequence[Dict]) -> List[BankPr
                     )
                 )
             exact_by_product[product] = keyword
+            continue
+
+        if match == "sub_term":
+            # Code-derived, so a mismatch means a code invariant broke.
+            ladder = sub_terms(product)
+            if keyword not in ladder:
+                problems.append(
+                    BankProblem(
+                        f"row {index} is a sub-term ({keyword!r}) that is not a "
+                        f"trailing window of its product's title ({ladder})",
+                        index,
+                    )
+                )
+            continue
+        if match == "head_term":
+            expected = PILLAR_HEAD_TERMS.get(pillar)
+            if keyword != expected:
+                problems.append(
+                    BankProblem(
+                        f"row {index} is a head term ({keyword!r}) that is not "
+                        f"its pillar's own ({expected!r})",
+                        index,
+                    )
+                )
             continue
 
         # --- fallbacks: problems here are the model's, so the caller drops them
@@ -951,6 +1070,11 @@ class KeywordGenerator:
                     }
                 )
                 taken.append(keyword.lower())
+
+        # The descent's lower rungs, appended after every product's fallbacks.
+        # Step 5 orders each product's rows by `MATCH_ORDER`, so these run only
+        # when the title and the fallbacks both came up empty.
+        rows.extend(build_ladder_rows(self.products))
 
         rows, dropped = dedupe_keywords(rows)
         if dropped:

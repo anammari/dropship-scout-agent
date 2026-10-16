@@ -30,8 +30,10 @@ that module's docstring for the live probe finding).
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import mimetypes
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -81,6 +83,10 @@ GOLD_REFERENCE_FIELDS = (
 #: `markup_multiplier` is NOT one of them: the export contract has no such key,
 #: and it is derived in code (below) because the model must not do the division —
 #: the repo's rule is that LLM arithmetic is never trusted.
+#: A supplier photo larger than this is skipped rather than inlined; the
+#: gallery JPEGs observed run 30-60 KB, so only a pathological entry trips it.
+JEV_MAX_IMAGE_BYTES = 4_000_000
+
 PRODUCT_STATE_FIELDS = (
     "product_title",
     "category",
@@ -113,11 +119,49 @@ def _markup_multiplier(metadata: Dict[str, Any]) -> Optional[float]:
     return round(retail / cogs, 2)
 
 
-def _product_state(metadata: Dict[str, Any]) -> Dict[str, Any]:
-    """The per-product state entry: the projected fields plus the derived markup."""
+def _first_image_data_url(package_dir: Path) -> Optional[str]:
+    """The package's first gallery image as a data URL, or None.
+
+    The images are already on disk from Step 5, so this costs no fetch and no
+    HasData credit — it only stops the decider from judging an object it has
+    never seen. A missing or unreadable gallery degrades to text-only rather
+    than failing the ranking.
+    """
+    if not settings.JEV_SEND_IMAGES or settings.JEV_IMAGES_PER_PACKAGE < 1:
+        return None
+    try:
+        images = sorted((Path(package_dir) / "images").glob("image-*"))
+    except OSError:
+        return None
+    for image in images[: settings.JEV_IMAGES_PER_PACKAGE]:
+        try:
+            raw = image.read_bytes()
+        except OSError:
+            continue
+        if not raw or len(raw) > JEV_MAX_IMAGE_BYTES:
+            continue
+        mime = mimetypes.guess_type(image.name)[0] or "image/jpeg"
+        return f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+    return None
+
+
+def _product_state(
+    metadata: Dict[str, Any], image_url: Optional[str] = None
+) -> Dict[str, Any]:
+    """The per-product state entry: the projected fields plus the derived markup.
+
+    `image_url` is the package's own supplier photo as a data URL (operator
+    directive 2026-10-16). The decider accepts images in `state`, and the photo
+    is the only field that settles what the object actually IS — a supplier
+    title reading `Hand-made Coffee Pot Set` sat on a photo of a porcelain drip
+    cone, which no text field reveals.
+    """
     state = {field: metadata.get(field) for field in PRODUCT_STATE_FIELDS}
     state["markup_multiplier"] = _markup_multiplier(metadata)
+    if image_url:
+        state["product_image"] = image_url
     return state
+
 
 #: The post-evaluation compliance gate (operator directive 2026-09-30): the
 #: AICIS boundary tokens — one source of truth with the keyword engine — plus
@@ -368,7 +412,12 @@ class JevProductRanker:
             "gold_reference": gold_reference,
             # Structured data, not prose: the AUD figures and the derived markup
             # ride here so the model reads them rather than parsing a sentence.
-            "products": {ref.slug: _product_state(ref.metadata) for ref in batch},
+            "products": {
+                ref.slug: _product_state(
+                    ref.metadata, _first_image_data_url(ref.package_dir)
+                )
+                for ref in batch
+            },
         }
         questions: Dict[str, Dict[str, Any]] = {}
         for ref in batch:

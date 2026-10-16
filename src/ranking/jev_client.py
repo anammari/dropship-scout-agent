@@ -110,28 +110,49 @@ VALUE_LEVELS: List[str] = [
 #: that cannot be air-freighted to Australia.
 PILLAR_OPTIONS: Dict[str, str] = {
     "brew_fuel": (
-        "The Brew & Fuel: manual coffee tools, espresso distribution gear, "
-        "portable milk frothers, minimalist tumblers, matcha accessories"
+        "The Brew & Fuel — the morning drink ritual. Manual coffee tools "
+        "(drippers, pour-over cones, French presses, moka pots, tampers, "
+        "distribution tools, grinders, gooseneck kettles), espresso "
+        "accessories, portable milk frothers and steamers, tea infusers and "
+        "tea pots, matcha bowls and whisks, minimalist tumblers and keep-cups. "
+        "Anything a person uses to MAKE or SERVE a hot morning drink."
     ),
     "sunrise_move": (
-        "The Sunrise Move: aesthetic active gear, commuter backpacks, "
-        "waterproof pouches, hands-free dog leashes, sand-free towels"
+        "The Sunrise Move — the active morning and the way out the door. "
+        "Aesthetic active gear, commuter backpacks and slings, waterproof "
+        "pouches and dry bags, travel and sports towels, hands-free and "
+        "running dog leashes, harnesses and walking accessories. Anything that "
+        "belongs to leaving the house in the morning."
     ),
     "mindful_awakening": (
-        "The Mindful Awakening: backflow incense burners, digital gratitude "
-        "journals, shower steamers, meditation accessories"
+        "The Mindful Awakening — the quiet start. Backflow and cone incense "
+        "burners, incense holders and mallets, singing bowls and sound "
+        "instruments, candles and candle holders, journals and gratitude "
+        "pads, meditation cushions and accessories, shower steamers. Anything "
+        "that supports a calm, deliberate start to the day."
     ),
     "restful_reset": (
-        "The Restful Reset: silk eye masks, ergonomic recovery pillows, "
-        "sunrise alarm clocks, facial ice rollers"
+        "The Restful Reset — winding down and sleeping. Silk and blackout "
+        "sleep masks, weighted and cooling eye masks, ergonomic and recovery "
+        "pillows, neck and shoulder supports, sunrise and wake-up alarm "
+        "clocks, facial ice rollers and massage tools. Anything that serves "
+        "rest, sleep or physical recovery."
     ),
     "morning_table": (
-        "The Morning Table: cutting boards, garlic presses/mashers, "
-        "breakfast preparation and serving kitchen aids"
+        "The Morning Table — the kitchen and the shared meal. Cutting boards "
+        "and chopping boards, garlic presses and mashers, breakfast "
+        "preparation and serving aids, butter dishes, egg cups, serving "
+        "trays and platters, table linens, salt and pepper mills, kitchen "
+        "gadgets. Anything that belongs on or beside the table at breakfast."
     ),
     "discard": (
-        "fails the store's boundaries: a cosmetic or consumable, celebrity or "
-        "cultural-icon IP, or an item that cannot be air-freighted to Australia"
+        "Use ONLY when the object itself cannot be sold by this store: a "
+        "cosmetic, cream, lotion or serum; a consumable that is eaten, drunk "
+        "or used up (food, drink, tea leaves, incense sticks, supplements); a "
+        "product carrying celebrity, brand or cultural-icon IP; or something "
+        "that plainly cannot be posted. Do NOT use `discard` merely because a "
+        "product is niche, unusual, seasonal, cheap, or hard to place — assign "
+        "it the nearest pillar instead."
     ),
 }
 
@@ -146,7 +167,13 @@ QUESTIONS: Dict[str, Dict[str, Any]] = {
             "How closely does it match the kind, material, mechanism and use "
             "of the closest gold-standard product — the same object a "
             "shopper searching that product would expect to receive? Judge "
-            "product equivalence only — not price, demand or marketing."
+            "product equivalence only — not price, demand or marketing. "
+            "Weigh the attached supplier photo as the strongest evidence of "
+            "what the object is; a supplier title may misdescribe it. Favour "
+            "RECALL: a false low score throws away a product the store could "
+            "sell, so when the object is plausibly a different form of the "
+            "same thing — a different size, a bundle, a variant — score it as "
+            "a match rather than docking it for the difference."
         ),
         "criteria": SIMILARITY_LEVELS,
     },
@@ -168,10 +195,13 @@ QUESTIONS: Dict[str, Dict[str, Any]] = {
         "type": "choice",
         "instructions": (
             "Classify `products.{slug}` into exactly one of The Morning "
-            "Anthem's five merchandising pillars. Choose `discard` when it "
-            "fails the store's boundaries — a cosmetic or consumable, a "
-            "product carrying celebrity or cultural-icon IP, or an item that "
-            "cannot be air-freighted to Australia."
+            "Anthem's five merchandising pillars, using the attached supplier "
+            "photo to confirm what the object actually is. Favour RECALL: the "
+            "store would rather place an unusual product in the nearest "
+            "pillar than lose a niche winner, so reserve `discard` for the "
+            "boundary cases the `discard` description names and nothing else. "
+            "A product that is merely niche, seasonal or hard to place is NOT "
+            "a discard — put it in the pillar it comes closest to."
         ),
         "criteria": PILLAR_OPTIONS,
     },

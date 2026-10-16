@@ -321,7 +321,9 @@ class Settings:
         # pinned version; the `~typesafe/jev-latest` alias tracks the moving
         # latest and is deliberately not the default (a pinned model keeps a
         # ranking reproducible).
-        self.JEV_MODEL: str = os.getenv("JEV_MODEL") or "typesafe/jev-1.13"
+        self.JEV_MODEL: str = (
+            os.getenv("JEV_MODEL") or "perplexity/pplx-decider-v1.1-27b"
+        )
         # Products per System One call. The native batch is one shared state +
         # many independent questions, and TypeSafe cites ~13 questions per
         # call as ~11.5x cheaper / 9.6x faster than separate calls; at three
@@ -345,6 +347,22 @@ class Settings:
         )
         self.JEV_REVIEW_MIN_SCORE: float = _parse_float(
             os.getenv("JEV_REVIEW_MIN_SCORE"), default=2.5
+        )
+        # Send the package's own supplier photo with the decision.
+        #
+        # OFF by default, on measurement (2026-10-16). The Step-6 decision
+        # endpoint takes text state only: three solid-colour test images (red,
+        # blue, white) all came back "white" with identical probability
+        # distributions, so the model never reads the pixels. A full-size data
+        # URL is also counted as text and costs ~177k tokens, which pushes a
+        # four-package batch past the 262,144-token ceiling and fails the call.
+        # Leave this off unless the transport is replaced with a real vision
+        # model.
+        self.JEV_SEND_IMAGES: bool = _parse_bool(
+            os.getenv("JEV_SEND_IMAGES"), default=False
+        )
+        self.JEV_IMAGES_PER_PACKAGE: int = _parse_int(
+            os.getenv("JEV_IMAGES_PER_PACKAGE"), default=1
         )
 
         # --- Margin floor (the deterministic half of gate 2) ---
