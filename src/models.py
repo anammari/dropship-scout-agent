@@ -315,7 +315,13 @@ def _derive_shipping_notice(raw: RawSupplierProduct) -> str:
     transit = raw.shipping_transit_days.strip()
     # A quote that already carries its own unit ("6-10 days") must not be
     # given a second one.
-    unit = "" if any(char.isalpha() for char in transit) else " business days"
+    #
+    # The unit is CALENDAR days, not business days: CJ states its windows in
+    # calendar days, so appending "business days" promised a delivery roughly a
+    # third sooner than the quote supports. Every exported package said
+    # "6-10 business days" before this was caught. " days" is honest under
+    # either convention and needs no arithmetic.
+    unit = "" if any(char.isalpha() for char in transit) else " days"
     return (
         f"Standard tracked international shipping to Australia from China"
         f"{service}: {transit}{unit}."

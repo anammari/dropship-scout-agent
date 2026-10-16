@@ -131,20 +131,44 @@ COMPLIANCE_BANNED_TOKENS = tuple(BANNED_TOKENS) + (
     "rechargeable",
 )
 
+#: Fields whose text is SUPPLIER FACT — copied from the CJ listing. A banned
+#: token here describes what the product actually is, so the match is decisive.
+COMPLIANCE_SUPPLIER_FIELDS = ("product_title",)
+
+#: Fields the PIPELINE WROTE — the LLM's marketing payload and feature list.
+#: A banned token here is a word choice, not a product fact: the ad copy for a
+#: wooden board mentioned "oil" (board conditioning) and the gate deleted the
+#: highest-scoring package of the run. An advisory match must not delete.
+COMPLIANCE_LLM_FIELDS = ("marketing_ad_copy", "features")
+
 #: The human-text fields the gate scans. `metadata.json` carries no
 #: description field, so the description role is the marketing payload.
-COMPLIANCE_SCAN_FIELDS = ("product_title", "marketing_ad_copy", "features")
+COMPLIANCE_SCAN_FIELDS = COMPLIANCE_SUPPLIER_FIELDS + COMPLIANCE_LLM_FIELDS
 
 
-def _compliance_hit(metadata: Dict[str, Any]) -> str:
-    """`compliance gate: ...` for the first banned-token match, else ''.
+@dataclass(frozen=True)
+class ComplianceHit:
+    """One banned-token match, and whether it can delete the package.
 
-    Deterministic: fields are scanned in `COMPLIANCE_SCAN_FIELDS` order, a
-    field's strings left to right, tokens in tuple order — the same
-    case-insensitive substring rule every other banned-token check in the
-    repo uses, so the note names exactly where the token sits.
+    `decisive` is True only for a supplier-fact field: that match forces
+    `disregard` regardless of score. An advisory (LLM-authored) match keeps
+    its note but leaves the tier to the score, because the pipeline must not
+    delete a product over wording the pipeline itself chose.
     """
-    for field in COMPLIANCE_SCAN_FIELDS:
+
+    note: str
+    decisive: bool
+
+
+def _scan_compliance_fields(metadata: Dict[str, Any], fields: Sequence[str]) -> str:
+    """The `compliance gate: ...` note for the first match in `fields`, else ''.
+
+    Deterministic: fields in the order given, a field's strings left to right,
+    tokens in tuple order — the same case-insensitive substring rule every
+    other banned-token check in the repo uses, so the note names exactly where
+    the token sits.
+    """
+    for field in fields:
         value = metadata.get(field)
         texts = value if isinstance(value, list) else (value,)
         for text in texts:
@@ -156,6 +180,22 @@ def _compliance_hit(metadata: Dict[str, Any]) -> str:
                         f"in {field}"
                     )
     return ""
+
+
+def _compliance_hit(metadata: Dict[str, Any]) -> Optional[ComplianceHit]:
+    """The compliance verdict for a package, or None when its text is clean.
+
+    Supplier fields are scanned first so a decisive match always outranks an
+    advisory one — a package whose title says "electric" is contraband even
+    if its ad copy is innocent.
+    """
+    supplier_note = _scan_compliance_fields(metadata, COMPLIANCE_SUPPLIER_FIELDS)
+    if supplier_note:
+        return ComplianceHit(supplier_note, decisive=True)
+    llm_note = _scan_compliance_fields(metadata, COMPLIANCE_LLM_FIELDS)
+    if llm_note:
+        return ComplianceHit(llm_note, decisive=False)
+    return None
 
 
 class JevRankingError(JevError):
@@ -374,9 +414,9 @@ class JevProductRanker:
             ]
             if pillar == "discard":
                 notes.append("Jev classified this package as discard")
-            compliance_note = _compliance_hit(ref.metadata)
-            if compliance_note:
-                notes.append(compliance_note)
+            compliance = _compliance_hit(ref.metadata)
+            if compliance:
+                notes.append(compliance.note)
             return RankedPackage(
                 package_dir=ref.package_dir,
                 metadata=ref.metadata,
@@ -400,20 +440,28 @@ class JevProductRanker:
         notes = ""
         if pillar == "discard":
             notes = "Jev classified this package as discard"
-        compliance_note = _compliance_hit(ref.metadata)
-        if compliance_note:
-            # Override, not a suggestion: a contraband package never reaches
-            # shortlist/review regardless of its Jev score, and its note
-            # says why.
+        compliance = _compliance_hit(ref.metadata)
+        if compliance:
+            # A SUPPLIER-field match is an override, not a suggestion: the
+            # product IS the contraband, so it never reaches shortlist/review
+            # regardless of its Jev score. An LLM-authored match only records
+            # the note — deleting over the pipeline's own word choice would
+            # void a good product, which is what happened to the top-scoring
+            # package of the 2026-10-13 run.
             if notes:
                 notes += "; "
-            notes += compliance_note
-            if tier != "disregard":
+            notes += compliance.note
+            if compliance.decisive and tier != "disregard":
                 logger.warning(
                     "Compliance gate demoted %s from %s to disregard: %s",
-                    ref.slug, tier, compliance_note,
+                    ref.slug, tier, compliance.note,
                 )
-            tier = "disregard"
+                tier = "disregard"
+            elif not compliance.decisive:
+                logger.info(
+                    "Compliance gate advisory on %s (tier left at %s): %s",
+                    ref.slug, tier, compliance.note,
+                )
         logger.info(
             "Ranked %s: similarity=%.2f value=%.2f rank=%.2f tier=%s pillar=%s",
             ref.slug, similarity, value, rank_score, tier, pillar,

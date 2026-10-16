@@ -560,19 +560,37 @@ def test_compliance_tokens_are_the_union_specified():
 
 def test_compliance_hit_names_the_field_and_the_token():
     jade = {**METADATA, "product_title": "Green Jade Roller Stone Face Tool"}
-    assert "matched in product_title" in _compliance_hit(jade)
-    assert "'jade'" in _compliance_hit(jade)
+    hit = _compliance_hit(jade)
+    assert "matched in product_title" in hit.note
+    assert "'jade'" in hit.note
+    assert hit.decisive is True  # a supplier-fact field: this one deletes
     usb = {
         **METADATA,
         "marketing_ad_copy": "Charge it once with any cable — USB ready.",
     }
-    assert "'usb'" in _compliance_hit(usb)
-    assert "matched in marketing_ad_copy" in _compliance_hit(usb)
+    hit = _compliance_hit(usb)
+    assert "'usb'" in hit.note
+    assert "matched in marketing_ad_copy" in hit.note
+    assert hit.decisive is False  # our own copy: note only, tier stays
     rechar = {**METADATA, "features": ["Rechargeable motor", "Soft head"]}
-    assert "'rechargeable'" in _compliance_hit(rechar)
-    assert "matched in features" in _compliance_hit(rechar)
+    hit = _compliance_hit(rechar)
+    assert "'rechargeable'" in hit.note
+    assert "matched in features" in hit.note
+    assert hit.decisive is False
     # The clean reference package has no hit on any scanned field.
-    assert _compliance_hit(METADATA) == ""
+    assert _compliance_hit(METADATA) is None
+
+
+def test_a_supplier_field_match_outranks_an_advisory_one():
+    """Title is scanned first, so contraband cannot hide behind clean copy."""
+    both = {
+        **METADATA,
+        "product_title": "Electric Salt And Pepper Grinder",
+        "marketing_ad_copy": "Runs for months on one charge.",
+    }
+    hit = _compliance_hit(both)
+    assert hit.decisive is True
+    assert "matched in product_title" in hit.note
 
 
 def test_a_shortlisted_package_matching_a_token_is_demoted_to_disregard(tmp_path):
@@ -598,7 +616,14 @@ def test_a_shortlisted_package_matching_a_token_is_demoted_to_disregard(tmp_path
     assert "compliance gate: banned token 'jade' matched in product_title" in package.notes
 
 
-def test_a_review_package_with_a_usb_copy_is_demoted_too(tmp_path):
+def test_a_match_in_our_own_copy_notes_but_does_not_demote(tmp_path):
+    """The pipeline must not delete a product over wording it wrote itself.
+
+    Live case: the top-scoring package of the 2026-10-13 run, a stainless
+    cutting board at 4.34, was deleted because its generated ad copy used the
+    word "oil" while describing board conditioning. An LLM-field match is
+    advisory now — the note stays, the tier is whatever the score earned.
+    """
     root = _export_root(tmp_path, packages=(("cjdropshipping", "product-05"),))
     _write_package(root, "cjdropshipping", "product-05", metadata={
         **METADATA,
@@ -612,9 +637,28 @@ def test_a_review_package_with_a_usb_copy_is_demoted_too(tmp_path):
     ranker = _ranker(tmp_path, client, export_root=root)
     (package,) = ranker.rank()
 
-    # raw 2 -> 3.0 both questions -> rank 3.0: review, then overridden.
-    assert package.tier == "disregard"
+    # raw 2 -> 3.0 both questions -> rank 3.0: review, and it STAYS review.
+    assert package.tier == "review"
     assert "banned token 'usb' matched in marketing_ad_copy" in package.notes
+
+
+def test_an_advisory_match_cannot_rescue_a_low_score(tmp_path):
+    """Advisory only relaxes the override — the score still has to earn a tier."""
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-06"),))
+    _write_package(root, "cjdropshipping", "product-06", metadata={
+        **METADATA,
+        "features": ["Rechargeable motor"],
+    })
+    client = ScriptedJevClient(
+        lambda state, questions, i: _perfect_answers(
+            questions, similarity=0, value=0, pillar="morning_table"
+        )
+    )
+    ranker = _ranker(tmp_path, client, export_root=root)
+    (package,) = ranker.rank()
+
+    assert package.tier == "disregard"
+    assert "banned token 'rechargeable' matched in features" in package.notes
 
 
 def test_clean_packages_keep_their_tier_and_a_discard_note_composes(tmp_path):

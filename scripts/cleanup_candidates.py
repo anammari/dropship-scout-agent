@@ -26,7 +26,7 @@ Usage (from the repo root):
 
     source .venv/bin/activate && python scripts/cleanup_candidates.py \\
         [--report outputs/json/morning-anthem-step-6-ranked-candidates.json] \\
-        [--export-root <dir>] [--review-keep 10] [--apply]
+        [--export-root <dir>] [--review-keep 10] [--max-per-family 5] [--apply]
 
 Exit codes: 0 complete (including a dry run), 1 requires human intervention (no
 readable ranking report), 2 unexpected error.
@@ -57,12 +57,20 @@ from src.pipeline.cleanup import (  # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 
 
-def _print_plan(actions, supplier_root: Path, keep: int, apply: bool) -> None:
+def _print_plan(
+    actions, supplier_root: Path, keep: int, apply: bool,
+    max_per_family: int = 0,
+) -> None:
     counts = summarize(actions)
     mode = "APPLYING DELETIONS" if apply else "DRY RUN — nothing will be deleted"
     print(f"\n[STEP 7] {mode}")
     print(f"  supplier root: {supplier_root}")
     print(f"  review cap:    keep the top {keep} by rank_score")
+    print(
+        "  family cap:    "
+        + (f"at most {max_per_family} of one family, globally"
+           if max_per_family > 0 else "disabled")
+    )
     print(
         f"  plan: {counts['kept']} kept, {counts['deleted']} to delete, "
         f"{counts['refused']} refused/unknown (left alone)"
@@ -124,6 +132,15 @@ def main(argv: List[str] | None = None) -> int:
         help="how many `review` packages survive, by rank_score (default: %(default)s)",
     )
     parser.add_argument(
+        "--max-per-family",
+        type=int,
+        default=settings.CLEANUP_MAX_PER_FAMILY,
+        help=(
+            "GLOBAL ceiling on one product family (e.g. dog gear), by rank_score. "
+            "Overrides the shortlist keep; 0 disables (default: %(default)s)"
+        ),
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help=(
@@ -141,7 +158,10 @@ def main(argv: List[str] | None = None) -> int:
     try:
         packages = load_ranked_packages(args.report)
         actions = plan_cleanup(
-            packages, export_root=args.export_root, review_keep=args.review_keep
+            packages,
+            export_root=args.export_root,
+            review_keep=args.review_keep,
+            max_per_family=args.max_per_family,
         )
     except CleanupError as exc:
         print(
@@ -159,7 +179,10 @@ def main(argv: List[str] | None = None) -> int:
         return 1
 
     supplier_root = args.export_root / "cjdropshipping"
-    _print_plan(actions, supplier_root, args.review_keep, args.apply)
+    _print_plan(
+        actions, supplier_root, args.review_keep, args.apply,
+        max_per_family=args.max_per_family,
+    )
 
     # Only `--apply` reaches the filesystem. The plan is always computed (so the
     # dry run can print it), but acting on it is what the flag is FOR — an

@@ -48,9 +48,36 @@ _PRODUCT_DIR_RE = re.compile(r"^product-\d{2,}$")
 #: The tiers the report uses, and what each one means here.
 _DELETE_TIERS = ("disregard",)
 
+#: Product families that must not flood the catalogue (operator directive
+#: 2026-10-16). The 2026-10-13 run kept 23 `sunrise_move` packages of which 22
+#: were dog gear — a pet-accessories shop wearing a morning-lifestyle name.
+#:
+#: A package's family is derived from its TITLE, not from an upstream field:
+#: deterministic, free, and it therefore applies to packages already on disk
+#: without a re-ingestion. Only the families listed here are capped; a package
+#: matching none is unconstrained.
+FAMILY_RULES: Dict[str, tuple] = {
+    "dog-gear": ("dog", "puppy", "leash", "harness", "collar", "poop", "waste bag"),
+}
+
 
 class CleanupError(Exception):
     """The ranking report is missing, malformed, or unsafe to act on."""
+
+
+def package_family(title: object) -> Optional[str]:
+    """The capped family a package title belongs to, or None.
+
+    Case-insensitive substring match, the same rule every other text check in
+    the repo uses. `FAMILY_RULES` order decides when a title matches two
+    families; there is one family today, so that is a non-question until a
+    second is added.
+    """
+    lowered = str(title or "").lower()
+    for family, tokens in FAMILY_RULES.items():
+        if any(token in lowered for token in tokens):
+            return family
+    return None
 
 
 @dataclass
@@ -144,6 +171,7 @@ def plan_cleanup(
     packages: Sequence[Dict[str, Any]],
     export_root: Optional[Path] = None,
     review_keep: Optional[int] = None,
+    max_per_family: Optional[int] = None,
 ) -> List[CleanupAction]:
     """Decide what to delete, without deleting anything.
 
@@ -153,11 +181,25 @@ def plan_cleanup(
     none of the three — or whose path is not safely contained — is **kept** and
     reported as such: this step deletes only what it positively recognises, so a
     future report shape can never turn into a mass deletion.
+
+    **The family cap runs last and can override a keep** (`max_per_family`,
+    operator directive 2026-10-16). It is GLOBAL, not per pillar: the strongest
+    `max_per_family` survivors of a capped family anywhere in the tree stay,
+    and the rest go — including `shortlist` ones, because the whole point is
+    that no single product family may flood the catalogue however well it
+    scores. Zero or None disables it.
     """
     supplier_root = _supplier_root(export_root)
     keep = settings.CLEANUP_REVIEW_KEEP if review_keep is None else review_keep
     if keep < 0:
         raise CleanupError(f"review_keep must be >= 0 (got {keep})")
+    family_cap = (
+        settings.CLEANUP_MAX_PER_FAMILY
+        if max_per_family is None
+        else max_per_family
+    )
+    if family_cap < 0:
+        raise CleanupError(f"max_per_family must be >= 0 (got {family_cap})")
 
     actions: List[CleanupAction] = []
     review: List[CleanupAction] = []
@@ -223,7 +265,60 @@ def plan_cleanup(
             )
     actions.extend(review)
 
+    _apply_family_cap(packages, actions, family_cap)
+
     return actions
+
+
+def _apply_family_cap(
+    packages: Sequence[Dict[str, Any]],
+    actions: List[CleanupAction],
+    family_cap: int,
+) -> None:
+    """Delete every capped-family survivor beyond the strongest `family_cap`.
+
+    Runs after the tier rules and overrides them, so a `shortlist` package can
+    be cut here — that is the point of the rule. Ordering is by score then
+    path, the same reproducible tie-break the review cap uses, so the same
+    report always yields the same cut.
+    """
+    if family_cap <= 0:
+        return
+    titles = {
+        str(row.get("package_dir") or "").strip(): (
+            (row.get("metadata") or {}).get("product_title")
+            if isinstance(row.get("metadata"), dict)
+            else None
+        )
+        for row in packages
+    }
+    by_family: Dict[str, List[CleanupAction]] = {}
+    for action in actions:
+        if action.delete:
+            continue
+        family = package_family(titles.get(str(action.package_dir), ""))
+        if family:
+            by_family.setdefault(family, []).append(action)
+
+    for family, survivors in by_family.items():
+        if len(survivors) <= family_cap:
+            continue
+        survivors.sort(
+            key=lambda action: (-(action.rank_score or 0.0), str(action.package_dir))
+        )
+        for position, action in enumerate(survivors, start=1):
+            if position <= family_cap:
+                action.reason += f"; {family} #{position} of {len(survivors)} — kept (cap {family_cap})"
+            else:
+                action.delete = True
+                action.reason = (
+                    f"{family} #{position} of {len(survivors)} — deleted "
+                    f"(beyond the {family} cap of {family_cap}; was {action.tier})"
+                )
+        logger.info(
+            "Family cap %s: %d survivor(s), keeping the strongest %d",
+            family, len(survivors), family_cap,
+        )
 
 
 def apply_cleanup(

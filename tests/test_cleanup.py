@@ -20,6 +20,7 @@ from src.pipeline.cleanup import (
     CleanupError,
     apply_cleanup,
     load_ranked_packages,
+    package_family,
     plan_cleanup,
     summarize,
 )
@@ -43,11 +44,14 @@ def _tree(tmp_path: Path, names: List[str]) -> Path:
     return root
 
 
-def _row(root: Path, name: str, tier: str, score: float) -> Dict[str, Any]:
+def _row(
+    root: Path, name: str, tier: str, score: float, title: str = ""
+) -> Dict[str, Any]:
     return {
         "package_dir": str(root / "cjdropshipping" / name),
         "tier": tier,
         "rank_score": score,
+        "metadata": {"product_title": title},
     }
 
 
@@ -489,3 +493,138 @@ def test_the_runner_review_cap_flag_is_respected(tmp_path, capsys):
     ) == 0
     assert (root / "cjdropshipping" / "product-01").is_dir()
     assert not (root / "cjdropshipping" / "product-02").exists()
+
+
+# ---------------------------------------------------------------------------
+# The global family cap (operator directive 2026-10-16)
+#
+# The 2026-10-13 run kept 23 `sunrise_move` packages of which 22 were dog gear,
+# so the catalogue read as a pet-accessories shop. The cap is GLOBAL, and it
+# overrides the shortlist keep — that override is the whole point, so it is
+# tested directly rather than left implicit.
+# ---------------------------------------------------------------------------
+
+
+def test_package_family_matches_the_flooded_family_by_title():
+    assert package_family("Military Tactical Dog Harness German Shepherd") == "dog-gear"
+    assert package_family("Automatic retractable dog leash") == "dog-gear"
+    assert package_family("Pet Purse Leash For Dog Walking") == "dog-gear"
+    assert package_family("Silk Eye Mask Sleep Eye Mask Ice Cube") is None
+    assert package_family(None) is None
+
+
+def test_family_cap_keeps_the_strongest_and_deletes_the_rest(tmp_path):
+    names = [f"product-{n:02d}" for n in range(1, 8)]
+    root = _tree(tmp_path, names)
+    rows = [
+        _row(root, name, "shortlist", 3.0 + index * 0.1, title=f"Dog Harness {name}")
+        for index, name in enumerate(names)
+    ]
+
+    actions = plan_cleanup(
+        rows, export_root=root, review_keep=10, max_per_family=5
+    )
+    kept = {a.package_dir.name for a in actions if not a.delete}
+    deleted = {a.package_dir.name for a in actions if a.delete}
+
+    assert len(kept) == 5
+    assert len(deleted) == 2
+    # Scores rise with the index, so the two weakest go and the five strongest stay.
+    assert deleted == {"product-01", "product-02"}
+    assert "product-07" in kept
+
+
+def test_family_cap_overrides_a_shortlist_keep(tmp_path):
+    """Every package below is shortlist, and two are still deleted."""
+    names = [f"product-{n:02d}" for n in range(1, 7)]
+    root = _tree(tmp_path, names)
+    rows = [
+        _row(root, name, "shortlist", 4.0, title="Pet Leash Breathable Mesh Chest Back")
+        for name in names
+    ]
+
+    actions = plan_cleanup(
+        rows, export_root=root, review_keep=10, max_per_family=5
+    )
+    deleted = [a for a in actions if a.delete]
+
+    assert len(deleted) == 1
+    assert deleted[0].tier == "shortlist"  # the cap cut a shortlist package
+    assert "cap of 5" in deleted[0].reason
+
+
+def test_family_cap_is_global_not_per_pillar(tmp_path):
+    """Five dog-gear items across the whole tree, however the pillars split."""
+    names = [f"product-{n:02d}" for n in range(1, 9)]
+    root = _tree(tmp_path, names)
+    rows = [
+        _row(
+            root,
+            name,
+            "shortlist",
+            3.0 + index * 0.1,
+            title="Dog Leash" if index % 2 else "Pet Harness Dog Walking",
+        )
+        for index, name in enumerate(names)
+    ]
+
+    actions = plan_cleanup(
+        rows, export_root=root, review_keep=10, max_per_family=5
+    )
+
+    assert sum(1 for a in actions if not a.delete) == 5
+    assert sum(1 for a in actions if a.delete) == 3
+
+
+def test_a_package_outside_a_capped_family_is_untouched(tmp_path):
+    names = [f"product-{n:02d}" for n in range(1, 12)]
+    root = _tree(tmp_path, names)
+    rows = [
+        _row(root, name, "shortlist", 4.0, title="Dog Harness")
+        for name in names[:8]
+    ] + [
+        _row(root, name, "shortlist", 4.0, title="Silk Sleep Eye Mask")
+        for name in names[8:]
+    ]
+
+    actions = plan_cleanup(
+        rows, export_root=root, review_keep=10, max_per_family=5
+    )
+    kept = {a.package_dir.name for a in actions if not a.delete}
+
+    # 5 dog gear + every one of the 3 eye masks.
+    assert kept == {"product-01", "product-02", "product-03", "product-04",
+                    "product-05", "product-09", "product-10", "product-11"}
+
+
+def test_a_family_cap_of_zero_disables_the_rule(tmp_path):
+    names = [f"product-{n:02d}" for n in range(1, 9)]
+    root = _tree(tmp_path, names)
+    rows = [
+        _row(root, name, "shortlist", 4.0, title="Dog Harness") for name in names
+    ]
+
+    actions = plan_cleanup(
+        rows, export_root=root, review_keep=10, max_per_family=0
+    )
+
+    assert all(not a.delete for a in actions)
+
+
+def test_the_family_cap_never_touches_an_already_deleted_package(tmp_path):
+    """A disregard package is deleted once, not re-reasoned by the cap."""
+    names = ["product-01", "product-02"]
+    root = _tree(tmp_path, names)
+    rows = [
+        _row(root, "product-01", "disregard", 1.0, title="Dog Harness"),
+        _row(root, "product-02", "shortlist", 4.0, title="Dog Harness"),
+    ]
+
+    actions = plan_cleanup(
+        rows, export_root=root, review_keep=10, max_per_family=1
+    )
+    by_name = {a.package_dir.name: a for a in actions}
+
+    assert by_name["product-01"].delete is True
+    assert by_name["product-01"].reason == "disregard — deleted"
+    assert by_name["product-02"].delete is False

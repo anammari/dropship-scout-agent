@@ -123,7 +123,9 @@ async def test_exports_accepted_candidate_with_metadata_and_images(tmp_path):
     assert metadata["features"] == [
         "Modular segments", "Steel base", "Under-desk mount",
     ]
-    assert metadata["target_tags"] == ["dropship", "workspace"]
+    # `dropship` is an internal ACCEPT marker (models.py requires it on the
+    # evaluation) and is stripped at export — it must never reach a customer.
+    assert metadata["target_tags"] == ["workspace"]
     assert metadata["supplier_name"] == "CJdropshipping"
     assert metadata["supplier_retail_url"] == _CJ_URL
     assert metadata["image_source"] == IMAGE_SOURCE == "supplier_gallery"

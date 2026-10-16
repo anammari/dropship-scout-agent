@@ -353,6 +353,18 @@ def test_cleanup_review_keep_env_override_is_respected(monkeypatch):
     assert load_settings().CLEANUP_REVIEW_KEEP == 4
 
 
+def test_cleanup_max_per_family_defaults_to_five(monkeypatch):
+    # The global family ceiling: no single product family may flood the
+    # catalogue however well it scores (operator directive 2026-10-16).
+    monkeypatch.delenv("CLEANUP_MAX_PER_FAMILY", raising=False)
+    assert load_settings().CLEANUP_MAX_PER_FAMILY == 5
+
+
+def test_cleanup_max_per_family_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("CLEANUP_MAX_PER_FAMILY", "0")
+    assert load_settings().CLEANUP_MAX_PER_FAMILY == 0
+
+
 def test_ranked_candidates_path_defaults_to_the_step_6_report(monkeypatch):
     monkeypatch.delenv("MORNING_ANTHEM_RANKED_CANDIDATES_PATH", raising=False)
     assert (

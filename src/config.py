@@ -285,6 +285,15 @@ class Settings:
         self.CLEANUP_REVIEW_KEEP: int = _parse_int(
             os.getenv("CLEANUP_REVIEW_KEEP"), default=10
         )
+        # Step-7 cleanup: the GLOBAL ceiling on one product family, so a
+        # saturated family cannot flood the catalogue however well it scores
+        # (operator directive 2026-10-16, after 22 of 23 kept `sunrise_move`
+        # packages turned out to be dog gear). Families are derived from the
+        # package title (`cleanup.FAMILY_RULES`); a package in no capped family
+        # is unconstrained. This cap OVERRIDES the shortlist keep.
+        self.CLEANUP_MAX_PER_FAMILY: int = _parse_int(
+            os.getenv("CLEANUP_MAX_PER_FAMILY"), default=5
+        )
         # Step-5 Morning Anthem gold-kernel intake root: the supplier
         # subfolder is created under it by the runner, numbered independently
         # (`cjdropshipping/product-NN`).

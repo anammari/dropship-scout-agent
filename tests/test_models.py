@@ -254,9 +254,11 @@ def test_shipping_notice_is_derived_from_the_quote():
             shipping_transit_days="6-10",
         )
     )
+    # Calendar days, not business days: CJ states its windows in calendar days,
+    # so the old "business days" label promised a faster delivery than quoted.
     assert final.shipping_notice_au == (
         "Standard tracked international shipping to Australia from China "
-        "via CJPacket Eub: 6-10 business days."
+        "via CJPacket Eub: 6-10 days."
     )
 
 
