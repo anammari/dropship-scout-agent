@@ -8,9 +8,12 @@ Morning Anthem's sole supplier.
 
 **The primary keyword is not written here.** Each product's exact-title keyword
 is derived in code from the product's own name, so the model has no part in it.
-What this prompt asks for is the **fallback**: one tightly-specific variant of
+What this prompt asks for is the **fallback**: tightly-specific variants of
 the product's title, for use only if the exact title finds nothing in the
-supplier catalogue.
+supplier catalogue. How many a product earns is not the model's call — the
+table's `Fallbacks` column carries a per-product budget, ranked by how well
+evidenced the product is, so the strongest gold products get several distinct
+search strings and the thinnest get one or none.
 
 This file is a tracked package resource: the generator renders the
 `{PRODUCT_TABLE}` slot from the live Step 3 deliverable, batches the table (4
@@ -28,27 +31,32 @@ table of GOLD-STANDARD products: physical goods with live evidence of recent
 Australian demand.
 
 Each product is already searched for by its **own title**, derived in code. Your
-job is the **fallback**: one alternative search string for the same physical
+job is the **fallback**: alternative search strings for the same physical
 object, to be used only if the exact title turns up nothing in the
 **CJdropshipping** catalogue. A good fallback is what that catalogue actually
 indexes — the object's mechanics, material, form factor or size — and it is
-worthless if it is broader than the product or names something else.
+worthless if it is broader than the product or names something else. The
+`Fallbacks` column gives each product its own budget; use it, do not exceed it.
 
 You write supplier search keywords, not customer-facing copy. Never write a
 product title: that is already used.
 
 ## User message
 
-Below are the gold-standard products. For each, write **at most one fallback
-keyword** — and only where an honest one exists.
+Below are the gold-standard products. For each, write **up to as many fallback
+keywords as its `Fallbacks` column allows** — and only where honest ones exist.
+Each fallback for a product must be a genuinely different search string, not a
+reworded twin of another you wrote for the same product.
 
 {PRODUCT_TABLE}
 
 ### Requirements
 
-1. **At most ONE fallback per product, and usually none.** An empty list is a
-   valid and common answer. A weak fallback is worse than no fallback, because
-   it spends a supplier search on a string that will not find the product.
+1. **Respect each product's `Fallbacks` budget, and usually write fewer.** An
+   empty list is a valid and common answer. A weak fallback is worse than no
+   fallback, because it spends a supplier search on a string that will not find
+   the product. Two near-identical strings for one product are worse still:
+   they spend two searches to learn the same nothing.
 
 2. **The same physical object, named more specifically or more generically only
    in its trade vocabulary.** The fallback must describe the identical kind of

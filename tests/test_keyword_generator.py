@@ -35,6 +35,7 @@ from src.keywords.generator import (
     carries_banned_token,
     dedupe_keywords,
     exact_keyword,
+    fallback_budgets,
     load_gold_products,
     load_prompt_parts,
     normalized_title_words,
@@ -240,10 +241,12 @@ def test_prompt_is_a_template_with_a_product_slot_and_no_products():
     assert "AliExpress" not in parts.system
 
 
-def test_prompt_states_the_boundary_and_the_one_fallback_cap():
+def test_prompt_states_the_boundary_and_the_per_product_fallback_budget():
     parts = load_prompt_parts()
     assert "Hard AICIS boundary" in parts.requirements
-    assert "at most one fallback" in parts.requirements.lower()
+    # The cap is per product and lives in the table's `Fallbacks` column, so the
+    # prompt points at the column rather than naming a single number.
+    assert "fallbacks` budget" in parts.requirements.lower()
     # The fallback must share a concrete word with the title, and the prompt says
     # so because the code enforces it.
     assert "share at least one concrete word" in parts.requirements
@@ -260,10 +263,12 @@ def test_build_product_table_renders_verbatim_cells_with_em_dashes_for_nulls():
     lines = build_product_table(GOLD)
     assert lines[0] == (
         "| # | Product | Pillar | AU demand evidence | "
-        "Physical attributes from the listing | Retail price |"
+        "Physical attributes from the listing | Retail price | Fallbacks |"
     )
     assert lines[2].startswith("| 1 | Bodum Chambord French Press | brew_fuel |")
-    assert lines[2].endswith("| Inert kitchen tool. | $24.95 |")
+    # The last two cells are the verbatim retail price and the ranked budget.
+    # Bodum is the strongest of the three, so it sits in the top third.
+    assert lines[2].endswith("| Inert kitchen tool. | $24.95 | 5 |")
 
 
 # ---------------------------------------------------------------------------
@@ -528,14 +533,14 @@ def test_generate_bank_accepts_an_empty_fallback_list(tmp_path):
     assert [c.match for c in bank] == ["exact"] * len(GOLD)
 
 
-def test_the_batch_note_asks_for_one_fallback_each_and_lists_what_is_taken(tmp_path):
+def test_the_batch_note_asks_for_the_budget_and_lists_what_is_taken(tmp_path):
     generator = _generator(tmp_path, [[], []], batch_size=2)
     generator.generate_bank()
 
     calls = generator.scripted.calls
     assert len(calls) == 2  # 3 products at 2 per call
     first = calls[0]["messages"][1]["content"]
-    assert "at most one fallback" in first.lower()
+    assert "`fallbacks` column" in first.lower()
     # The exact keywords are already claimed, so the model is told not to reuse
     # them as a fallback.
     assert "bodum chambord french press" in first
@@ -947,3 +952,69 @@ class _FailingGenerator:
             "keyword bank failed validation:\n- row 0 is an exact keyword "
             "('x') that does not match its product's own title ('y')"
         )
+
+
+# ---------------------------------------------------------------------------
+# The per-product fallback budget (ranked thirds, operator directive 2026-10-16)
+#
+# Six fallbacks for every product meant every gold product spent six supplier
+# searches whether or not it was worth it. The budget is ranked instead, so the
+# best-evidenced products get the widest enrichment.
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_budgets_split_the_table_into_ranked_thirds():
+    products = [
+        _gold(f"Product {n}", evidence=f"rating 4.{n}/5, {n}00 reviews")
+        for n in range(1, 7)
+    ]
+    budgets = fallback_budgets(products)
+
+    # Ordered by rating desc, so Product 6 is strongest and Product 1 weakest.
+    assert budgets["Product 6"] == 5
+    assert budgets["Product 5"] == 5
+    assert budgets["Product 4"] == 3
+    assert budgets["Product 3"] == 3
+    assert budgets["Product 2"] == 1
+    assert budgets["Product 1"] == 1
+
+
+def test_a_single_product_still_earns_the_top_budget():
+    """Ranked thirds, not a floor: one product is its own top third."""
+    assert fallback_budgets([_gold("Only Product")])["Only Product"] == 5
+
+
+def test_the_budget_is_ranked_not_absolute():
+    """A weak table and a strong one produce the same spread."""
+    weak = [
+        _gold(f"Weak {n}", evidence=f"rating 3.{n}/5, {n}0 reviews")
+        for n in range(1, 4)
+    ]
+    assert sorted(fallback_budgets(weak).values(), reverse=True) == [5, 3, 1]
+
+
+def test_validate_bank_drops_a_fallback_past_its_budget():
+    products = [
+        _gold(f"Product {n}", evidence=f"rating 4.{n}/5, {n}00 reviews")
+        for n in range(1, 7)
+    ]
+    # Six products, so ranked thirds put `Product 1` last on a budget of 1.
+    assert fallback_budgets(products)["Product 1"] == 1
+    rows = build_exact_rows(products)
+    for suffix in ("alpha", "beta"):
+        rows.append(
+            {
+                "keyword": f"product one {suffix}",
+                "product": "Product 1",
+                "pillar": "morning_table",
+                "match": "tight_fallback",
+                "rationale": suffix,
+            }
+        )
+
+    problems = validate_bank(rows, products)
+
+    past = [p for p in problems if "past its budget" in p.message]
+    assert len(past) == 1
+    assert past[0].droppable is True
+    assert "budget of 1 fallback(s)" in past[0].message

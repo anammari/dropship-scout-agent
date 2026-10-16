@@ -118,9 +118,9 @@ FIELDS = ("keyword", "product", "pillar", "match", "rationale")
 #: the Step-3 deliverable — the LLM never authors a product fact.
 TABLE_HEADER = (
     "| # | Product | Pillar | AU demand evidence | "
-    "Physical attributes from the listing | Retail price |"
+    "Physical attributes from the listing | Retail price | Fallbacks |"
 )
-TABLE_SEPARATOR = "| --- | --- | --- | --- | --- | --- |"
+TABLE_SEPARATOR = "| --- | --- | --- | --- | --- | --- | --- |"
 TABLE_COLUMNS = ("name", "pillar", "demand_evidence", "attributes", "retail_price_text")
 
 # The hard AICIS boundary and commodity-replacement exclusion, enforced in code
@@ -137,6 +137,15 @@ BANNED_TOKENS = (
 
 _DEMAND_RATING_RE = re.compile(r"rating\s+(\d+(?:\.\d+)?)\s*/\s*5", re.I)
 _DEMAND_REVIEWS_RE = re.compile(r"([\d,]+)\s*reviews?", re.I)
+
+#: How many fallback keywords each product may be given, by its share of the
+#: table. Operator directive 2026-10-16: the best-evidenced gold products earn
+#: the widest enrichment, the weakest get the least, and no fixed rating floor
+#: is applied — a floor would empty the table in a pillar whose products all
+#: sit below it, while a ranked split always produces a spread.
+FALLBACK_BUDGET_TOP = 5
+FALLBACK_BUDGET_MID = 3
+FALLBACK_BUDGET_LOW = 1
 
 #: Words too short or too generic to prove a fallback is about the same object
 #: as its product's title.
@@ -263,6 +272,37 @@ def _cell(value: object) -> str:
     return re.sub(r"\s+", " ", text.replace("|", "/")).strip()
 
 
+def fallback_budgets(products: Sequence[Dict]) -> Dict[str, int]:
+    """How many fallbacks each product may be given: ranked thirds.
+
+    Deterministic. Products are ordered by rating, then review volume, then
+    name — the same demand ordering the selection uses — and split into three
+    equal shares: the top third earn `FALLBACK_BUDGET_TOP` fallbacks, the
+    middle `FALLBACK_BUDGET_MID`, the bottom `FALLBACK_BUDGET_LOW`.
+
+    A share rather than a rating floor on purpose: a floor empties the table in
+    a pillar whose products all sit under it, while ranked thirds always
+    produce a spread and always leave every product at least one fallback.
+    """
+    ordered = sorted(
+        products,
+        key=lambda p: (
+            -parse_demand_evidence(p.get("demand_evidence"))[1],
+            -parse_demand_evidence(p.get("demand_evidence"))[0],
+            str(p.get("name") or ""),
+        ),
+    )
+    budgets: Dict[str, int] = {}
+    total = len(ordered)
+    for position, product in enumerate(ordered):
+        third = (position * 3) // total if total else 0
+        budget = (FALLBACK_BUDGET_TOP, FALLBACK_BUDGET_MID, FALLBACK_BUDGET_LOW)[
+            min(third, 2)
+        ]
+        budgets[str(product.get("name") or "").strip()] = budget
+    return budgets
+
+
 def build_product_table(products: Sequence[Dict]) -> List[str]:
     """Render the gold deliverable's rows into the prompt's markdown table.
 
@@ -270,6 +310,7 @@ def build_product_table(products: Sequence[Dict]) -> List[str]:
     is copied verbatim from the deliverable's own fields (`null` -> `—`), so
     the table is evidence the LLM reads, never text it may rewrite.
     """
+    budgets = fallback_budgets(products)
     lines = [TABLE_HEADER, TABLE_SEPARATOR]
     for index, product in enumerate(products, 1):
         # `description` is the listing's own physical-attribute text, but the
@@ -287,6 +328,7 @@ def build_product_table(products: Sequence[Dict]) -> List[str]:
                     _cell(product.get("demand_evidence")),
                     _cell(attributes),
                     _cell(product.get("retail_price_text")),
+                    str(budgets.get(str(product.get("name") or "").strip(), FALLBACK_BUDGET_LOW)),
                 ]
             )
             + " |"
@@ -683,6 +725,28 @@ def validate_bank(rows: Sequence[dict], products: Sequence[Dict]) -> List[BankPr
                     "the table must be named by its own title"
                 )
             )
+
+    # The per-product fallback budget is a MODEL-facing cap, so exceeding it is
+    # a droppable slip: the extra rows go, the product keeps the budget it
+    # earned. Rows are indexed so the caller can remove exactly the surplus.
+    budgets = fallback_budgets(products)
+    fallback_counts: Dict[str, int] = {}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or str(row.get("match")) != "tight_fallback":
+            continue
+        product = str(row.get("product") or "").strip()
+        fallback_counts[product] = fallback_counts.get(product, 0) + 1
+        budget = budgets.get(product, FALLBACK_BUDGET_LOW)
+        if fallback_counts[product] > budget:
+            problems.append(
+                BankProblem(
+                    f"row {index} fallback {str(row.get('keyword'))!r} is "
+                    f"number {fallback_counts[product]} for product {product!r}, "
+                    f"past its budget of {budget} fallback(s)",
+                    index,
+                    droppable=True,
+                )
+            )
     for keyword, count in seen.items():
         if count > 1:
             problems.append(
@@ -805,11 +869,14 @@ class KeywordGenerator:
         count = len(chunk)
         note = (
             f"\n\n**This call covers only the {count} products in the table "
-            "above.** Write **at most one fallback keyword for each**, fewer "
-            "where no honest one exists — an empty list is a valid answer. "
-            "**Keep the response as short as possible**: `rationale` must be "
-            "at most 6 words, and omit any other commentary, so the JSON closes "
-            "well within the output limit."
+            "above.** For each, write **at most as many fallbacks as its "
+            "`Fallbacks` column allows** — fewer where no honest one exists, "
+            "and an empty list is a valid answer. The budget is per product: a "
+            "well-evidenced product earns several distinct search strings, a "
+            "thinly-evidenced one usually earns none. **Keep the response as "
+            "short as possible**: `rationale` must be at most 6 words, and omit "
+            "any other commentary, so the JSON closes well within the output "
+            "limit."
         )
         if taken:
             # Each call is independent, so a later batch cannot know what an
