@@ -18,11 +18,12 @@ ali_ds_state.json
 # is never tracked even if recreated locally.
 SESSION_CONTEXT.md
 
-# Agent plan prompts — working directives, not deliverables. They live on the
-# operator's machine only (and in the session they came from), so no plan
-# prompt is ever tracked, here or in any future checkout. Engineering plans
-# and spec docs live here; PRODUCTION DELIVERABLES moved to outputs/ (below).
-plans/
+# Engineering plans and spec docs — TRACKED (operator decision 2026-10-12).
+# Only the plans that describe live codebase behaviour travel with the repo,
+# split into `technical/` (implementation specs) and `simplified/`
+# (plain-English walkthroughs of the same). Superseded and not-doing plans were
+# removed. PRODUCTION DELIVERABLES stay untracked in outputs/ (below).
+!plans/
 
 # Research-stage production deliverables (Steps 2-6 of the updated pipeline):
 # AU search keywords, gold-standard products + raw scraped rows, the Step-4

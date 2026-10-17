@@ -15,10 +15,13 @@ import os
 from io import BytesIO
 
 import httpx
-import pytest
 from PIL import Image
 
 from src.models import RawSupplierProduct
+
+# CJdropshipping is The Morning Anthem's sole supplier, so every fixture is a
+# CJ listing on its own CDN gallery.
+_CJ_URL = "https://cjdropshipping.com/product/1745360894529376256.html"
 from src.pipeline.image_sourcing import (
     MAX_GALLERY_IMAGES,
     MIN_DISTINCT_IMAGES,
@@ -29,7 +32,6 @@ from src.pipeline.image_sourcing import (
     strip_size_suffix,
 )
 
-_ALI_URL = "https://www.aliexpress.com/item/1005006112233445.html"
 
 
 # ----------------------------------------------------------------------
@@ -105,8 +107,8 @@ class FakeAsyncClient:
 
 def _product(image_urls, **overrides) -> RawSupplierProduct:
     base = dict(
-        supplier_name="AliExpress",
-        supplier_retail_url=_ALI_URL,
+        supplier_name="CJdropshipping",
+        supplier_retail_url=_CJ_URL,
         product_title="Cable organiser",
         product_description="A spine.",
         price_aud=12.50,

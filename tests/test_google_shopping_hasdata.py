@@ -11,20 +11,22 @@ parser must survive either.
 
 import json
 import logging
+from typing import List
 from pathlib import Path
 
 import httpx
 import pytest
 
 from src.config import settings
-from src.evaluators.gold_curator import GoldProductCurator
-from src.extractors.google_shopping import ShoppingRow
+from src.evaluators.gold_curator import GoldCurationError, GoldProductCurator
+from src.extractors.shopping_row import ShoppingRow
 from src.extractors.google_shopping_hasdata import (
     GOOGLE_DOMAINS,
     HasDataNotConfiguredError,
     HasDataShoppingError,
     HasDataShoppingRunFailedError,
     HasDataShoppingScraper,
+    price_value_from_text,
     parse_response,
 )
 
@@ -99,8 +101,8 @@ def test_request_carries_the_au_market_pin_and_key():
     (request,) = requests
     assert request.url.path == "/scrape/google/shopping"
     assert request.url.params["q"] == "french press"
-    # The market pin is load-bearing: Google Shopping quotes differ per gl,
-    # exactly as the AliExpress DS Center's do.
+    # The market pin is load-bearing: Google Shopping prices and demand signals
+    # differ per market, so the launch must read the AU grid.
     assert request.url.params["gl"] == "au"
     assert request.url.params["domain"] == "google.com.au"
     assert request.url.params["hl"] == "en"
@@ -122,15 +124,36 @@ def test_one_request_per_keyword():
 
 
 def test_each_row_is_attributed_to_its_own_keyword():
-    # HasData items carry no `query` field (unlike the Apify actor's rows), so
-    # the attribution has to come from the request.
+    # A HasData grid row carries no `query` field of its own, so the keyword
+    # attribution has to come from the request that produced it.
     scraper, _ = _scraper()
     rows = scraper.scrape_keywords(["french press", "tea infuser"])
     assert [row.source_keyword for row in rows] == ["french press", "tea infuser"]
 
 
-def test_google_domain_follows_the_pipeline_country(monkeypatch):
-    monkeypatch.setattr(settings, "TARGET_COUNTRY", "GB")
+def test_default_scrape_is_pinned_to_the_au_market(monkeypatch):
+    # Australia-first launch: demand signals and price benchmarks reflect
+    # Australian shopper behaviour and AUD retail pricing.
+    monkeypatch.delenv("SHOPPING_GL", raising=False)
+    monkeypatch.delenv("SHOPPING_DOMAIN", raising=False)
+    from src.config import load_settings
+
+    monkeypatch.setattr(settings, "SHOPPING_GL", load_settings().SHOPPING_GL)
+    monkeypatch.setattr(
+        settings, "SHOPPING_DOMAIN", load_settings().SHOPPING_DOMAIN
+    )
+    scraper, requests = _scraper()
+    scraper.scrape_keywords(["french press"])
+    (request,) = requests
+    assert request.url.params["gl"] == "au"
+    assert request.url.params["domain"] == "google.com.au"
+
+
+def test_google_domain_follows_the_configured_market(monkeypatch):
+    # The market pin is configurable so the later global expansion is a config
+    # change, not a code change.
+    monkeypatch.setattr(settings, "SHOPPING_GL", "gb")
+    monkeypatch.setattr(settings, "SHOPPING_DOMAIN", "google.co.uk")
     scraper, requests = _scraper()
     scraper.scrape_keywords(["french press"])
     (request,) = requests
@@ -138,13 +161,14 @@ def test_google_domain_follows_the_pipeline_country(monkeypatch):
     assert request.url.params["domain"] == "google.co.uk"
 
 
-def test_unknown_country_falls_back_to_google_com(monkeypatch):
-    monkeypatch.setattr(settings, "TARGET_COUNTRY", "ZZ")
+def test_an_unmapped_market_falls_back_to_the_configured_domain(monkeypatch):
+    monkeypatch.setattr(settings, "SHOPPING_GL", "zz")
+    monkeypatch.setattr(settings, "SHOPPING_DOMAIN", "google.com")
     scraper, requests = _scraper()
     scraper.scrape_keywords(["french press"])
     (request,) = requests
     assert request.url.params["domain"] == "google.com"
-    assert "AU" in GOOGLE_DOMAINS  # the pinned market stays mapped
+    assert "au" in GOOGLE_DOMAINS  # the launch market stays mapped
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +446,6 @@ def test_parsed_rows_clear_the_curators_demand_evidence_filter():
                                             "products": [
                                                 {
                                                     "url": row.url,
-                                                    "pillar": "curated_home",
                                                     "compliance_note": "Inert kitchen tool.",
                                                     "unit_economics_note": None,
                                                 }
@@ -446,6 +469,10 @@ def test_parsed_rows_clear_the_curators_demand_evidence_filter():
     assert product.retail_price_text == "$89.95"
     assert "4.7/5" in product.demand_evidence
     assert "234 reviews" in product.demand_evidence
+    # The curator does NOT assign a pillar — the returned model has no such
+    # field at all. The Jev pillar gate decides it afterwards, and only it can
+    # build the `GoldStandardProduct` that carries one.
+    assert not hasattr(product, "pillar")
 
 
 # ---------------------------------------------------------------------------
@@ -467,37 +494,232 @@ def _runner():
     return runner
 
 
-def test_build_scraper_selects_the_requested_source():
-    from src.extractors.google_shopping import GoogleShoppingScraper
-
+def test_spend_plan_prices_hasdata_in_credits(capsys):
     runner = _runner()
-    assert isinstance(runner.build_scraper("apify", 10), GoogleShoppingScraper)
-    assert isinstance(
-        runner.build_scraper("hasdata", 40), HasDataShoppingScraper
-    )
-
-
-def test_spend_plan_prices_hasdata_in_credits_and_apify_in_usd(capsys):
-    runner = _runner()
-    runner.print_spend_plan("hasdata", ["a", "b"], 40)
+    runner.print_spend_plan(["a", "b"], 20)
     hasdata = capsys.readouterr().out
     assert "2 keyword(s) x 1 request" in hasdata
     assert "20 credit(s)" in hasdata
     assert "$" not in hasdata
 
-    runner.print_spend_plan("apify", ["a", "b"], 10)
-    apify = capsys.readouterr().out
-    assert "planned Apify spend" in apify
-    assert "$" in apify
 
-
-def test_source_label_names_the_active_source():
+def test_runner_has_no_apify_source_left():
+    # HasData is the pipeline's exclusive data provider — the Apify actor
+    # wrapper and the --source switch were retired on the Morning Anthem
+    # branch, so the runner must not offer a second source.
     runner = _runner()
-    assert runner.source_label("hasdata") == "hasdata-google-shopping"
-    assert runner.source_label("apify") == settings.APIFY_GS_ACTOR
+    assert not hasattr(runner, "SOURCES")
+    assert not hasattr(runner, "build_scraper")
+    assert not hasattr(runner, "source_label")
 
 
-def test_default_source_is_apify():
-    # An existing invocation must be unchanged by the module gaining a source.
+def test_a_stray_pillar_in_the_curation_response_is_ignored_not_trusted():
+    """A model that still volunteers a pillar must not have it believed.
+
+    The prompt now says not to assign one, but a habit from the earlier prompt is
+    harmless rather than fatal: the field is simply not part of the response
+    schema, so the pillar the gate issues later is the only one that ever reaches
+    the deliverable. (Contrast `ProvisionalProductEvaluation`, which forbids extra
+    fields outright — there a silently dropped field would be a *lost fact*; here
+    it would be an unauthorised opinion.)
+    """
+    from src.evaluators.gold_curator import GoldSelection
+
+    selection = GoldSelection(
+        url="https://x/1",
+        pillar="brew_fuel",  # a stray field the schema does not declare
+        compliance_note="Inert.",
+    )
+    assert not hasattr(selection, "pillar")
+
+
+def test_runner_enforces_the_keyword_cap_and_pilot_budget(monkeypatch, tmp_path):
+    """The planned spend is checked BEFORE any credit moves: the keyword cap
+    and the pilot cap both fail closed rather than letting a run overspend."""
+    import sys
+
     runner = _runner()
-    assert runner.SOURCES[0] == "apify"
+    path = tmp_path / "step2.json"
+    path.write_text(
+        json.dumps({"keywords": [{"keyword": f"kw{i}"} for i in range(5)]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner.settings, "HASDATA_GS_MAX_KEYWORDS", 2)
+    monkeypatch.setattr(sys, "argv", [
+        "run_gold_standard_research.py", "--keywords", str(path),
+    ])
+    with pytest.raises(SystemExit) as exc:
+        runner.main()
+    assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# price_value — the numeric price the Step-3 pillar gate reasons over
+# ---------------------------------------------------------------------------
+
+
+def test_price_value_prefers_the_payloads_own_numeric_field():
+    # The live shape carries `extractedPrice`; that is the supplier's own figure,
+    # so it is taken as-is rather than re-parsed from the display string.
+    rows = parse_response(
+        {"shoppingResults": [_live_item(price="$89.95", extractedPrice=89.95)]},
+        "french press",
+    )
+    assert rows[0].price_value == pytest.approx(89.95)
+
+
+def test_price_value_falls_back_to_parsing_the_display_string():
+    rows = parse_response(
+        {"shoppingResults": [_live_item(price="AU$1,299.00", extractedPrice=None)]},
+        "french press",
+    )
+    assert rows[0].price_value == pytest.approx(1299.0)
+
+
+def test_price_value_is_none_when_no_number_can_be_read():
+    # "Free", "$" alone, or no price at all: None rather than a guess, so a
+    # decision model sees an absence instead of a fabricated zero.
+    for overrides in (
+        {"price": "Free", "extractedPrice": None},
+        {"price": "$", "extractedPrice": None},
+        {"price": None, "extractedPrice": None},
+    ):
+        rows = parse_response(
+            {"shoppingResults": [_live_item(**overrides)]}, "french press"
+        )
+        assert rows[0].price_value is None, overrides
+
+
+def test_price_value_survives_the_dump_raw_round_trip():
+    # `--from-raw` rebuilds rows with `ShoppingRow(**vars(row))`, so the numeric
+    # price has to survive the dump or a replayed curation would lose the context
+    # the pillar gate needs.
+    (row,) = parse_response(
+        {"shoppingResults": [_live_item(price="$89.95", extractedPrice=89.95)]},
+        "french press",
+    )
+    replayed = ShoppingRow(**vars(row))
+    assert replayed.price_value == pytest.approx(89.95)
+    assert vars(replayed) == vars(row)
+
+
+def test_price_value_does_not_mistake_a_discount_for_the_price():
+    # A display string is not always a bare price. An unanchored "first number"
+    # read would turn "10% off $50" into 10 — a wrong number handed to a decision
+    # model, which is worse than no number.
+    rows = parse_response(
+        {"shoppingResults": [_live_item(price="10% off $50.00", extractedPrice=None)]},
+        "french press",
+    )
+    assert rows[0].price_value == pytest.approx(50.00)
+
+
+def test_price_value_reads_a_currency_anchored_figure():
+    for text, expected in (
+        ("AU$1,299.00", 1299.0),
+        ("US $12.99", 12.99),
+        ("USD 12.99", 12.99),
+        ("£24.50", 24.50),
+    ):
+        rows = parse_response(
+            {"shoppingResults": [_live_item(price=text, extractedPrice=None)]},
+            "french press",
+        )
+        assert rows[0].price_value == pytest.approx(expected), text
+
+
+def test_price_value_gives_up_rather_than_guess_a_number():
+    # No currency anchor and no cents: nothing here is a price we can trust.
+    for text in ("Free", "$", "Sale", "12", "2 for 1"):
+        rows = parse_response(
+            {"shoppingResults": [_live_item(price=text, extractedPrice=None)]},
+            "french press",
+        )
+        assert rows[0].price_value is None, text
+
+
+def _row_from_live(**overrides) -> ShoppingRow:
+    """One ShoppingRow straight off a live-shaped payload."""
+    (row,) = parse_response(
+        {"shoppingResults": [_live_item(**overrides)]}, "french press"
+    )
+    return row
+
+
+def _curator_returning(urls: List[str]) -> GoldProductCurator:
+    """A curator whose LLM selects exactly the given urls."""
+    return GoldProductCurator(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "products": [
+                                                {
+                                                    "url": url,
+                                                    "compliance_note": "Inert.",
+                                                    "unit_economics_note": None,
+                                                }
+                                                for url in urls
+                                            ]
+                                        }
+                                    )
+                                },
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    },
+                )
+            )
+        ),
+        base_url="http://llm.test",
+        api_key="mock-test-llm_api_key",
+    )
+
+
+def test_a_row_with_no_readable_price_is_dropped_before_the_llm(caplog):
+    """The gold list's price is its benchmark evidence, so a priceless row is out.
+
+    Note what is NOT claimed: this price is not a cost. Step 5's margin floor is
+    computed from the supplier's own listed price plus its freight quote, so a
+    missing gold price would leave a hole in the reference set rather than corrupt
+    the margin maths.
+    """
+    priced = _row_from_live(price="$89.95", extractedPrice=89.95, productId="1")
+    priceless = _row_from_live(price="Free", extractedPrice=None, productId="2")
+    assert priced.price_value is not None and priceless.price_value is None
+
+    curator = _curator_returning([priced.url])
+    with caplog.at_level(logging.INFO):
+        products = curator.curate([priced, priceless])
+
+    assert [p.url for p in products] == [priced.url]
+    assert any("readable price" in r.message for r in caplog.records)
+
+
+def test_a_run_where_no_row_has_a_price_raises_rather_than_yielding_nothing():
+    priceless = _row_from_live(price="Free", extractedPrice=None, productId="2")
+    curator = _curator_returning([])
+    with pytest.raises(GoldCurationError, match="readable price"):
+        curator.curate([priceless])
+
+
+def test_price_value_from_text_reads_a_legacy_display_price():
+    """`--from-raw` replay rebuilds price_value for dumps written before it existed."""
+    assert price_value_from_text("$24.95") == 24.95
+    assert price_value_from_text("AUD 1,299.00") == 1299.00
+    assert price_value_from_text("24.95") == 24.95
+    assert price_value_from_text("no price here") is None
+    assert price_value_from_text(None) is None
+
+
+def test_the_credit_rate_follows_the_setting_not_a_hard_coded_ten():
+    """One source: the guardrails and the telemetry read the same number."""
+    assert HasDataShoppingScraper.CREDITS_PER_REQUEST == (
+        settings.HASDATA_SHOPPING_CREDITS_PER_REQUEST
+    )

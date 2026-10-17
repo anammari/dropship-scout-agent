@@ -4,16 +4,15 @@ gold-standard products with Jev (TypeSafe System One via OpenRouter).
 
 Reads the gold-kernel tree Step 5 wrote —
 
-    <OPTIMAL_EXPORT_DIR>/cjdropshipping/product-NN/…
-    <OPTIMAL_EXPORT_DIR>/aliexpress/product-NN/…
+    <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/…
 
 — and the Step-3 deliverable (`outputs/json/step-3-gold-standard-products.json`),
 asks Jev for a similarity score, a winning-value score and a pillar per
 package in batches (default 4 packages per System One call), and writes a
 tiered report:
 
-    outputs/json/step-6-ranked-candidates.json   (the structured ranking)
-    outputs/md/step-6-ranked-candidates.md       (the tier-grouped digest)
+    outputs/json/morning-anthem-step-6-ranked-candidates.json   (the structured ranking)
+    outputs/md/morning-anthem-step-6-ranked-candidates.md       (the tier-grouped digest)
 
 `rank_score = 0.6*similarity + 0.4*value` on a 1–5 scale; shortlist ≥
 `JEV_SHORTLIST_MIN_SCORE`, review ≥ `JEV_REVIEW_MIN_SCORE`, else disregard.
@@ -25,8 +24,8 @@ Usage (from the repo root):
 
     source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
         [--gold-products outputs/json/step-3-gold-standard-products.json] \
-        [--export-root <OPTIMAL_EXPORT_DIR>] [--batch-size 4] \
-        [--output outputs/json/step-6-ranked-candidates.json]
+        [--export-root <MORNING_ANTHEM_EXPORT_DIR>] [--batch-size 4] \
+        [--output outputs/json/morning-anthem-step-6-ranked-candidates.json]
 
 Exit codes: 0 complete, 1 requires human intervention, 2 unexpected error.
 """
@@ -43,7 +42,12 @@ from typing import Dict, List
 # Allow `python scripts/rank_optimal_candidates.py` (script dir is sys.path[0]).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import OUTPUTS_JSON_DIR, digest_path, settings  # noqa: E402
+from src.config import (  # noqa: E402
+    ALTERNATE_DECISION_MODEL,
+    OUTPUTS_JSON_DIR,
+    digest_path,
+    settings,
+)
 from src.main import render_intervention_block  # noqa: E402
 from src.ranking.jev_client import JevConfigError  # noqa: E402
 from src.ranking.jev_product_ranker import (  # noqa: E402
@@ -55,7 +59,7 @@ from src.ranking.jev_product_ranker import (  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 
-DEFAULT_OUTPUT = OUTPUTS_JSON_DIR / "step-6-ranked-candidates.json"
+DEFAULT_OUTPUT = OUTPUTS_JSON_DIR / "morning-anthem-step-6-ranked-candidates.json"
 
 
 def _engine_of(package_dir: str) -> str:
@@ -95,14 +99,14 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument(
         "--gold-products",
         type=Path,
-        default=Path(settings.GOLD_PRODUCTS_PATH),
-        help="Step-3 gold-standard products (default: GOLD_PRODUCTS_PATH)",
+        default=Path(settings.MORNING_ANTHEM_GOLD_PRODUCTS_PATH),
+        help="Step-3 gold-standard products (default: MORNING_ANTHEM_GOLD_PRODUCTS_PATH)",
     )
     parser.add_argument(
         "--export-root",
         type=Path,
-        default=Path(settings.OPTIMAL_EXPORT_DIR),
-        help="Step-5 gold-kernel root (default: OPTIMAL_EXPORT_DIR)",
+        default=Path(settings.MORNING_ANTHEM_EXPORT_DIR),
+        help="Step-5 gold-kernel root (default: MORNING_ANTHEM_EXPORT_DIR)",
     )
     parser.add_argument(
         "--batch-size",
@@ -111,6 +115,16 @@ def main(argv: List[str] | None = None) -> int:
         help=(
             "packages per System One call (default: JEV_BATCH_SIZE = "
             "%(default)s; three questions per package)"
+        ),
+    )
+    parser.add_argument(
+        "--decision-model",
+        default=None,
+        help=(
+            "System One model that answers the Step-6 questions. Defaults to "
+            f"JEV_MODEL ({settings.JEV_MODEL}). Pass "
+            f"'{ALTERNATE_DECISION_MODEL}' for the cheaper, faster decider "
+            "(same protocol; measured text-only, it does not read images)"
         ),
     )
     parser.add_argument(
@@ -137,6 +151,12 @@ def main(argv: List[str] | None = None) -> int:
             gold_products_path=args.gold_products,
             export_root=args.export_root,
             batch_size=args.batch_size,
+            decision_model=args.decision_model,
+        )
+        print(
+            f"  decision model: "
+            f"{args.decision_model or settings.JEV_MODEL}"
+            + ("" if args.decision_model else " (JEV_MODEL default)")
         )
         packages = ranker.collect_packages()
     except JevConfigError as exc:
@@ -166,8 +186,8 @@ def main(argv: List[str] | None = None) -> int:
                     "outputs/json/step-3-gold-standard-products.json (re-run "
                     "scripts/run_gold_standard_research.py if not)",
                     "Confirm the Step-5 gold-kernel tree holds product-NN "
-                    "packages: <OPTIMAL_EXPORT_DIR>/{cjdropshipping,"
-                    "aliexpress}/ (re-run scripts/ingest_keyword_bank.py if not)",
+                    "packages: <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/ "
+                    "(re-run scripts/ingest_keyword_bank.py if not)",
                     "Re-run the ranking: python scripts/rank_optimal_candidates.py",
                 ],
             )
@@ -201,6 +221,7 @@ def main(argv: List[str] | None = None) -> int:
         batch_size=args.batch_size,
         shortlist_min_score=ranker.shortlist_min_score,
         review_min_score=ranker.review_min_score,
+        model=ranker.decision_model or settings.JEV_MODEL,
     )
     print(f"\nwrote {args.output} and {markdown_path}")
     print("\n[STEP 6 COMPLETE] Ranked candidates are ready for Step 7 (human).")

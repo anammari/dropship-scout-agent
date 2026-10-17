@@ -26,8 +26,11 @@ from src.extractors import cj_mcp_extractor
 
 # Live credentials the developer keeps in `.env`. `LLM_API_KEY` (Ollama
 # Cloud) is the same class of secret as the rest, so it is scrubbed with them.
+# HasData is the pipeline's exclusive data provider (the Apify token was
+# retired on the Morning Anthem branch) and OpenRouter's key is now shared by
+# three steps: the Step-2 product-intent gate, the Step-3 pillar gate and the
+# Step-6 ranking.
 _SENSITIVE_ENV_VARS = (
-    "APIFY_TOKEN",
     "HASDATA_API_KEY",
     "LLM_API_KEY",
     "OPENROUTER_API_KEY",
@@ -55,5 +58,14 @@ def sanitize_test_environment(request, monkeypatch):
 def _hermetic_supplier_pipeline(monkeypatch):
     cj_mcp_extractor.reset_cj_mcp_client()
     monkeypatch.setattr(settings, "CJ_MCP_TOKEN", None)
+    # Scrubbing `os.environ` is not enough: the `settings` singleton snapshots
+    # `.env` at import time, so the REAL LLM / HasData / OpenRouter credentials
+    # stay on it for the whole process. Without this, a test that accidentally
+    # builds a live client spends the operator's balance — the Step-2 trend
+    # gate is the first module where that is easy to do by patching the wrong
+    # namespace. A test that genuinely needs one patches it back explicitly.
+    monkeypatch.setattr(settings, "LLM_API_KEY", None)
+    monkeypatch.setattr(settings, "HASDATA_API_KEY", None)
+    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)
     yield
     cj_mcp_extractor.reset_cj_mcp_client()

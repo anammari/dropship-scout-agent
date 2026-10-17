@@ -60,6 +60,27 @@ _PRODUCT_DIR_RE = re.compile(r"^product-(\d{2,})$")
 # for backward-compatible provenance tracking in metadata.json.
 IMAGE_SOURCE = "supplier_gallery"
 
+#: Tags that are INTERNAL bookkeeping and must never reach the storefront.
+#: `dropship` is a validator-enforced marker on an ACCEPT (models.py requires
+#: it), so it stays on the evaluation — it just does not belong in a
+#: customer-facing tag list, where it would advertise the sourcing model.
+_INTERNAL_TAGS = frozenset({"dropship"})
+
+
+def export_tags(tags: Optional[List[str]]) -> List[str]:
+    """The evaluation's tags minus the internal ones, order preserved.
+
+    Dropped tags are logged at DEBUG rather than silently: the marker's absence
+    from `metadata.json` is deliberate, not a lost field.
+    """
+    kept: List[str] = []
+    for tag in tags or []:
+        if str(tag).strip().lower() in _INTERNAL_TAGS:
+            logger.debug("dropping internal tag %r from the export", tag)
+            continue
+        kept.append(tag)
+    return kept
+
 
 @dataclass
 class ExportResult:
@@ -295,7 +316,7 @@ class CandidateExporter:
             "projected_margin_aud": evaluation.estimated_margin_aud,
             "marketing_ad_copy": evaluation.marketing_ad_copy,
             "features": evaluation.key_features or [evaluation.problem_solved],
-            "target_tags": evaluation.target_tags,
+            "target_tags": export_tags(evaluation.target_tags),
             "shipping_notice_au": evaluation.shipping_notice_au,
             "supplier_name": evaluation.supplier_name,
             "supplier_retail_url": evaluation.supplier_retail_url,

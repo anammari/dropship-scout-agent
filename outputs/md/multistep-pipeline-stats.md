@@ -1,103 +1,124 @@
-# Multi-Step Pipeline — Deliverable Counts (Steps 2–6)
+# The Morning Anthem — Pipeline Stats
 
-Current state: **2026-10-01**. The widened Step-2→6 run was the branch
-`fix/gold-funnel-bottlenecks` work (PR #4, merged); the counts below carry that
-run forward plus two CJ-only Step-5 top-up runs and a Step-6 re-rank done on
-2026-10-01. The per-step narrative lives in CLAUDE.md §13.
+Numbers only. Design rationale lives in `CLAUDE.md` §13.8.
 
-## Current state
+**Where we stand (2026-10-17).** Two research rounds ran end to end. Round 1
+built the launch catalogue; a review then removed a compliance false positive
+and capped the dog-gear flood; Round 2 tried and failed to fill the two
+brand-core pillars. **16 packages on disk, 20 products live in Shopify.**
 
-| Metric | Count |
+## Every filtration step, in order
+
+| # | Stage | In | Out | What it cut |
+|---|---|---|---|---|
+| 1 | Trends research (HasData, AU) | 7 calls | 63 candidates | — |
+| 2 | Jev intent gate + selection | 63 candidates | 30 keywords | 2 non-product, 31 held in reserve |
+| 3 | Shopping scrape + curate + pillar gate | 30 keywords | 117 gold products | 483 of 600 rows (no rating/price) |
+| 4 | Keyword bank (exact titles + fallbacks) | 117 gold | 80 products → 156 keywords | 37 same-type products collapsed |
+| 5 | CJ ingestion | 156 keywords | 78 packages | rejects, duplicates, thin galleries |
+| 6 | Ranking | 78 packages | 23 shortlist · 10 review · 45 disregard | — |
+| 7 | Cleanup: drop `disregard` | 78 | 33 kept | **−45** |
+| 8 | Re-rank after the gate fixes | 33 packages | 23 shortlist · 9 review · 1 disregard | — |
+| 9 | Cleanup: dog-gear family cap of 5 | 33 | 16 kept | **−17** (16 dog gear + 1 disregard) |
+| 10 | Round 2 promoted one keeper | +1 | 17 | — |
+| 11 | Cross-tree duplicate removed | 17 | **16** | **−1** (`product-35`, same CJ pid as `optimal-dropship-candidates/product-95`) |
+
+## Step 5 — the two ingestion funnels
+
+| Round | Bank | Products | Exports | scraped | accepted | rejected |
+|---|---|---|---|---|---|---|
+| 1 | 156 keywords | 80 | 78 packages on disk | 1,035 | 402 | 605 |
+| 2 (rebuild) | 251 keywords | 38 | 26 packages | 1,090 | 162 | 885 |
+
+Round 2's bank was the wider one: exact titles, up to 5 model fallbacks ranked
+by evidence, code-derived sub-terms, and each pillar's head term. It produced
+**fewer** packages than Round 1 — the extra rungs mostly reached category terms
+CJ indexes with unrelated goods.
+
+## Round 2 — why the minor pillars are still empty
+
+Round 2 seeded only `brew_fuel`, `morning_table` and `mindful_awakening` with
+fresh terms, then ranked against a gold set built from those same pillars.
+
+| Tier | Count |
 |---|---|
-| Step 2 — AU search keywords | 40 |
-| Step 3 — gold-standard products | 263 |
-| Step 4 — gold-standard supplier keywords | 320 (40 products × 8 keywords, 5 pools × 8 via `--chunk-size 8`, merged band [270, 340]) |
-| Step 5 — packages on disk (`optimal-dropship-candidates/`) | **8** |
-| Step 6 — packages ranked (last run) | 32 |
-| Step 6 — shortlist | **8** |
-| Step 6 — review | 0 |
-| Step 6 — disregard | 24 — **13 demoted by the post-evaluation compliance gate** (electric 4, soap 4, mud · serum · gel · usb · oil 1 each) |
-| Shopify listings created for the shortlist | 8 (7 batch drafts + `product-45`, published and linked by hand) |
+| shortlist | **0** |
+| review | **0** |
+| disregard | **26** |
 
-The 8 packages on disk are exactly the 8 shortlisted candidates, so the
-gold-kernel tree and the Step-6 report agree: **there is nothing on disk that
-Step 6 did not pass**. Everything the re-rank disregarded has been moved out to
-`my-store-build/data/archived-candidates/`.
+Best six, for scale — the review floor is 2.5:
 
-Shortlist (Step-6 rank, 2026-10-01):
+```
+2.28  sim 2.14  Kitchen Natural Wooden Bowl
+2.25  sim 1.95  304 stainless steel mug coffee cup
+2.23  sim 2.09  Stainless Steel Vehicle Heating Cup (electric)
+2.10  sim 1.72  Copper Lid Ceramic Incense Burner
+2.10  sim 1.78  Portable Car Cup Stainless Steel
+2.04  sim 1.85  3 Sizes Sliding Pizza Peel
+```
 
-| Package | Title | Rank | Pillar |
-|---|---|---|---|
-| `cjdropshipping/product-45` | Silicone Ice Face Roller | 4.43 | self_care_rituals |
-| `cjdropshipping/product-25` | Double-Wall Glass Tea Infuser Bottle | 4.42 | curated_home |
-| `cjdropshipping/product-47` | Leak-Proof Ice Roller for Face, Eyes & Neck | 4.34 | self_care_rituals |
-| `cjdropshipping/product-46` | Cooling Facial Ice Roller | 4.18 | self_care_rituals |
-| `cjdropshipping/product-17` | Curved Stainless Steel Garlic Masher | 4.12 | curated_home |
-| `cjdropshipping/product-15` | Circular Stainless Steel Garlic Masher | 3.94 | curated_home |
-| `cjdropshipping/product-99` | Bamboo Cheese & Cutting Board with Knife Drawer | 3.80 | curated_home |
-| `cjdropshipping/product-95` | Black Ceramic Backflow Incense Burner | 3.73 | curated_home |
+**The conclusion, now tested twice:** the bottleneck is the CJ catalogue match,
+not the keywords. `brew_fuel`'s gold set came back clean this time — drippers,
+kettles, presses — and CJ still answered with mugs and car cups. No keyword
+strategy fixes what the supplier does not stock.
 
-## Distribution by supplier
+## Where the products are
 
-| Step | CJDropshipping | AliExpress |
+| Location | Packages | State |
 |---|---|---|
-| Step 4 keywords ingested | 319 legs (1 failed leg) | 320 legs |
-| Step 5 funnel, widened run (scraped → accepted) | 1,055 → 390 | 6 → 1 |
-| Step 5 packages on disk | **8** | **0** |
-| Step 6 ranked (last run) | 32 | 0 |
-| Step 6 shortlist | 8 | 0 |
+| `morning-anthem-candidates/` | **16** | the Round-1 kernel, reviewed and clean |
+| `optimal-dropship-candidates/` | 8 | the earlier shortlist |
+| `morning-anthem-candidates-tmp/` | 26 | Round 2, all `disregard`, held pending a decision |
+| **Shopify** (`2giusj-zm.myshopify.com`) | **20** | all `ACTIVE` |
 
-AliExpress exported nothing on the widened run: every DS Center search leg
-answered, but Ali's anti-bot served ~98% of item PDPs as empty shell pages at
-the gallery harvest, so items died at the 3-image minimum (see CLAUDE.md §12 —
-the block is IP/volume-driven; a VPN exit IP cleared it in testing, so a
-re-ingestion through a clear IP can fill the Ali tree later). The
-`aliexpress/` subfolder is created on its first export, hence absent.
+## The 16 on disk
 
-## Run history
-
-| When | Step | Scope | Result |
+| Pillar | Shortlist | Review | Total |
 |---|---|---|---|
-| 2026-09-29 → 30 | 5 | 320 keywords × 2 engines | 639 legs (1 failed), 82 new CJ packages → **100 on disk**; Ali 0 |
-| 2026-09-30 | 6 | 100 CJ packages | shortlist 9 · review 4 · disregard 87 (43 demoted by the compliance gate) |
-| 2026-10-01 | — | prune | non-shortlisted packages archived out of the tree |
-| 2026-10-01 | 5 | 16 body-brush keywords, CJ only | `scraped=41 evaluated=41 accepted=15 rejected=26` → **5 exported** (`product-100`…`product-104`), 1 keyword empty |
-| 2026-10-01 | 5 | 26 body-brush/bath-scrubber keywords, CJ only, `CJ_MAX_PRODUCTS=25` | `scraped=224 evaluated=180 accepted=62 rejected=118` → **24 exported** (`product-100`…`product-123`), 0 empty, 30 duplicate skips |
-| 2026-10-01 | 6 | 32 CJ packages (8 shortlist + 24 from the broad run) | shortlist 8 · review 0 · disregard 24 |
-| 2026-10-01 | — | prune | all 24 disregarded packages archived |
+| `sunrise_move` | 6 | 0 | **6** |
+| `restful_reset` | 5 | 1 | **6** |
+| `mindful_awakening` | 1 | 1 | **2** |
+| `brew_fuel` | 1 | 1 | **2** |
+| `morning_table` | 0 | 0 | **0** |
+| **Total** | **13** | **3** | **16** |
 
-## Body-brush re-source: no replacement found
+`sunrise_move`'s 6 = 5 dog gear (the cap) + 1 beach towel.
+`brew_fuel`'s review is `product-48`, the one keeper Round 2 produced.
 
-`product-02` (*Natural Bristle Body & Bath Brush*, CJ pid
-`C9BE8DAC-436F-4B13-8EE0-00129E51BA64`) was delisted on CJdropshipping. Its
-Shopify product `gid://shopify/Product/10299971666136` was deleted on
-2026-10-01 and its package directory moved to
-`my-store-build/data/archived-candidates/2026-10-01-targeted-16kw/cjdropshipping/product-02`.
+## Cost
 
-Both top-up runs above were the search for a replacement. They exported **29
-packages between them** and the re-rank put **every one of them in `disregard`**
-(best: `product-111`, rank 2.86). CJ's catalogue returns pet-grooming brushes
-and electric/motorised cleaning devices under these terms, not a dry body
-brush — so `product-02`'s slot in the shortlist stays empty rather than being
-filled with a weaker product.
+| Round | Trends | Shopping | Total |
+|---|---|---|---|
+| 1 | 70 | 300 | **370** |
+| 2 | 30 | 150 | **180** |
+| **Both** | **100** | **450** | **550** of the 1,000 monthly tier |
 
-Full details of every archived package are in the two archive folders:
+## Two fixes from the catalogue review
 
-```
-my-store-build/data/archived-candidates/2026-10-01-targeted-16kw/cjdropshipping/
-my-store-build/data/archived-candidates/2026-10-01-broad-26kw/cjdropshipping/
-```
+**Compliance gate is field-scoped.** A banned token in `product_title` is
+supplier fact and still deletes. A token in our own generated copy only adds a
+note. Live case: the run's highest-scoring package, a cutting board at 4.34,
+was deleted because its ad copy said "oil" while describing board care.
 
-## Where the artefacts live
+**Family cap.** `CLEANUP_MAX_PER_FAMILY` = 5, global, and it overrides the
+shortlist keep — 22 of the 23 kept `sunrise_move` packages were dog gear.
 
-- Structured deliverables: `outputs/json/` (`step-6-ranked-candidates.json` is
-  the current 32-package report; the 100-package 2026-09-30 report was
-  superseded in place)
-- Readable digests: `outputs/md/`
-- Run logs: `outputs/logs/`, stamped with the run's own first timestamp
-- Production packages: `my-store-build/inspiration/optimal-dropship-candidates/`
+**Electrical goods are sellable again.** `electric`, `usb`, `rechargeable` no
+longer delete; a shortlist or review match gains an `[ESCALATE]` note for an
+EESS/ACMA check with CJ before linking. **Batteries remain banned.**
 
-The Shopify side is tracked in
-`my-store-build/inspiration/optimal-dropship-candidates/cjdropshipping/BATCH-MANIFEST.md`,
-which carries the Shopify product id and CJ SKU list per listing (its
-`product-02` row is now historical — that product was deleted).
+## Constraints each step imposes
+
+| Step | Blocks |
+|---|---|
+| 2 | non-product searches; retailer-qualified strings |
+| 3 | cosmetics, liquids, consumables, IP; rows with no rating or price |
+| 4 | gold products whose own name carries an AICIS token |
+| 5 | unproven stock; unquotable freight; galleries under 3 valid images; under 1.2 kg, air-freight, no fragile untreated ceramics; the AUD 10 margin floor |
+| 6 | AICIS tokens and **batteries** in `product_title`; electrical goods kept but escalated |
+| 7 | everything `disregard`; one product family above 5 |
+
+## Where things live
+
+`outputs/json/` deliverables · `outputs/md/` digests · `outputs/logs/` run logs
+Production packages: `my-store-build/inspiration/`

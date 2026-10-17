@@ -1,14 +1,10 @@
 [project]
 name = "dropship-scout-agent"
 version = "0.1.0"
-description = "Supplier-first dropshipping product scout: live supplier extraction (CJdropshipping MCP, AliExpress Dropshipping Center), LLM filtering, and Shopify workspace export."
+description = "Supplier-first dropshipping product scout for The Morning Anthem: live CJdropshipping MCP extraction, HasData research, LLM filtering, and Shopify workspace export."
 requires-python = ">=3.11"
 # Pinned to the versions verified working in .venv.
-# playwright-stealth MUST stay >=2.0: v2 exposes the `Stealth` class API;
-# the v1 `stealth_async()` free function no longer exists.
 dependencies = [
-    "playwright==1.62.0",
-    "playwright-stealth==2.0.3",
     "instructor==1.16.0",
     "openai==2.54.0",
     "pydantic==2.13.5",
@@ -21,16 +17,15 @@ dependencies = [
     # Official MCP Python SDK — StreamableHTTP client for the remote
     # CJdropshipping MCP server (src/pipeline/cj_mcp_client.py).
     "mcp==2.2.0",
-    # Apify actor runs for the Step 3 gold-standard research
-    # (src/extractors/google_shopping.py) — damilo/google-shopping-apify is
-    # pay-per-result via this SDK, never the retired AliExpress Apify actor.
-    "apify-client==3.2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "pytest-asyncio",
+    # Static sweep for dead code / unused imports (F-rules): the tool the
+    # rebrand residue sweep was run with, kept reproducible.
+    "ruff",
 ]
 
 [build-system]

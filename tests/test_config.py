@@ -17,9 +17,9 @@ from src.config import digest_path, load_settings
 # ----------------------------------------------------------------------
 
 
-def test_llm_model_defaults_to_deepseek_v4_flash(monkeypatch):
+def test_llm_model_defaults_to_the_live_deepseek_flash_build(monkeypatch):
     monkeypatch.delenv("LLM_MODEL", raising=False)
-    assert load_settings().LLM_MODEL == "deepseek-v4-flash:cloud"
+    assert load_settings().LLM_MODEL == "deepseek-v4.1-flash"
 
 
 def test_llm_model_env_override_still_respected(monkeypatch):
@@ -30,7 +30,7 @@ def test_llm_model_env_override_still_respected(monkeypatch):
 def test_llm_model_empty_string_normalises_to_default(monkeypatch):
     # An empty pin is treated as unset, not as a literal empty model name.
     monkeypatch.setenv("LLM_MODEL", "")
-    assert load_settings().LLM_MODEL == "deepseek-v4-flash:cloud"
+    assert load_settings().LLM_MODEL == "deepseek-v4.1-flash"
 
 
 def test_missing_credentials_resolve_to_empty_strings(monkeypatch):
@@ -99,43 +99,33 @@ def test_cj_mcp_base_url_blank_falls_back_to_the_default(monkeypatch):
 # ----------------------------------------------------------------------
 
 
-def test_supplier_priority_order_defaults_to_cjdropshipping_first(monkeypatch):
+def test_supplier_priority_order_defaults_to_cjdropshipping_only(monkeypatch):
+    # The Morning Anthem sources from CJdropshipping exclusively, so the
+    # default chain has exactly one engine.
     monkeypatch.delenv("SUPPLIER_PRIORITY_ORDER", raising=False)
-    assert load_settings().SUPPLIER_PRIORITY_ORDER == [
-        "cjdropshipping",
-        "aliexpress",
-    ]
+    assert load_settings().SUPPLIER_PRIORITY_ORDER == ["cjdropshipping"]
 
 
 def test_supplier_priority_order_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "aliexpress,cjdropshipping")
-    assert load_settings().SUPPLIER_PRIORITY_ORDER == [
-        "aliexpress",
-        "cjdropshipping",
-    ]
+    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "cjdropshipping")
+    assert load_settings().SUPPLIER_PRIORITY_ORDER == ["cjdropshipping"]
 
 
 def test_supplier_priority_order_is_normalised(monkeypatch):
-    # Keys are trimmed and lowercased so " AliExpress , CJdropshipping "
-    # and shell quoting quirks resolve to canonical extractor keys.
-    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", " AliExpress , CJdropshipping ")
-    assert load_settings().SUPPLIER_PRIORITY_ORDER == ["aliexpress", "cjdropshipping"]
+    # Keys are trimmed and lowercased so " CJdropshipping " and shell quoting
+    # quirks resolve to canonical extractor keys.
+    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", " CJdropshipping ")
+    assert load_settings().SUPPLIER_PRIORITY_ORDER == ["cjdropshipping"]
 
 
 def test_supplier_priority_order_empty_string_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "")
-    assert load_settings().SUPPLIER_PRIORITY_ORDER == [
-        "cjdropshipping",
-        "aliexpress",
-    ]
+    assert load_settings().SUPPLIER_PRIORITY_ORDER == ["cjdropshipping"]
 
 
 def test_supplier_priority_order_drops_blank_segments(monkeypatch):
-    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", "aliexpress,,,cjdropshipping")
-    assert load_settings().SUPPLIER_PRIORITY_ORDER == [
-        "aliexpress",
-        "cjdropshipping",
-    ]
+    monkeypatch.setenv("SUPPLIER_PRIORITY_ORDER", ",,cjdropshipping,,")
+    assert load_settings().SUPPLIER_PRIORITY_ORDER == ["cjdropshipping"]
 
 
 def test_usd_to_aud_defaults_to_one_point_five_five(monkeypatch):
@@ -162,56 +152,6 @@ def test_cj_max_products_defaults_to_ten(monkeypatch):
 def test_cj_max_products_env_override_is_respected(monkeypatch):
     monkeypatch.setenv("CJ_MAX_PRODUCTS", "5")
     assert load_settings().CJ_MAX_PRODUCTS_PER_KEYWORD == 5
-
-
-# ----------------------------------------------------------------------
-# AliExpress Dropshipping Center ingestion
-# ----------------------------------------------------------------------
-
-
-def test_ali_ds_state_path_defaults_to_the_repo_root_file(monkeypatch):
-    monkeypatch.delenv("ALI_DS_STATE_PATH", raising=False)
-    assert load_settings().ALI_DS_STATE_PATH == "ali_ds_state.json"
-
-
-def test_ali_ds_state_path_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("ALI_DS_STATE_PATH", "/tmp/ali-state.json")
-    assert load_settings().ALI_DS_STATE_PATH == "/tmp/ali-state.json"
-
-
-def test_ali_ds_state_path_blank_falls_back_to_the_default(monkeypatch):
-    monkeypatch.setenv("ALI_DS_STATE_PATH", "")
-    assert load_settings().ALI_DS_STATE_PATH == "ali_ds_state.json"
-
-
-def test_ali_ds_max_products_defaults_to_twenty(monkeypatch):
-    monkeypatch.delenv("ALI_DS_MAX_PRODUCTS", raising=False)
-    assert load_settings().ALI_DS_MAX_PRODUCTS == 20
-
-
-def test_ali_ds_max_products_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("ALI_DS_MAX_PRODUCTS", "5")
-    assert load_settings().ALI_DS_MAX_PRODUCTS == 5
-
-
-def test_min_ds_order_count_defaults_to_five_hundred(monkeypatch):
-    monkeypatch.delenv("MIN_DS_ORDER_COUNT", raising=False)
-    assert load_settings().MIN_DS_ORDER_COUNT == 500
-
-
-def test_min_ds_order_count_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("MIN_DS_ORDER_COUNT", "1200")
-    assert load_settings().MIN_DS_ORDER_COUNT == 1200
-
-
-def test_min_ds_rating_defaults_to_four_point_five(monkeypatch):
-    monkeypatch.delenv("MIN_DS_RATING", raising=False)
-    assert load_settings().MIN_DS_RATING == 4.5
-
-
-def test_min_ds_rating_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("MIN_DS_RATING", "4.8")
-    assert load_settings().MIN_DS_RATING == 4.8
 
 
 def test_min_cj_listed_count_defaults_to_one_hundred_and_fifty(monkeypatch):
@@ -271,10 +211,18 @@ def test_min_margin_aud_env_override_is_respected(monkeypatch):
 
 
 def test_gold_products_path_defaults_to_the_step_3_deliverable(monkeypatch):
-    monkeypatch.delenv("GOLD_PRODUCTS_PATH", raising=False)
+    monkeypatch.delenv("MORNING_ANTHEM_GOLD_PRODUCTS_PATH", raising=False)
     assert (
-        load_settings().GOLD_PRODUCTS_PATH
-        == "outputs/json/step-3-gold-standard-products.json"
+        load_settings().MORNING_ANTHEM_GOLD_PRODUCTS_PATH
+        == "outputs/json/morning-anthem-step-3-gold-products.json"
+    )
+
+
+def test_trend_keywords_path_defaults_to_the_step_2_deliverable(monkeypatch):
+    monkeypatch.delenv("MORNING_ANTHEM_TREND_KEYWORDS_PATH", raising=False)
+    assert (
+        load_settings().MORNING_ANTHEM_TREND_KEYWORDS_PATH
+        == "outputs/json/morning-anthem-step-2-trend-keywords.json"
     )
 
 
@@ -308,11 +256,12 @@ def test_hasdata_gs_base_url_env_override_is_respected(monkeypatch):
     assert load_settings().HASDATA_GS_BASE_URL == "https://proxy.test"
 
 
-def test_hasdata_gs_max_results_defaults_to_forty(monkeypatch):
+def test_hasdata_gs_max_results_defaults_to_twenty(monkeypatch):
     # The local grid cap, NOT an API parameter (one request = 10 credits
-    # whatever the slice); 40 mirrors the Apify path's ~40-row SERP page.
+    # whatever the slice); 20 keeps the curation budget tight under the
+    # Morning Anthem credit envelope.
     monkeypatch.delenv("HASDATA_GS_MAX_RESULTS_PER_KEYWORD", raising=False)
-    assert load_settings().HASDATA_GS_MAX_RESULTS_PER_KEYWORD == 40
+    assert load_settings().HASDATA_GS_MAX_RESULTS_PER_KEYWORD == 20
 
 
 def test_hasdata_gs_max_results_env_override_is_respected(monkeypatch):
@@ -322,27 +271,27 @@ def test_hasdata_gs_max_results_env_override_is_respected(monkeypatch):
 
 def test_hasdata_gs_max_results_blank_falls_back_to_the_default(monkeypatch):
     monkeypatch.setenv("HASDATA_GS_MAX_RESULTS_PER_KEYWORD", "")
-    assert load_settings().HASDATA_GS_MAX_RESULTS_PER_KEYWORD == 40
+    assert load_settings().HASDATA_GS_MAX_RESULTS_PER_KEYWORD == 20
 
 
 def test_keyword_bank_path_defaults_to_the_step_4_deliverable(monkeypatch):
-    monkeypatch.delenv("KEYWORD_BANK_PATH", raising=False)
+    monkeypatch.delenv("MORNING_ANTHEM_KEYWORD_BANK_PATH", raising=False)
     assert (
-        load_settings().KEYWORD_BANK_PATH
-        == "outputs/json/step-4-gold-keywords.json"
+        load_settings().MORNING_ANTHEM_KEYWORD_BANK_PATH
+        == "outputs/json/morning-anthem-step-4-keyword-bank.json"
     )
 
 
 def test_keyword_bank_path_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("KEYWORD_BANK_PATH", "/tmp/bank.json")
-    assert load_settings().KEYWORD_BANK_PATH == "/tmp/bank.json"
+    monkeypatch.setenv("MORNING_ANTHEM_KEYWORD_BANK_PATH", "/tmp/bank.json")
+    assert load_settings().MORNING_ANTHEM_KEYWORD_BANK_PATH == "/tmp/bank.json"
 
 
 def test_keyword_bank_path_blank_falls_back_to_the_default(monkeypatch):
-    monkeypatch.setenv("KEYWORD_BANK_PATH", "")
+    monkeypatch.setenv("MORNING_ANTHEM_KEYWORD_BANK_PATH", "")
     assert (
-        load_settings().KEYWORD_BANK_PATH
-        == "outputs/json/step-4-gold-keywords.json"
+        load_settings().MORNING_ANTHEM_KEYWORD_BANK_PATH
+        == "outputs/json/morning-anthem-step-4-keyword-bank.json"
     )
 
 
@@ -378,41 +327,211 @@ def test_digest_path_specialises_an_absolute_outputs_json_path():
 def test_bank_target_per_keyword_defaults_to_two(monkeypatch):
     # Per (keyword, engine) leg: the bank's keyword count multiplies it, so
     # the default has to stay small for a 60-keyword bank to stay tractable.
-    monkeypatch.delenv("BANK_TARGET_PER_KEYWORD", raising=False)
-    assert load_settings().BANK_TARGET_PER_KEYWORD == 2
+    monkeypatch.delenv("BANK_TARGET_PER_PRODUCT", raising=False)
+    assert load_settings().BANK_TARGET_PER_PRODUCT == 2
 
 
 def test_bank_target_per_keyword_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("BANK_TARGET_PER_KEYWORD", "1")
-    assert load_settings().BANK_TARGET_PER_KEYWORD == 1
+    monkeypatch.setenv("BANK_TARGET_PER_PRODUCT", "1")
+    assert load_settings().BANK_TARGET_PER_PRODUCT == 1
 
 
 def test_bank_target_per_keyword_blank_falls_back_to_the_default(monkeypatch):
-    monkeypatch.setenv("BANK_TARGET_PER_KEYWORD", "")
-    assert load_settings().BANK_TARGET_PER_KEYWORD == 2
+    monkeypatch.setenv("BANK_TARGET_PER_PRODUCT", "")
+    assert load_settings().BANK_TARGET_PER_PRODUCT == 2
 
 
-def test_optimal_export_dir_defaults_to_the_gold_kernel_tree(monkeypatch):
+def test_cleanup_review_keep_defaults_to_ten(monkeypatch):
+    # The only number that decides a borderline deletion: shortlist is always
+    # kept, disregard always deleted.
+    monkeypatch.delenv("CLEANUP_REVIEW_KEEP", raising=False)
+    assert load_settings().CLEANUP_REVIEW_KEEP == 10
+
+
+def test_cleanup_review_keep_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("CLEANUP_REVIEW_KEEP", "4")
+    assert load_settings().CLEANUP_REVIEW_KEEP == 4
+
+
+def test_cleanup_max_per_family_defaults_to_five(monkeypatch):
+    # The global family ceiling: no single product family may flood the
+    # catalogue however well it scores (operator directive 2026-10-16).
+    monkeypatch.delenv("CLEANUP_MAX_PER_FAMILY", raising=False)
+    assert load_settings().CLEANUP_MAX_PER_FAMILY == 5
+
+
+def test_cleanup_max_per_family_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("CLEANUP_MAX_PER_FAMILY", "0")
+    assert load_settings().CLEANUP_MAX_PER_FAMILY == 0
+
+
+def test_ranked_candidates_path_defaults_to_the_step_6_report(monkeypatch):
+    monkeypatch.delenv("MORNING_ANTHEM_RANKED_CANDIDATES_PATH", raising=False)
+    assert (
+        load_settings().MORNING_ANTHEM_RANKED_CANDIDATES_PATH
+        == "outputs/json/morning-anthem-step-6-ranked-candidates.json"
+    )
+
+
+def test_morning_anthem_export_dir_defaults_to_the_gold_kernel_tree(monkeypatch):
     # Distinct from EXPORT_DIR: the gold-kernel intake is its own tree, with
-    # one supplier subfolder per engine.
-    monkeypatch.delenv("OPTIMAL_EXPORT_DIR", raising=False)
-    assert load_settings().OPTIMAL_EXPORT_DIR == (
+    # the CJdropshipping supplier subfolder under it.
+    monkeypatch.delenv("MORNING_ANTHEM_EXPORT_DIR", raising=False)
+    assert load_settings().MORNING_ANTHEM_EXPORT_DIR == (
         "/Users/ahmadammari/PD/my-store-build/inspiration/"
-        "optimal-dropship-candidates"
+        "morning-anthem-candidates"
     )
 
 
-def test_optimal_export_dir_env_override_is_respected(monkeypatch):
-    monkeypatch.setenv("OPTIMAL_EXPORT_DIR", "/tmp/optimal-candidates")
-    assert load_settings().OPTIMAL_EXPORT_DIR == "/tmp/optimal-candidates"
+def test_morning_anthem_export_dir_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("MORNING_ANTHEM_EXPORT_DIR", "/tmp/ma-candidates")
+    assert load_settings().MORNING_ANTHEM_EXPORT_DIR == "/tmp/ma-candidates"
 
 
-def test_optimal_export_dir_blank_falls_back_to_the_default(monkeypatch):
-    monkeypatch.setenv("OPTIMAL_EXPORT_DIR", "")
-    assert load_settings().OPTIMAL_EXPORT_DIR == (
+def test_morning_anthem_export_dir_blank_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("MORNING_ANTHEM_EXPORT_DIR", "")
+    assert load_settings().MORNING_ANTHEM_EXPORT_DIR == (
         "/Users/ahmadammari/PD/my-store-build/inspiration/"
-        "optimal-dropship-candidates"
+        "morning-anthem-candidates"
     )
+
+
+# ----------------------------------------------------------------------
+# The Morning Anthem: AU-first demand geography & HasData budget guardrails
+# ----------------------------------------------------------------------
+
+
+def test_demand_geography_defaults_to_the_au_market(monkeypatch):
+    # Australia-first launch: demand signals and price benchmarks must reflect
+    # Australian shopper behaviour and AUD retail pricing.
+    for key in ("TRENDS_GEO", "SHOPPING_GL", "SHOPPING_DOMAIN"):
+        monkeypatch.delenv(key, raising=False)
+    loaded = load_settings()
+    assert loaded.TRENDS_GEO == "AU"
+    assert loaded.SHOPPING_GL == "au"
+    assert loaded.SHOPPING_DOMAIN == "google.com.au"
+
+
+def test_demand_geography_env_overrides_are_respected(monkeypatch):
+    monkeypatch.setenv("TRENDS_GEO", "US")
+    monkeypatch.setenv("SHOPPING_GL", "us")
+    monkeypatch.setenv("SHOPPING_DOMAIN", "google.com")
+    loaded = load_settings()
+    assert (loaded.TRENDS_GEO, loaded.SHOPPING_GL, loaded.SHOPPING_DOMAIN) == (
+        "US", "us", "google.com",
+    )
+
+
+def test_target_country_defaults_to_australia_for_the_launch(monkeypatch):
+    monkeypatch.delenv("TARGET_COUNTRY", raising=False)
+    assert load_settings().TARGET_COUNTRY == "AU"
+
+
+def test_cj_freight_destination_defaults_to_the_australian_lane(monkeypatch):
+    # All launch products ship from CJ's China warehouse directly into
+    # Australia, so the freight quote must target an Australian lane.
+    monkeypatch.delenv("CJ_DEFAULT_DEST_COUNTRY", raising=False)
+    assert load_settings().CJ_DEFAULT_DEST_COUNTRY == "AU"
+
+
+def test_cj_freight_destination_env_override_is_respected(monkeypatch):
+    monkeypatch.setenv("CJ_DEFAULT_DEST_COUNTRY", "US")
+    assert load_settings().CJ_DEFAULT_DEST_COUNTRY == "US"
+
+
+def test_cj_freight_destination_blank_falls_back_to_australia(monkeypatch):
+    monkeypatch.setenv("CJ_DEFAULT_DEST_COUNTRY", "")
+    assert load_settings().CJ_DEFAULT_DEST_COUNTRY == "AU"
+
+
+def test_hasdata_budget_guardrails_have_their_defaults(monkeypatch):
+    for key in (
+        "HASDATA_MONTHLY_BUDGET",
+        "HASDATA_PRODUCTION_CAP",
+        "HASDATA_GS_MAX_KEYWORDS",
+        "TRENDS_MAX_CALLS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    loaded = load_settings()
+    assert loaded.HASDATA_MONTHLY_BUDGET == 1000
+    assert loaded.HASDATA_PRODUCTION_CAP == 400
+    assert loaded.HASDATA_GS_MAX_KEYWORDS == 30
+    assert loaded.TRENDS_MAX_CALLS == 10
+
+
+def test_credit_rates_have_their_defaults(monkeypatch):
+    # Trends is budgeted at the OBSERVED 10 credits/call (2026-10-12: two live
+    # pilot calls moved the account balance by exactly 20) even though the
+    # published tables say 5 — the conservative figure wins until the
+    # dashboard usage log settles it.
+    monkeypatch.delenv("HASDATA_TRENDS_CREDITS_PER_CALL", raising=False)
+    monkeypatch.delenv("HASDATA_SHOPPING_CREDITS_PER_REQUEST", raising=False)
+    loaded = load_settings()
+    assert loaded.HASDATA_TRENDS_CREDITS_PER_CALL == 10
+    assert loaded.HASDATA_SHOPPING_CREDITS_PER_REQUEST == 10
+
+
+def test_credit_rates_are_env_overridable(monkeypatch):
+    monkeypatch.setenv("HASDATA_TRENDS_CREDITS_PER_CALL", "5")
+    monkeypatch.setenv("HASDATA_SHOPPING_CREDITS_PER_REQUEST", "10")
+    loaded = load_settings()
+    assert loaded.HASDATA_TRENDS_CREDITS_PER_CALL == 5
+
+
+def test_the_launch_run_envelope_equals_the_production_cap(monkeypatch):
+    # The launch-run profile is sized so the two halves sum to the cap
+    # exactly (Step 2: 10 calls x 10 = 100; Step 3: 30 keywords x 10 = 300),
+    # so HASDATA_PRODUCTION_CAP is the arithmetic, not an arbitrary ceiling.
+    for key in (
+        "HASDATA_PRODUCTION_CAP",
+        "HASDATA_TRENDS_CREDITS_PER_CALL",
+        "HASDATA_SHOPPING_CREDITS_PER_REQUEST",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    loaded = load_settings()
+    trend_credits = (
+        loaded.TRENDS_MAX_CALLS * loaded.HASDATA_TRENDS_CREDITS_PER_CALL
+    )
+    shopping_credits = (
+        loaded.HASDATA_GS_MAX_KEYWORDS
+        * loaded.HASDATA_SHOPPING_CREDITS_PER_REQUEST
+    )
+    assert trend_credits == 100
+    assert shopping_credits == 300
+    assert trend_credits + shopping_credits == loaded.HASDATA_PRODUCTION_CAP
+    # The monthly tier keeps a reserve for the per-step pilots and reruns.
+    assert loaded.HASDATA_PRODUCTION_CAP <= loaded.HASDATA_MONTHLY_BUDGET
+    assert (
+        loaded.HASDATA_MONTHLY_BUDGET - loaded.HASDATA_PRODUCTION_CAP >= 500
+    )
+
+
+def test_hasdata_budget_env_overrides_are_respected(monkeypatch):
+    monkeypatch.setenv("HASDATA_MONTHLY_BUDGET", "5000")
+    monkeypatch.setenv("HASDATA_PRODUCTION_CAP", "400")
+    monkeypatch.setenv("HASDATA_GS_MAX_KEYWORDS", "10")
+    monkeypatch.setenv("TRENDS_MAX_CALLS", "4")
+    loaded = load_settings()
+    assert loaded.HASDATA_MONTHLY_BUDGET == 5000
+    assert loaded.HASDATA_PRODUCTION_CAP == 400
+    assert loaded.HASDATA_GS_MAX_KEYWORDS == 10
+    assert loaded.TRENDS_MAX_CALLS == 4
+
+
+def test_jev_gate_batch_sizes_have_their_defaults(monkeypatch):
+    monkeypatch.delenv("TREND_GATE_BATCH_SIZE", raising=False)
+    monkeypatch.delenv("PILLAR_GATE_BATCH_SIZE", raising=False)
+    loaded = load_settings()
+    assert loaded.TREND_GATE_BATCH_SIZE == 8
+    assert loaded.PILLAR_GATE_BATCH_SIZE == 4
+
+
+def test_jev_gate_batch_sizes_env_overrides_are_respected(monkeypatch):
+    monkeypatch.setenv("TREND_GATE_BATCH_SIZE", "12")
+    monkeypatch.setenv("PILLAR_GATE_BATCH_SIZE", "6")
+    loaded = load_settings()
+    assert loaded.TREND_GATE_BATCH_SIZE == 12
+    assert loaded.PILLAR_GATE_BATCH_SIZE == 6
 
 
 # ----------------------------------------------------------------------
@@ -436,3 +555,47 @@ def test_env_declares_the_same_keys_in_the_same_order_as_env_example():
     if not live.exists():
         pytest.skip(".env is operator-local (gitignored) and absent here")
     assert _declared_keys(live) == _declared_keys(root / ".env.example")
+
+# ----------------------------------------------------------------------
+# No client may fall back to a live default when a credential is absent
+# ----------------------------------------------------------------------
+
+
+def test_no_real_client_reaches_a_live_endpoint_without_credentials():
+    """Blanking the credentials must fail every client closed.
+
+    `tests/conftest.py` blanks `settings.LLM_API_KEY`, `settings.HASDATA_API_KEY`
+    and `settings.OPENROUTER_API_KEY` for the whole suite, so a test that
+    accidentally builds a real client gets a config error instead of spending the
+    operator's balance. That guarantee only holds if no client has a hardcoded
+    fallback that would let it proceed — this is the guard for that, and it fails
+    the moment someone adds an endpoint default that makes a credential optional.
+    """
+    from src.evaluators.gold_curator import GoldCurationConfigError, GoldProductCurator
+    from src.evaluators.llm_filter import LLMConfigError, LLMEvaluationFilter
+    from src.extractors.google_shopping_hasdata import (
+        HasDataNotConfiguredError,
+        HasDataShoppingScraper,
+    )
+    from src.ranking.jev_client import JevClient, JevConfigError
+
+    with pytest.raises(LLMConfigError):
+        LLMEvaluationFilter()
+    with pytest.raises(GoldCurationConfigError):
+        GoldProductCurator()
+    with pytest.raises(HasDataNotConfiguredError):
+        HasDataShoppingScraper()
+    with pytest.raises(JevConfigError):
+        JevClient()
+
+
+def test_the_supplier_engine_fails_closed_without_its_token():
+    # CJ is the only supplier, so an unconfigured token must raise rather than
+    # attempt a session — the conftest blanks it on the settings singleton.
+    import asyncio
+
+    from src.extractors.base import ExtractorNotConfiguredError
+    from src.extractors.cj_mcp_extractor import CjMcpExtractor
+
+    with pytest.raises(ExtractorNotConfiguredError, match="CJ_MCP_TOKEN"):
+        asyncio.run(CjMcpExtractor().fetch_products(["garlic press"]))

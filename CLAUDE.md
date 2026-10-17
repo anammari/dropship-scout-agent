@@ -1,11 +1,21 @@
-# CLAUDE.md - Dropship Scout Agent (Supplier-First Architecture)
+# CLAUDE.md - Dropship Scout Agent (The Morning Anthem, Supplier-First)
 
-> Aligned with the implemented codebase as of 2026-09-29 (Step 6 Jev ranking
-> implemented and live-run; see §13.7). This file is the
-> operating mandate and the single source of operating context: it carries
-> the schemas, gate rules, config reference and operational notes. The
-> retired `_docs/plan.md` engineering spec was deleted — it described the
-> pre-MCP implementation and had drifted out of date.
+> Aligned with the implemented codebase as of **2026-10-12**, on branch
+> `feature/morning-anthem-pipeline-update`: **the whole pipeline is implemented —
+> §1 (the rebrand sweep) and Steps 2–6** — with §1 and Step 2 live-piloted and
+> Steps 3–6 hermetically tested, awaiting their first live run. Only the human
+> steps 7–8 remain (see §13.8).
+> This file is the operating mandate and the single source of operating
+> context: it carries the schemas, gate rules, config reference and
+> operational notes.
+>
+> **The store is The Morning Anthem** — a premium morning-lifestyle brand
+> launching **Australia-only, in AUD**, sourcing from **CJdropshipping
+> exclusively** and researching through **HasData exclusively**. Both former
+> second sources (the AliExpress Dropshipping Center and the Apify Google
+> Shopping actor) are retired — see §1's inventory. §12 and the §13.4–13.7
+> evidence blocks record what those pipelines found before retirement; they
+> are history, not instructions.
 
 ## 1. MISSION & HIGH-LEVEL OBJECTIVE
 
@@ -17,25 +27,35 @@ high-margin winning product packages directly into the Shopify workspace:
 /Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates/
 ```
 
-The pipeline ingests **live, verified products directly from supplier
-APIs/scrapers** (Supplier-First architecture): every candidate starts with a
-real supplier product URL, a real listed price, and the supplier's own image
+The pipeline ingests **live, verified products directly from the supplier
+API** (Supplier-First architecture): every candidate starts with a real
+supplier product URL, a real listed price, and the supplier's own image
 gallery *before* the LLM ever sees it. CJdropshipping is read through its
-official **MCP server** (StreamableHTTP) — see §5.
+official **MCP server** (StreamableHTTP) — see §5 — and it is the pipeline's
+**only** supplier engine.
 
 ```
-[Stage 1] Supplier extractors (chain, SUPPLIER_PRIORITY_ORDER)
-          CJdropshipping MCP → AliExpress Dropshipping Center
-          CJ hits must pass the MCP Payload Liveness Gate (§5)
-          AliExpress hits must pass the Winning-Product Gate (§6)
+[Stage 1] CJdropshipping MCP extractor (sole engine, SUPPLIER_PRIORITY_ORDER)
+          hits must pass the CJ Commercial Gate (§6.2), the MCP Payload
+          Liveness Gate (§5) and the mandatory Freight Quote (§6.3)
                          │  List[RawSupplierProduct]  (verified ground truth)
                          ▼
-[Stage 2] LLM viability & marketing evaluation (deepseek-v4-flash:cloud)
+[Stage 2] LLM viability & marketing evaluation (deepseek-v4.1-flash)
                          ▼
 [Stage 3] Deterministic CDN image download (image_sourcing.py, zero LLM)
                          ▼
 [Stage 4] Workspace export (exporter.py): product-NN/{metadata.json, images/}
 ```
+
+**Retired in the §1 rebrand sweep** (do not rebuild): the AliExpress
+Dropshipping Center extractor (`extractors/aliexpress_ds.py`), its session
+script (`scripts/generate_ali_session.py`), its config keys (`ALI_DS_*`,
+`MIN_DS_*`) and its test module; the Apify Google Shopping wrapper
+(`extractors/google_shopping.py`, `apify-client`, every `APIFY_*` key, the
+`apify-trends` MCP server and its `mcp_headers.py` branch) and its test
+module. `ShoppingRow` — the row contract the Step-3 curator reads — moved to
+`src/extractors/shopping_row.py` when the wrapper that used to hold it was
+deleted.
 
 ## 2. ANTI-HALLUCINATION CONTRACT (MANDATORY, validator-enforced)
 
@@ -60,8 +80,10 @@ official **MCP server** (StreamableHTTP) — see §5.
 
    | Supplier | Required URL shape |
    |---|---|
-   | AliExpress | `/item/<id>.html` |
    | CJdropshipping | `/product/<pid>.html` or `/product/<slug>-p-<pid>.html`; `<pid>` is numeric **or** UUID-form (`B03F2DFF-276D-481C-AD18-28DF22E411CC`) |
+
+   CJdropshipping is the only known supplier (`KNOWN_SUPPLIERS`), so a CJ-named
+   product pointing at ANY other marketplace's item or search URL is rejected.
 
 6. **Strict schema validation over prompt trust:** instructor/Pydantic
    validators reject and force a retry (or downgrade to REJECT) on any
@@ -71,20 +93,20 @@ official **MCP server** (StreamableHTTP) — see §5.
 
 Any candidate failing two or more points is marked `REJECT`:
 
-1. **Problem Solver or Emotional Trigger** — solves an active discomfort or
-   serves a high-passion enthusiast niche.
+1. **Morning-Ritual Fit** — the product belongs to one of The Morning
+   Anthem's five pillars (§1.1). A product that fits no pillar MUST be
+   REJECTed on this gate.
 2. **Margin Viability (AUD)** — priced for **realistic Australian retail** in
-   the store's "Modern Arab-Aussie Lifestyle & Cultural Nostalgia" niche,
-   against the **strict landed cost** read from the supplier record: never a
-   cheaper invented basis, and never a mechanical 3x–4x multiplier on cost.
-   The honest price must clear `MIN_MARKUP_MULTIPLIER` (2.5x) **or** leave
-   `MIN_MARGIN_AUD` (AUD 10, widened from AUD 20 on 2026-09-29 to match the
-   operator's Step-3 $10 target — the 5-point gate prompt interpolates the
-   live config values so it cannot drift) gross profit per unit; a product
-   whose realistic AU price cannot clear that floor is REJECTed on this gate
-   rather than priced up to fit (enforced twice: `_reconcile` downgrade in
-   `llm_filter.py` and `_enforce_accept_gates` in `models.py`, both reading
-   the same config keys the prompt interpolates).
+   the store's pillar, against the **strict landed cost** read from the
+   supplier record: never a cheaper invented basis, and never a mechanical
+   3x–4x multiplier on cost. The honest price must clear
+   `MIN_MARKUP_MULTIPLIER` (2.5x) **or** leave `MIN_MARGIN_AUD` (AUD 10, the
+   operator's target gross margin per unit — the 5-point gate prompt
+   interpolates the live config values so it cannot drift) gross profit per
+   unit; a product whose realistic AU price cannot clear that floor is
+   REJECTed on this gate rather than priced up to fit (enforced twice:
+   `_reconcile` downgrade in `llm_filter.py` and `_enforce_accept_gates` in
+   `models.py`, both reading the same config keys the prompt interpolates).
 
    The prompt tells the model **which kind of cost it is judging**, via the
    payload's `shipping_quoted` flag (`RawSupplierProduct.shipping_quoted`):
@@ -94,11 +116,30 @@ Any candidate failing two or more points is marked `REJECT`:
    Only the prompt changes on that path; the margin floor itself is unchanged,
    and no freight figure is ever invented for a supplier that will not quote
    one.
-3. **Australian Logistical Feasibility** — < 1.2 kg, durable, non-perishable,
-   air-freight compliant (inferred from title/description only).
-4. **Local Saturation Resistance** — not an everyday Kmart/Target/Bunnings/
-   Big W/Woolworths commodity.
+3. **Logistical Feasibility** — < 1.2 kg, durable, non-perishable,
+   air-freight compliant to Australia from China (inferred from
+   title/description only).
+4. **Saturation Resistance** — not an everyday Kmart/Target/Bunnings/Big W/
+   Woolworths commodity, nor a Walmart/IKEA one as the store expands.
 5. **Demonstration Appeal** — a 3-second visual problem→solution dynamic.
+
+### 1.1 THE FIVE MORNING ANTHEM PILLARS
+
+One importable constant tuple per module, identical everywhere
+(`src/keywords/generator.py::PILLARS`, `src/evaluators/gold_curator.py::PILLARS`,
+and the keys of `src/ranking/jev_client.py::PILLAR_OPTIONS`):
+
+| Pillar key | Pillar | Product lines |
+|---|---|---|
+| `brew_fuel` | The Brew & Fuel (core) | Manual coffee tools, espresso distribution gear, portable milk frothers, minimalist tumblers, matcha accessories |
+| `sunrise_move` | The Sunrise Move | Aesthetic active gear, commuter backpacks, waterproof pouches, hands-free dog leashes, sand-free towels |
+| `mindful_awakening` | The Mindful Awakening | Backflow incense burners, digital gratitude journals, shower steamers, meditation accessories |
+| `restful_reset` | The Restful Reset | Silk eye masks, ergonomic recovery pillows, sunrise alarm clocks, facial ice rollers |
+| `morning_table` | The Morning Table | Cutting boards, garlic presses/mashers, breakfast preparation and serving kitchen aids |
+
+There is **no `other` pillar**. The retired `curated_home` /
+`self_care_rituals` / `other` trio (and the Sabaah Goods "Modern Arab-Aussie
+Lifestyle & Cultural Nostalgia" niche copy) must not reappear anywhere.
 
 ## 4. WORKSPACE STRUCTURE
 
@@ -113,49 +154,50 @@ dropship-scout-agent/
 │   │                        #   ProductCandidateEvaluation (+ from_raw)
 │   ├── extractors/
 │   │   ├── base.py          # BaseSupplierExtractor + shared exceptions
-│   │   ├── cj_mcp_extractor.py      # CJdropshipping MCP: commercial gate, liveness gate, freight quote
-│   │   ├── aliexpress_ds.py         # native DS Center ingestion + winner gate
-│   │   ├── google_shopping.py        # Step-3 gold-research Apify actor wrapper (§13; NOT a supplier extractor)
-│   │   └── google_shopping_hasdata.py # Step-3 HasData shopping source (§13.2; optional Apify alternative)
+│   │   ├── cj_mcp_extractor.py      # CJdropshipping MCP — the sole supplier: commercial gate, liveness gate, freight quote
+│   │   ├── google_shopping_hasdata.py # Step-3 HasData Google Shopping (the only shopping source, §13.2)
+│   │   └── shopping_row.py  # the shared ShoppingRow row contract (curator + scraper)
+│   ├── research/            # Step-2 trend research (§13.8)
+│   │   ├── trend_gate.py    # Jev product-intent gate + banned-token screen
+│   │   └── __init__.py
 │   ├── evaluators/
 │   │   ├── llm_filter.py    # instructor + ProvisionalProductEvaluation
 │   │   └── gold_curator.py  # Step-3 LLM curation: select-by-url, facts code-assembled (§13)
 │   ├── keywords/            # Step-4 gold-standard keyword engine (§13.3)
 │   │   ├── gold_keyword_prompt.md  # Step-4 prompt resource ({PRODUCT_TABLE} slot)
 │   │   └── generator.py     # Batched generation + code-side pool validation
-│   ├── ranking/             # Step-6 Jev product ranking (§13.7)
+│   ├── ranking/             # Jev: Step-2 gate, Step-3 pillar gate, Step-6 ranking (§13.8)
 │   │   ├── jev_client.py    # System One transport + all question/threshold constants
 │   │   └── jev_product_ranker.py  # Batching, composite score, tiers, report writer
 │   ├── pipeline/
 │   │   ├── cj_mcp_client.py # CJ MCP client + MCP Payload Liveness Gate
 │   │   ├── image_sourcing.py# deterministic CDN image download/validation
-│   │   └── keyword_bank.py  # Step-5 bank loader + dual-supplier ingestion (§13.6)
+│   │   └── keyword_bank.py  # Step-5 bank loader + CJ ingestion (§13.6)
 │   ├── exporter.py          # workspace writer (metadata.json + images/)
 │   └── main.py              # CLI orchestrator, funnel counters, exit codes
 ├── scripts/
-│   ├── generate_ali_session.py  # optional saved DS Center login (§6)
+│   ├── rehearse_pipeline.py     # DEVELOPMENT harness: the whole chain on synthetic
+│   │                            #   data with every external service stubbed (§11)
 │   ├── verify_cj_gate.py        # CJ list-count threshold diagnostic (no LLM, no export)
+│   ├── gate_trend_keywords.py        # Step-2 Jev product-intent gate runner (§13.8)
+│   ├── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
 │   ├── generate_gold_keywords.py     # Step-4 keyword bank runner (§13.3)
-│   ├── ingest_keyword_bank.py        # Step-5 dual-supplier ingestion runner (§13.6)
-│   ├── rank_optimal_candidates.py    # Step-6 Jev ranking runner (report only, no deletion)
-│   └── run_gold_standard_research.py  # Step-3 gold-product research runner (§13)
-└── tests/                   # 579 hermetic tests, zero network (15 modules + conftest)
+│   ├── ingest_keyword_bank.py        # Step-5 CJ ingestion runner (§13.6)
+│   └── rank_optimal_candidates.py    # Step-6 Jev ranking runner (report only, no deletion)
+└── tests/                   # 690 hermetic tests, zero network (19 modules + conftest)
 ```
 
 **Retired pipelines — do not rebuild.** The Meta Ad Library scraper
 (`playwright_scraper.py`, `apify_scraper.py`), fuzzy-match sourcing
 (`pipeline/supplier_sourcing.py`), the CJ REST client and extractor
 (`pipeline/cj_client.py`, `extractors/cj_api_extractor.py`), the
-Apify-hosted AliExpress scraper (`extractors/aliexpress_apify.py`, with its
-pay-per-result actor, its US-market unauthenticated welcome-deal pricing and
-every `APIFY_*` key) and the per-candidate DS Center gate it carried
-(`ENABLE_DS_CENTER_GATE`), and the Etsy extractor (`extractors/etsy_api.py`,
-with every `ETSY_API_KEY` reference) are deleted. **Etsy is retired as a
-source outright: it does not support dropshipping, so it is not a supplier
-this pipeline will ever use again** — it is gone from the extractor chain,
-the `SUPPLIER_PRIORITY_ORDER` default, `KNOWN_SUPPLIERS`, the CLI's
-`--extractor` choices and the config surface. AliExpress is
-read natively from the Dropshipping Center (§6), CJ is MCP-only (§5), and
+Apify-hosted AliExpress scraper (`extractors/aliexpress_apify.py`) and the
+per-candidate DS Center gate it carried (`ENABLE_DS_CENTER_GATE`), the Etsy
+extractor (`extractors/etsy_api.py`) — **Etsy is retired outright: it does
+not support dropshipping** — and, as of the §1 Morning Anthem sweep, the
+**AliExpress Dropshipping Center extractor** and the **Apify Google Shopping
+wrapper** with every key, dependency and test they carried. CJ is MCP-only
+(§5), HasData is the only research and shopping source (§13.8), and
 `supplier_retail_url` is the sole retail link in the export contract (§8).
 Costing rationale for the replacement: §12.
 
@@ -204,8 +246,14 @@ EU-block body) even on HTTP 200.
 
 ## 6. SUPPLIER EXTRACTORS
 
-All extractors subclass `BaseSupplierExtractor.fetch_products(keywords,
-country="AU") -> List[RawSupplierProduct]` and share one exception taxonomy:
+**The Morning Anthem registers ONE engine: CJdropshipping (§6.2, §6.3).** The
+chain machinery is kept (a second supplier would need no rewrite), but
+`SUPPLIER_PRIORITY_ORDER` defaults to `cjdropshipping` alone, the registry
+holds one entry, and the CLI's `--extractor` choices are `{auto,
+cjdropshipping}`.
+
+Extractors subclass `BaseSupplierExtractor.fetch_products(keywords,
+country=None) -> List[RawSupplierProduct]` and share one exception taxonomy:
 `ExtractorNotConfiguredError` (missing credential — chain moves on),
 `ExtractorBlockedException` (auth/rate-limit/anti-bot wall — chain moves
 on), `ExtractorTimeoutException`. Every extractor **skips, never
@@ -227,38 +275,17 @@ usable price, ≥ 3 gallery URLs).
   HTML-stripped, and `price_aud = listed USD × USD_TO_AUD`. The PDP link
   prefers CJ's own `productUrl` (the only known-good form for UUID pids),
   falling back to the canonical `/product/{pid}.html`.
-- **`aliexpress_ds.py` (native, `engine_name="aliexpress_ds_center"`):**
-  reads the AliExpress **Dropshipping Center's** own MTOP H5 APIs through a
-  stealth Playwright context's request jar — the same internal calls its
-  React UI makes, so no HTML scraping, no SPA driving, no per-result
-  billing. Per keyword it calls
-  `mtop.aidc.ds.center.selection.search` (`sort=ORDERS_DESC`, page size
-  `ALI_DS_MAX_PRODUCTS`) and expands every hit through
-  `mtop.aidc.ds.center.selection.queryByItemUrl` for the item's
-  real AU-market record. Both ride MTOP's token-then-sign handshake
-  (appKey `12574478`; the first call primes the `_m_h5_tk` cookie unsigned,
-  the second signs `md5(token&t&appKey&data)`), responses are
-  JSONP-tolerant, and the context carries AliExpress's ship-to cookie
-  (`aep_usuc_f`, `site=glo&region=<run country>&b_locale=en_US`) because the
-  DS Center's catalogue and prices are market-specific — the same item is
-  quoted US $5.23 in the default market and US $7.22 for AU, so the pin is
-  load-bearing. The record's minor-unit price plus its quoted currency drive
-  `price_aud` (USD → `USD_TO_AUD`; AUD as-is; any other currency skipped
-  rather than mispriced). Every hit must then clear the **Winning-Product
-  Gate** (§6.1), survivors are sorted by order volume descending, and each
-  survivor's PDP is harvested once for its gallery + description: the record
-  itself carries only a single `itemMainPic`, so the full carousel comes from
-  that one page load (`_GALLERY_JS` / `_META_DESCRIPTION_JS` probes;
-  `Stealth` class API — playwright-stealth ≥ 2.0, v1's `stealth_async()` no
-  longer exists). The saved session (`ALI_DS_STATE_PATH`) is optional —
-  anonymous AU access returns byte-identical data — so it is injected only
-  when the file exists and its absence is never an error; a session/auth
-  refusal (`FAIL_SYS_SESSION_EXPIRED`, `FAIL_SYS_USER_VALIDATE`,
-  `FAIL_SYS_ILLEGAL_ACCESS`) or a login-page redirect raises
-  `DsCenterSessionExpiredError`, which the CLI renders as an intervention
-  block with the recovery steps.
+- ~~`aliexpress_ds.py`~~ — **retired in the §1 Morning Anthem sweep.** The
+  AliExpress Dropshipping Center extractor, its MTOP/Playwright machinery, its
+  AU market pin, its winning-product gate (§6.1), its saved-session script and
+  its config keys are all deleted. CJ is the only supplier; do not rebuild it.
 
-### 6.1 WINNING-PRODUCT GATE (AliExpress, MANDATORY)
+### 6.1 WINNING-PRODUCT GATE (AliExpress) — RETIRED, recorded for history
+
+> **Retired with the AliExpress extractor (§1).** No code path enforces this
+> gate today. It is kept in the mandate only because the CJ commercial gate
+> (§6.2) was modelled on it and the two shared a shape: a quantitative
+> pre-LLM gate with fail-closed semantics and a descending sort.
 
 Enforced in the extractor on every search hit's item record — before the LLM
 and before any image work — so no weak seller ever costs a downstream call:
@@ -411,15 +438,16 @@ the service name and transit window — never LLM-authored (§2.2). It states
 only what the quote supports and makes no claim about what the customer pays;
 an earlier LLM-authored version invented "Free standard shipping on this
 item" against a real AUD 14.52 freight cost. A product with **no quote at all**
-(AliExpress) gets `Ships to Australia from the supplier.` and nothing
-more: naming a service or a transit window without a quote is the same class
-of unsupported claim.
+gets `Standard tracked international shipping to Australia from China.` and
+nothing more: naming a service or a transit window without a quote is the same
+class of unsupported claim. (CJ always quotes freight, so this branch is the
+defensive one.)
 
 ## 9. ORCHESTRATION (`src/main.py`)
 
 ```bash
 python -m src.main --keyword "kitchen gadgets" --target-count 3 \
-                   [--country AU] [--extractor {auto,cjdropshipping,aliexpress}]
+                   [--country AU] [--extractor {auto,cjdropshipping}]
 ```
 
 - The LLM filter is constructed **before** extraction (fail-fast on a bad
@@ -459,65 +487,69 @@ Instructions for You:
 ------------------------------------------------------------
 ```
 
-Current triggers: **Supplier Extraction Stage** (all extractors
+Current triggers: **Supplier Extraction Stage** (the CJ engine
 unavailable/blocked), **LLM Evaluation Filter Configuration** (missing LLM
-env config), **AliExpress Dropshipping Center Session** (the DS Center
-refused the client — re-run `scripts/generate_ali_session.py`, or delete
-`ALI_DS_STATE_PATH` and run anonymously), **Pipeline Funnel Exhausted** (zero
-exports after all gates). Drops at individual gates are surfaced in the run
-summary, not as interventions.
+env config), **Pipeline Funnel Exhausted** (zero exports after all gates).
+Drops at individual gates are surfaced in the run summary, not as
+interventions. (The AliExpress DS Center Session trigger went with the
+extractor.)
 
-### Optional DS Center session script
+### Optional saved-session script — RETIRED
 
-```bash
-source .venv/bin/activate && python scripts/generate_ali_session.py
-```
-
-Opens a non-headless stealth Chromium (Playwright's bundled build — the
-operator's own Chrome profile and tabs are untouched), lets the operator log
-in and open the Dropshipping Center by hand, then writes the context's
-`storage_state` to `ALI_DS_STATE_PATH`. Needed only if AliExpress starts
-requiring a login for the MTOP calls in §6.
+`scripts/generate_ali_session.py` and the whole saved-session concept went
+with the AliExpress extractor (§1). CJ's MCP server needs only its token.
 
 ## 10. CONFIGURATION (`.env`, read by `src/config.py`)
 
 | Key | Default | Used by |
 |---|---|---|
-| `CJ_MCP_TOKEN` | — | cj_mcp_client / cj_mcp_extractor (primary; token in URL path) |
+| `CJ_MCP_TOKEN` | — | cj_mcp_client / cj_mcp_extractor (the sole supplier; token in URL path) |
 | `CJ_MCP_BASE_URL` | `https://developers.cjdropshipping.com/mcp` | cj_mcp_client (token appended) |
-| `ALI_DS_STATE_PATH` | `ali_ds_state.json` | aliexpress_ds (optional saved session; injected only if present) |
-| `ALI_DS_MAX_PRODUCTS` | `20` | DS Center search page size / per-keyword expansion cap |
-| `MIN_DS_ORDER_COUNT` | `500` | aliExpress winning-product gate (historical orders) |
-| `MIN_DS_RATING` | `4.5` | winning-product gate (rating out of 5) |
 | `LLM_BASE_URL` / `LLM_API_KEY` | — | llm_filter |
-| `LLM_MODEL` | `deepseek-v4-flash:cloud` | llm_filter |
-| `SUPPLIER_PRIORITY_ORDER` | `cjdropshipping,aliexpress` | extractor chain |
-| `USD_TO_AUD` | `1.55` | all USD→AUD price math |
+| `LLM_MODEL` | `deepseek-v4.1-flash` | llm_filter |
+| `SUPPLIER_PRIORITY_ORDER` | `cjdropshipping` | extractor chain (one engine; the chain machinery stays) |
+| `USD_TO_AUD` | `1.55` | all USD→AUD price math (CJ quotes USD; the store sells in AUD) |
 | `MIN_CJ_LISTED_COUNT` | `150` | CJ commercial gate (minimum `listedNum`; CJ reports no sales figure) |
 | `CJ_FREIGHT_METHOD` | *(blank = cheapest)* | CJ freight quote: pin a shipping service by CJ's own name |
 | `CJ_MAX_PRODUCTS` | `10` | products expanded per CJ keyword (MCP search cap) |
+| `CJ_DEFAULT_DEST_COUNTRY` | `AU` | the CJ freight quote's destination lane (AU launch; CJPacket EUB-class lanes) and the liveness gate's preferred stock country |
 | `MIN_MARKUP_MULTIPLIER` | `2.5` | margin floor (markup leg), llm_filter + models |
-| `MIN_MARGIN_AUD` | `10.0` | margin floor (gross-profit leg), llm_filter + models — widened from AUD 20 on 2026-09-29 to match the operator's Step-3 $10 target |
-| `TARGET_COUNTRY` | `AU` | extraction/evaluation target; also the AliExpress ship-to market |
-| `HASDATA_API_KEY` | — | HasData key on one shared credit balance, used by TWO things: (1) the Step-2 Google Trends MCP server, read from `.env` by `scripts/mcp_headers.py` for `.mcp.json` (NOT by `src/config.py`); (2) the Step-3 HasData Google Shopping source (`--source hasdata`, §13.2), read by `src/config.py` to call the REST API directly. Free tier 1,000 credits/month; a Trends call is 5 credits, a Shopping call 10 |
-| `APIFY_TOKEN` | — | Apify account token, shared by TWO actors: (1) Step-2 trend-research FALLBACK `data_xplorer/google-trends-fast-scraper` via the Apify MCP (`.mcp.json`) — used only if the HasData Google Trends MCP fails or returns an info-poor schema, $2.00/1,000 results; (2) Step-3 gold-research CORE actor (§13), $3.50/1,000 results |
-| `APIFY_GS_ACTOR` | `damilo/google-shopping-apify` | Step-3 gold-research actor id (§13) |
-| `APIFY_GS_MAX_RESULTS_PER_KEYWORD` | `10` | Step-3 results requested per keyword (actor `num`; closed set 10/20/30/40/50/100) |
-| `APIFY_GS_MAX_CHARGE_USD` | `7.5` | Step-3 hard USD spend ceiling per actor run, enforced by Apify itself; sized above the observed full-bank envelope (~$5.60) and within the free-tier remainder |
-| `HASDATA_GS_BASE_URL` | `https://api.hasdata.com` | Step-3 HasData source (`--source hasdata`, §13.2): REST base; the client appends `/scrape/google/shopping` |
-| `HASDATA_GS_MAX_RESULTS_PER_KEYWORD` | `40` | Step-3 HasData source: **local** cap on rows kept per keyword. NOT an API parameter — one request returns the whole grid (~65 rows observed) for a flat 10 credits, so this bounds downstream LLM curation only, never HasData spend (§13.2) |
-| `GOLD_PRODUCTS_PATH` | `outputs/json/step-3-gold-standard-products.json` | Step-3 gold-product deliverable (untracked `outputs/` tree) |
-| `KEYWORD_BANK_PATH` | `outputs/json/step-4-gold-keywords.json` | Step-4 gold-keyword bank deliverable — Step 5's intake (untracked `outputs/` tree) |
-| `BANK_TARGET_PER_KEYWORD` | `2` | Step-5 packages exported per **(keyword, engine)** leg — a PER-LEG target, so the bank's keyword count multiplies it (§13.6) |
-| `OPTIMAL_EXPORT_DIR` | `…/my-store-build/inspiration/optimal-dropship-candidates` | Step-5 gold-kernel root: each engine writes into its own subfolder, numbered independently (§13.6) |
-| `OPENROUTER_API_KEY` | — | Step-6 Jev ranking: Bearer token for the OpenRouter System One endpoint (never logged) |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Step-6 client base; it appends `/systemone` |
-| `JEV_MODEL` | `typesafe/jev-1.13` | Step-6 System One model id (pinned so a ranking is reproducible) |
+| `MIN_MARGIN_AUD` | `10.0` | margin floor (gross-profit leg), llm_filter + models — the operator's target gross margin per unit |
+| `TARGET_COUNTRY` | `AU` | extraction/evaluation target |
+| `HASDATA_API_KEY` | — | **the exclusive data provider**, on one shared credit balance: (1) the Step-2 Google Trends MCP server, read from `.env` by `scripts/mcp_headers.py` for `.mcp.json` (NOT by `src/config.py`); (2) the Step-3 HasData Google Shopping source (§13.2), read by `src/config.py` to call the REST API directly. Free tier 1,000 credits/month |
+| `HASDATA_GS_BASE_URL` | `https://api.hasdata.com` | Step-3 HasData source (§13.2): REST base; the client appends `/scrape/google/shopping` |
+| `HASDATA_GS_MAX_RESULTS_PER_KEYWORD` | `20` | Step-3 **local** cap on rows kept per keyword. NOT an API parameter — one request returns the whole grid (~65 rows observed) for a flat 10 credits, so this bounds downstream LLM curation only, never HasData spend (§13.2) |
+| `TRENDS_GEO` | `AU` | Step-2 Trends geography (AU-first launch) |
+| `SHOPPING_GL` / `SHOPPING_DOMAIN` | `au` / `google.com.au` | Step-3 Google Shopping market pin (AUD retail benchmarks) |
+| `HASDATA_MONTHLY_BUDGET` | `1000` | the free-tier ceiling the production cap is checked against |
+| `HASDATA_PRODUCTION_CAP` | `400` | max credits one full production run may plan (the launch-run profile, §13.8) |
+| `HASDATA_GS_MAX_KEYWORDS` | `30` | Step-3 hard keyword-count cap (fail-closed before any credit moves) |
+| `HASDATA_TRENDS_CREDITS_PER_CALL` | `10` | Trends rate the guardrail arithmetic uses — **10 per request, confirmed on the HasData dashboard 2026-10-12** |
+| `HASDATA_SHOPPING_CREDITS_PER_REQUEST` | `10` | Shopping rate the guardrail arithmetic uses |
+| `TRENDS_MAX_CALLS` | `10` | Step-2 Trends call ceiling (up to 5 comma-separated terms per call) |
+| `MORNING_ANTHEM_TREND_KEYWORDS_PATH` | `outputs/json/morning-anthem-step-2-trend-keywords.json` | Step-2 deliverable (Jev-gated) — Step 3's intake |
+| `MORNING_ANTHEM_GOLD_PRODUCTS_PATH` | `outputs/json/morning-anthem-step-3-gold-products.json` | Step-3 gold-product deliverable — Steps 4 + 6 read it |
+| `MORNING_ANTHEM_KEYWORD_BANK_PATH` | `outputs/json/morning-anthem-step-4-keyword-bank.json` | Step-4 bank deliverable — Step 5's intake |
+| `BANK_TARGET_PER_KEYWORD` | `2` | Step-5 packages exported per (keyword, engine) leg — a PER-LEG target, so the bank's keyword count multiplies it (§13.6) |
+| `MORNING_ANTHEM_EXPORT_DIR` | `…/my-store-build/inspiration/morning-anthem-candidates` | Step-5/6 gold-kernel root; the `cjdropshipping/` subfolder is numbered independently (§13.6) |
+| `OPENROUTER_API_KEY` | — | Jev (TypeSafe System One via OpenRouter), shared by the Step-2 product-intent gate, the Step-3 pillar gate and the Step-6 ranking (never logged) |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Jev client base; it appends `/systemone` |
+| `JEV_MODEL` | `typesafe/jev-1.13` | System One model id (pinned so a ranking is reproducible). **Jev is always the default**; the alternative `perplexity/pplx-decider-flash-v1.2` is chosen per run with `rank_optimal_candidates.py --decision-model …`, never by editing this key |
 | `JEV_BATCH_SIZE` | `4` | Step-6 packages per System One call (three questions each; ~13-question native batch) |
-| `JEV_SHORTLIST_MIN_SCORE` | `3.5` | Step-6 tier floor: `rank_score` ≥ this → shortlist (1–5 scale), widened from 4.0 on 2026-09-29 |
+| `JEV_SHORTLIST_MIN_SCORE` | `3.5` | Step-6 tier floor: `rank_score` ≥ this → shortlist (1–5 scale) |
 | `JEV_REVIEW_MIN_SCORE` | `2.5` | Step-6 tier floor: `rank_score` ≥ this → review, else disregard |
+| `TREND_GATE_BATCH_SIZE` | `8` | Step-2 Jev product-intent gate: candidate strings per System One call |
+| `TREND_SELECT_BATCH_SIZE` | `12` | Step-2 Jev **selection** pass: candidates per System One call |
+| `TREND_SELECT_TARGET` | `30` | how many keywords the selection picks for the Step-3 scrape — **this IS the Step-3 budget** (10 credits each) |
+| `TREND_SELECT_MIN_PER_PILLAR` | `2` | per-pillar floor inside each pillar's proportional selection quota, so a crowded pillar cannot consume every paid slot |
+| `PILLAR_GATE_BATCH_SIZE` | `4` | Step-3 Jev pillar gate: candidate products per System One call |
 | `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter (general intake §9) |
-| `USER_AGENT` | desktop Chrome UA | CDN downloads, Playwright PDP harvest |
+| `USER_AGENT` | desktop Chrome UA | CDN downloads |
+
+**Removed keys** (with their pipelines): `ALI_DS_STATE_PATH`,
+`ALI_DS_MAX_PRODUCTS`, `MIN_DS_ORDER_COUNT`, `MIN_DS_RATING`, `APIFY_TOKEN`,
+`APIFY_GS_ACTOR`, `APIFY_GS_MAX_RESULTS_PER_KEYWORD`,
+`APIFY_GS_MAX_CHARGE_USD`.
 
 Every key in `.env.example` is present in `.env` in the same order with the
 same description; a key that is commented out **or present but blank**
@@ -528,39 +560,99 @@ only in `.env` / the real environment.
 
 ## 11. TESTS & ENVIRONMENT
 
-- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — 535
-  tests, zero network (httpx.MockTransport + fake MCP sessions + scripted
-  Playwright/MTOP fakes + faked Apify SDK / scripted LLM transports).
-- `tests/test_keyword_bank.py` covers the Step-5 bank and its dual-supplier
-  ingestion: the fail-closed loader (missing/malformed/empty/non-list
-  payloads, non-object and non-string rows, the banned-token defence in
-  depth), and `ingest_keyword_bank` over fake extractors/evaluator/exporters
-  — both engines run for every keyword, one shared evaluator, the per-leg
-  failure skip with the other engine continuing, the all-engines-failed
-  `BankIngestionFailedError`, the empty-catalogue accounting, the per-leg
-  early stop (it uses the real `run_pipeline`, so the funnel counters and the
-  early-stop rule are inherited, not re-implemented), and the
-  cumulative-exporter-counter delta fold — including the empty-funnel leg,
-  which must fold as 0 rather than as a negative. It writes to `tmp_path` and
-  never touches the real supplier trees — see §13.6.
+### The rehearsal harness — `scripts/rehearse_pipeline.py`
+
+**Not part of the pipeline**; nothing in the production path imports it. It drives
+Steps 3–7 over synthetic data with **only the external services stubbed** —
+HasData Google Shopping, the CJdropshipping MCP server, the reasoning LLM, Jev and
+the CDN image download — while every guardrail, file handoff, the export contract,
+the margin floor, the image gate, the funnel counters and the cleanup's deletion
+logic all run for real.
+
+```bash
+source .venv/bin/activate && python scripts/rehearse_pipeline.py
+```
+
+**It cannot spend anything:** every outbound socket is blocked for the duration, so
+a stub that misses its mark fails loudly instead of quietly reaching a real API, and
+it refuses to run with a scratch directory anywhere inside the real workspace tree
+(it deletes directories in Step 7). Run it before any live run, and after any change
+to a runner — it is the only thing that exercises the *seams* between the steps.
+`tests/test_rehearsal.py` keeps it from rotting.
+
+- Hermetic suite: `source .venv/bin/activate && pytest tests/ -v` — **690
+  tests, zero network** (httpx.MockTransport + fake MCP sessions + scripted
+  LLM/System One transports). Every module's count is pinned against the
+  pre-rebrand baseline except the two retired test modules, and the conftest
+  blanks the LLM/HasData/OpenRouter credentials **on the `settings` singleton
+  as well as in `os.environ`** — scrubbing the environment alone left the real
+  keys reachable, which is how a stray live call got made once while the
+  Step-2 gate was being written. A test that needs a credential patches it
+  back explicitly.
+- `tests/test_trend_gate.py` covers the Step-2 Jev product-intent gate
+  (§13.8): the closed four-way verdict set, only-`product_search`-survives,
+  the one-question-per-candidate batch envelope and its index-addressed
+  instruction, the batch split, the settings-driven batch size, the
+  retry-once-then-drop containment (a missing `answers` object degrades one
+  batch, never the run), unparsable and out-of-set verdicts dropping the
+  string, verbatim carry-through of keyword/pillar/evidence, that the question
+  offers no slot for the model to author a string, the banned-token screen,
+  the fail-closed loader (including a pillar outside the five Morning Anthem
+  keys), and the deliverable + pre-gate audit-trail writers.
+- `tests/test_keyword_bank.py` covers the Step-5 bank and its CJ ingestion:
+  the fail-closed loader (missing/malformed/empty/non-list payloads,
+  non-object and non-string rows, the banned-token defence in depth, the
+  missing-`match` default and the exact-before-fallback ordering), and
+  `ingest_keyword_bank` over fake extractors/evaluator/exporters — every
+  registered engine runs for every keyword, one shared evaluator, the per-leg
+  failure skip, the all-engines-failed `BankIngestionFailedError`, the
+  empty-catalogue accounting, the per-leg early stop (it uses the real
+  `run_pipeline`, so the funnel counters and the early-stop rule are
+  inherited, not re-implemented), and the cumulative-exporter-counter delta
+  fold — including the empty-funnel leg, which must fold as 0 rather than as a
+  negative. The generic fan-out/leg-failure machinery is exercised with a
+  **synthetic second engine patched in**, so coverage survives the retirement
+  of the only other supplier. It writes to `tmp_path` and never touches the
+  real supplier trees — see §13.6.
 - `tests/test_keyword_generator.py` covers the Step-4 gold-keyword engine:
-  the template prompt (the product table is a `{PRODUCT_TABLE}` slot, never
-  a hardcoded list), the table rendering (cells verbatim, `null` → `—`), the
-  gold-deliverable read with its remediation errors, the demand-ranked
-  selection with its boundary-name exclusion and one-per-`source_keyword`
-  type collapse, the adaptive per-product target and floor, batching with the
-  per-batch note and the carried do-not-repeat list, the merged-pool
-  validation contract (broad/modifier pairing, banned tokens, band,
-  coverage, floor), the neediest-first duplicate collapse, and salvaging; it
-  uses a tmp_path gold fixture and never reads the real `outputs/` tree —
-  see §13.3.
-  `tests/test_google_shopping.py`
-  covers the Step-3 gold-research scraper (actor input shape incl. the
-  closed-set `num`, spend ceiling riding the run options, run-status
-  taxonomy, row parsing) and the gold curator (facts assembled from rows,
-  invented-URL join drop, pillar/boundary enforcement, dedupe, fenced and
-  truncated-response salvage, the reasoning-model empty-content failure,
-  batching, transport/HTTP/config errors) — see §13.
+  the exact-title derivation (`exact_keyword` is the title's own words in its
+  own order, lowercased, apostrophes removed rather than splitting the word,
+  runs of non-alphanumerics collapsed, idempotent, adding and reordering
+  nothing, and empty for an unusable title), the **20-word truncation bound**
+  (a stuffed title is truncated rather than costing its product a keyword, the
+  cut never lands on a trailing function word, and a title inside the bound is
+  left completely alone), `normalized_title_words`, and `build_exact_rows`
+  (exactly one `exact` row per product, a titleless product skipped); the
+  template prompt (the product table is a `{PRODUCT_TABLE}` slot, never a
+  hardcoded list, stating the AICIS boundary and the at-most-one-fallback rule
+  and asking for no `pillar` or `match` field), the table rendering (cells
+  verbatim, `null` → `—`), and the gold-deliverable read with its remediation
+  errors naming Step 3. The demand-ranked selection is covered for its
+  boundary-name exclusion, its one-row-per-normalised-title collapse and its
+  `MAX_PER_SOURCE_KEYWORD` per-topic cap (the cap keeping a topic's strongest
+  rows and never its whole pool). `validate_bank` is covered on both sides of
+  its split: the **code invariants that fail the run** (an exact keyword that
+  does not match its own title, a product with no exact row, a row naming an
+  unknown product, a duplicate keyword, a row claiming another product's
+  pillar) and the **model slips that cost only their own row** (a fallback
+  outside the word bounds, punctuated or capitalised, carrying a banned token,
+  or sharing no concrete word with its own title), plus a valid variant being
+  accepted. `generate_bank` is covered for the exact-row-plus-fallbacks
+  hand-off, an empty fallback list, the per-batch note and carried
+  do-not-repeat list, each batch table carrying only its own products, a model
+  row claiming `match="exact"` or naming an unknown product being ignored, a
+  failed fallback dropped rather than fatal, a fallback duplicating another
+  product's exact keyword deduped, fenced and truncated responses, an
+  empty-completion error naming the finish reason, HTTP and transport
+  failures, and that a failed bank **never writes a partial result**. Also
+  covered: the neediest-first duplicate collapse and its tie-break, the
+  `parse_llm_keywords` salvage, the banned-token screen, the five pillars,
+  the generator's own config guards, and the runner's plan/write/halt paths.
+  It uses a tmp_path gold fixture and never reads the real `outputs/` tree —
+  see §13.8.
+  (`tests/test_google_shopping.py` — the retired Apify wrapper's module —
+  and `tests/test_aliexpress_ds.py` are deleted with their subjects; the gold
+  curator's coverage lives in `tests/test_google_shopping_hasdata.py`.)
 - `tests/test_google_shopping_hasdata.py` covers the Step-3 HasData source
   (§13.2): the request shape (the AU market pin — `gl`/`domain` — the
   `x-api-key` header, one request per keyword), row parsing against **both**
@@ -573,14 +665,8 @@ only in `.env` / the real environment.
   error `requestMetadata.status`, empty grid, a later keyword failing the
   run), the shared-`ShoppingRow` round-trip, the downstream curator
   compatibility (a parsed high-rating row clears the demand-evidence filter),
-  and the runner's `--source` selection, spend banner per source, and
-  `apify`-stays-the-default guarantee.
-- `tests/test_aliexpress_ds.py` covers the payload decoding (plain and
-  JSONP), order/rating parsing, the currency guard and AUD conversion, the
-  §6.1 gate and each documented drop log, the MTOP priming-then-signed
-  handshake, ordering by order volume, dedupe across keywords, the
-  session-expiry and blocked-exchange paths, the optional state file, and the
-  PDP gallery/description harvest.
+  and the runner's credit banner, keyword-cap/pilot-cap refusal, and the
+  absence of any second source (HasData is the only shopping scraper).
 - `tests/test_cj_mcp_client.py` covers tool discovery and the alias binding
   (§5.1) including the exact-only rule for the nesting freight tools, the
   liveness gate, the listing-count and freight-quote parsing, and both freight
@@ -624,9 +710,9 @@ only in `.env` / the real environment.
   `calculate_freight` returned 15 AU methods for it (USD 9.37 to 33.54), and
   the same variant quoted both 9.37 and 12.53 within an hour — hence the
   variance note in §6.3.
-- Python 3.13 venv at `.venv/`; install with `pip install -e ".[dev]"`;
-  Playwright Chromium: `python -m playwright install chromium` (used by the
-  AliExpress DS Center calls and the PDP gallery harvest).
+- Python 3.13 venv at `.venv/`; install with `pip install -e ".[dev]"`.
+  (Playwright and its Chromium download are no longer dependencies — the only
+  consumer was the AliExpress DS Center path, retired in §1.)
 - The `mcp` SDK is a declared dependency (StreamableHTTP client only).
 
 ## 12. OPERATIONAL NOTES
@@ -660,7 +746,8 @@ only in `.env` / the real environment.
   contained (0 unhandled errors across ~11h).
   `CJ_MAX_PRODUCTS=10` means up to 10 detail calls per keyword, so a run
   takes minutes — that is the pacing, not a hang.
-- **Why the Apify path was retired (three failures, all costing):** an
+- **[HISTORICAL] Why the Apify path was retired (three failures, all costing)
+  — and then the whole path went with the §1 sweep:** an
   unauthenticated, new-user context is fed subsidised SuperDeals "welcome
   deal" prices — one exported package was costed at **AUD 1.53** against the
   DS Center's **US $7.22 (AUD 11.19)** for the same item, roughly 7x off,
@@ -668,30 +755,27 @@ only in `.env` / the real environment.
   priced against a **US** ship-to context and ignored `--country AU`, so
   logistics were validated for the wrong market; and it billed **per result**
   with a cold-container start that could exceed the run timeout.
-- **AliExpress cost basis:** the DS Center's AU-market quote is the
-  authoritative landed cost. The market pin (`aep_usuc_f`) is what keeps it
-  honest — the same item is quoted differently for every market — so never
-  run the DS Center calls without it.
-- **Static FX, by design:** `price_aud` converts the record's USD with the
-  static `USD_TO_AUD` (1.55). The DS Center UI shows its own live daily rate,
-  so the operator will see a small gap (observed: AUD 3.86 ingested vs AUD
-  3.64 on screen). It is commercially negligible for margin work and is
-  deliberately not "fixed" — a live FX feed adds a failure mode for ~6%
-  on a cost basis that the relaxed floor of §3 already absorbs.
+- **[HISTORICAL] AliExpress cost basis:** the DS Center's AU-market quote was
+  the authoritative landed cost, and its market pin (`aep_usuc_f`) was what
+  kept it honest. Both went with the extractor. The transferable lesson is the
+  one `CJ_DEFAULT_DEST_COUNTRY` now carries: a landed cost is only meaningful
+  against a named destination market.
+- **Static FX, by design (still live):** `price_aud` converts the supplier's
+  USD with the static `USD_TO_AUD` (1.55). A marketplace UI shows its own live
+  daily rate, so the operator will see a small gap. It is commercially
+  negligible for margin work and is deliberately not "fixed" — a live FX feed
+  adds a failure mode for ~6% on a cost basis that the margin floor absorbs.
 - **Jev's `score` is 0-based, not 1-based (live probe 2026-09-29).** The plan
   (§8.0) recorded the score position as 1-indexed; the live probe returned
   `score = 3.24` against a 5-entry criteria list whose `legend` keys were
   `"0".."4"`. `jev_client.answer_score` therefore shifts the raw position by
   `JEV_SCORE_INDEX_SHIFT = 1.0` onto the 1–5 scale the thresholds are written
   against, so no config default had to move (§13.7).
-- **AliExpress pacing:** each search hit costs one item-record round trip
-  (~2-5 s), so `ALI_DS_MAX_PRODUCTS=20` means a keyword takes roughly 1-2
-  minutes before the PDP harvest, which adds one page load per survivor.
-  That is the pacing, not a hang. A failed search exchange raises
-  `ExtractorBlockedException` (the chain moves on) rather than reporting an
-  empty funnel, and a session/auth refusal raises
-  `DsCenterSessionExpiredError`, which halts with re-login instructions.
-- **AliExpress PDP shell pages and the harvest retry (2026-09-30).** Ali's
+- **[HISTORICAL] AliExpress pacing:** ~1–2 minutes per keyword before the PDP
+  harvest. Retired with the extractor; recorded because the same "that is the
+  pacing, not a hang" caution applies to the CJ leg (§6.3's note above).
+- **[HISTORICAL] AliExpress PDP shell pages and the harvest retry
+  (2026-09-30).** Ali's
   anti-bot can serve a PDP as an HTTP-200 shell (≈19 characters of body, no
   carousel, no `runParams`) while the DS Center's own MTOP APIs keep
   answering — the whole 320-keyword bank run harvested 1,592 gate survivors
@@ -706,40 +790,60 @@ only in `.env` / the real environment.
   galleries while others were shelled. A decay/re-probe (or a different
   IP) is the recovery path; the visible logging is the early-warning
   system.
-## 13. THE UPDATED MULTI-STEP WINNING-PRODUCT PIPELINE (branch `feature/jev-keyword-gate-multistep-pipeline`)
+## 13. THE MULTI-STEP WINNING-PRODUCT PIPELINE (The Morning Anthem)
 
 > Appended as §13 (not renumbered into §5's position) so every existing
-> §5–§12 cross-reference across the repo stays valid. This section covers
-> the gold-kernel pipeline being built **on this branch**; the supplier core
-> (§5–§9) is untouched by it and remains the general intake. The full
-> engineering plan is the (untracked) `plans/updated_multistep_pipeline_implementation_plan.md`.
+> §5–§12 cross-reference across the repo stays valid. This section covers the
+> gold-kernel pipeline; the supplier core (§5–§9) remains the general intake.
+> The engineering plan is the (untracked)
+> `plans/technical/morning_anthem_pipeline_implementation_plan.md`, whose
+> **LAUNCH OVERRIDES** section supersedes its body: the store launches
+> **Australia-only, in AUD**, so the plan's body's USD rebase and `gl=us`
+> defaults are **cancelled** — read AUD for USD and `au`/`google.com.au` for
+> `us`/`google.com` throughout it.
+>
+> **§13.8 is the current state of this pipeline. §13.2–13.7 describe the
+> superseded Sabaah-era implementation and its live evidence — read them as
+> history**, with the two changes that matter called out inline: the pillar
+> set is now the five Morning Anthem pillars (§1.1), and the supplier side is
+> CJ-only while the research side is HasData-only.
 
 ### 13.1 Overview — gold-kernel intake vs general intake
 
-The updated pipeline produces a **gold kernel**: a small set of
-proven-demand AU retail products (Google Shopping evidence) that drives
-keyword generation, supplier ingestion and Jev ranking, exported to
-`my-store-build/inspiration/optimal-dropship-candidates/{aliexpress,cjdropshipping}/`
+The pipeline produces a **gold kernel**: a small set of proven-demand AU
+retail products (Google Shopping evidence) that drives keyword generation,
+supplier ingestion and Jev ranking, exported to
+`my-store-build/inspiration/morning-anthem-candidates/cjdropshipping/`
 (Step 5, §13.6). The existing `dropship-candidates/` intake (§8) stays as
-the general flow. **Jev never was a keyword gate** — its role is
-post-ingestion product ranking (Step 6).
+the general flow.
+
+**Jev's role changed with the Morning Anthem plan: it is now used at three
+steps** — the Step-2 product-intent gate, the Step-3 pillar gate, and the
+Step-6 product ranking (§13.8). The earlier rule that "Jev is ranking-only
+and never a keyword gate" is **superseded**; the two-tier keyword gate the
+older spike proposed is still dead and must still never be built.
 
 | Step | What | Status on this branch |
 |---|---|---|
-| 1 | Google Trends (HasData MCP) research | done (research, `/tmp` scratch — no repo code by design). The Apify fallback `data_xplorer/google-trends-fast-scraper` ($2.00/1,000) was not needed — HasData stayed healthy |
-| 2 | Trends → AU search keywords, tagged `curated_home`/`self_care_rituals`/`other`, each with demand evidence | done — deliverable `outputs/json/step-2-search-keywords.json` + `outputs/md/step-2-search-keywords.md` (untracked) |
-| 3 | Google Shopping AU scrape of the Step-2 keywords (Apify actor **or** HasData REST, `--source`) + LLM curation → gold-standard product list | done — §13.2 |
-| 4 | Reasoning LLM → a pool-chunked supplier keyword bank (~300 keywords) from the gold list | done — §13.3 |
-| 5 | Dual-supplier ingestion (CJ + AliExpress) into the keyword bank → `optimal-dropship-candidates/` | done — §13.6 |
-| 6 | Jev (TypeSafe System One via OpenRouter) ranks supplier candidates against the gold products | done — §13.7 |
-| 7–8 | Human-only: DSers manual supplier search; store curation | no code (deliberately) |
+| 1 | Google Trends (**HasData MCP only**) research | done — the Apify fallback is retired; the live pilot used two HasData Trends calls |
+| 2 | Trends → candidate strings → **Jev product-intent gate** → AU product-search keywords, tagged with the five Morning Anthem pillars | **done — §13.8**, deliverable `outputs/json/morning-anthem-step-2-trend-keywords.json` (untracked) |
+| 3 | Google Shopping AU scrape (**HasData only**, no `--source`) + LLM select-by-url curation + **Jev pillar gate** → gold-standard product list | **done — §13.8**; §13.2 describes the superseded design |
+| 4 | **Exact-title-first** keyword bank: each product's own title in code, plus one optional LLM fallback | **done — §13.8**; §13.3 describes the superseded design |
+| 5 | **CJ-only** ingestion of the keyword bank → `morning-anthem-candidates/cjdropshipping/` | **done — §13.8**; §13.6 describes the superseded design |
+| 6 | Jev ranks supplier candidates against the gold products | **done — §13.8**; §13.7 describes the superseded design |
+| 7–8 | Human-only: CJ app linking; store curation | no code (deliberately) |
 
 All research deliverables live under `outputs/` — **untracked**
 (gitignored; scoping data, not repo artefacts) — while the Step-5 gold-kernel
 packages are written into the Shopify workspace tree
-(`optimal-dropship-candidates/`, §13.6), like the general intake (§8). `plans/`
-now holds only the engineering/spec documents (the updated-pipeline plan and
-its predecessors). Step 6's Jev rankings live under the same gitignored tree as
+(`morning-anthem-candidates/`, §13.6), like the general intake (§8).
+
+**`plans/` is tracked** (operator decision 2026-10-12) and holds only plans that
+describe live codebase behaviour, in two subfolders: `plans/technical/` (this
+pipeline's implementation spec and the CJ gate directive) and
+`plans/simplified/` (plain-English walkthroughs of the same two). Superseded
+plans — the whole Sabaah-era multistep set and every AliExpress plan — were
+removed. Step 6's Jev rankings live under the same gitignored tree as
 `outputs/json/step-6-ranked-candidates.json` + `outputs/md/step-6-ranked-candidates.md` (§13.7), as Step 4's keyword bank
 already does there (`outputs/json/step-4-gold-keywords.json` + `outputs/md/step-4-gold-keywords.md`).
 
@@ -757,7 +861,15 @@ only: a custom `--output` anywhere else (including a folder that merely
 shares the name `json`) keeps its digest beside it, so an off-tree
 destination is never silently relocated.
 
-### 13.2 Step 3 — gold-standard product research (implemented)
+### 13.2 Step 3 — gold-standard product research (SUPERSEDED — see §13.8)
+
+> **Historical**, and now **re-implemented** — see §13.8 for the live design.
+> Written when Apify and HasData were interchangeable sources and the pillar set
+> was the retired three. Live today: HasData is the only shopping source (no
+> `--source` flag); the market pin is `SHOPPING_GL`/`SHOPPING_DOMAIN`
+> (`au`/`google.com.au`); the curator **no longer assigns a pillar**; and a
+> **Jev pillar gate** runs last, admitting a product only if it fits one of the
+> five Morning Anthem pillars.
 
 ```bash
 source .venv/bin/activate && python scripts/run_gold_standard_research.py \
@@ -892,7 +1004,17 @@ source .venv/bin/activate && python scripts/run_gold_standard_research.py \
   model's flaky empty-content mode so a single flaky batch cannot void the
   run.
 
-### 13.3 Step 4 — gold-standard keyword bank (implemented)
+### 13.3 Step 4 — gold-standard keyword bank (SUPERSEDED — see §13.8)
+
+> **Historical, and now re-implemented** — see §13.8 for the live design. The
+> broad/modifier pairing, the 50–70 pool band, the chunked pools, the adaptive
+> per-product target and the merged bank band are all **deleted**: they existed
+> to spread a *generated* pool across products it could not otherwise name, and
+> when the primary keyword is the product's own title there is nothing left for
+> a band to enforce. What survives is the template prompt with its
+> `{PRODUCT_TABLE}` slot, the demand-ranked / type-diverse / pillar-balanced
+> selection, the AICIS boundary, the batched calls with JSON-tail salvage, and
+> the neediest-first duplicate collapse.
 
 ```bash
 source .venv/bin/activate && python scripts/generate_gold_keywords.py \
@@ -1015,7 +1137,7 @@ sizing, which keeps the widened Step-5 ingestion near ~10–11h instead of 18h+.
   the LLM-call estimate) before the first call, and exits non-zero on
   `KeywordGenerationError` having written nothing.
 
-### 13.4 Step-3 live evidence (2026-09-28)
+### 13.4 Step-3 live evidence (2026-09-28) — HISTORICAL
 
 - Actor input validation is real: `num` accepts ONLY
   10/20/30/40/50/100 — anything else fails the run before spending.
@@ -1064,7 +1186,7 @@ raw rows at `outputs/json/step-3-gold-raw-rows.json` (any future re-curation
 replays
 from that dump at zero Apify spend).
 
-### 13.5 Step-4 live evidence (2026-09-28)
+### 13.5 Step-4 live evidence (2026-09-28) — HISTORICAL
 
 Four green/failed runs, each fix below coming out of a failure:
 
@@ -1102,7 +1224,15 @@ Four green/failed runs, each fix below coming out of a failure:
   green run — confirmed gitignored (`.gitignore:31` = `outputs/`). A failed
   run writes nothing.
 
-### 13.6 Step 5 — dual-supplier gold-kernel ingestion (implemented)
+### 13.6 Step 5 — gold-kernel ingestion (SUPERSEDED — see §13.8)
+
+> **Historical: this was the dual-supplier (CJ + AliExpress) ingestion.** Step 5
+> is now **CJ-only**: `BANK_ENGINES` holds one engine, the gold-kernel root is
+> `MORNING_ANTHEM_EXPORT_DIR` (`…/morning-anthem-candidates`) with one
+> `cjdropshipping/` subfolder, the runner has no `--only` flag, and the
+> AliExpress DS Center Session intervention block is gone. The per-leg fold,
+> the shared evaluator, the exporter-counter delta arithmetic and the
+> fail-closed loader all still stand as described below.
 
 ```bash
 source .venv/bin/activate && python scripts/ingest_keyword_bank.py \
@@ -1235,7 +1365,14 @@ never created, as it is written only on its first export. The operator
 cleared the 38 PR#3-run packages before this run; the general-intake
 `dropship-candidates/` tree was untouched.
 
-### 13.7 Step 6 — Jev product ranking (implemented)
+### 13.7 Step 6 — Jev product ranking (SUPERSEDED — see §13.8)
+
+> **Historical.** The transport, batching, composite score and tiering stand.
+> Live today: `SUPPLIER_DIRS` is `("cjdropshipping",)`, `PILLAR_OPTIONS` is the
+> five Morning Anthem pillars plus `discard`, the compliance gate scans the
+> extended banned-token set (the AU big-box names plus walmart/target/amazon
+> basics/ikea), and the deliverable is
+> `outputs/json/morning-anthem-step-6-ranked-candidates.{json,md}`.
 
 ```bash
 source .venv/bin/activate && python scripts/rank_optimal_candidates.py \
@@ -1316,7 +1453,11 @@ retries one `JevError`; if the second attempt fails, only that batch's packages
 become `disregard` with `Jev batch call failed: <exc>` — the run never aborts on
 one bad call and later batches still rank.
 
-**Ranking is a report, not a deletion (plan §8.3).** No package directory is
+**Ranking is a report, not a deletion (plan §8.3) — SUPERSEDED in part:** the
+ranker still deletes nothing, but the operator's 2026-10-12 override added an
+automated **Step 7 cleanup** that acts on this report and does delete (see
+§13.8). The paragraph below describes the ranker itself, which is unchanged. No
+package directory is
 moved or removed — the ranker writes the tiered report and lets Step 7 (human)
 decide what to validate and link. Jev authors no product fact either: it returns
 only a similarity score, a winning-value score and a pillar; every field in the
@@ -1366,11 +1507,13 @@ shortlist/review — including the then-#2 `jade` gua sha board), landing
 > pipeline behaviour; it retires a broken MCP path and names the three routes
 > that actually work.
 
-Target store: **Sabaah Goods**, domain `2giusj-zm.myshopify.com` (shop
+Target store: **The Morning Anthem** (rebranded from Sabaah Goods on this
+branch), domain `2giusj-zm.myshopify.com` (shop
 `gid://shopify/Shop/83810844888`, org `233715106`, AUD,
-Australia/Melbourne). `shopify store list -j` is what settles the domain —
-the `balawalashi.myshopify.com` spelling that appears in some operator task
-text is **not** the canonical FQDN.
+Australia/Melbourne). The storefront is rebranded; the domain, shop id and
+currency are unchanged, and the launch sells to Australia only. `shopify store
+list -j` is what settles the domain — the `balawalashi.myshopify.com` spelling
+that appears in some operator task text is **not** the canonical FQDN.
 
 ### 14.1 Ignore the small-business Shopify MCP outright
 
@@ -1518,3 +1661,290 @@ repo-native. Every skill/CLI call spends real HasData credits on the same
 monthly balance as the Step-2 Trends server and the §13.2 HasData source
 (Trends 5/call, Shopping 10/call), so treat a `google-shopping` call as a
 whole smoke-test budget and prefer replaying saved payloads over re-querying.
+
+### 13.8 THE MORNING ANTHEM PIPELINE — current state (2026-10-12)
+
+Branch `feature/morning-anthem-pipeline-update`. **§1 (rebrand sweep) and
+Step 2 are implemented, tested and live-piloted. Steps 3–6 are not started.**
+
+#### What is live
+
+* **Supplier: CJdropshipping only** (§6.2, §6.3). One registry entry, one
+  engine in `SUPPLIER_PRIORITY_ORDER`, `--extractor {auto,cjdropshipping}`.
+* **Research: HasData only.** The Step-2 Trends MCP (`.mcp.json`) and the
+  Step-3 Google Shopping REST source; the `apify-trends` server is gone.
+* **Store: AU-only, AUD.** `CJ_DEFAULT_DEST_COUNTRY=AU`, `TRENDS_GEO=AU`,
+  `SHOPPING_GL=au`, `SHOPPING_DOMAIN=google.com.au`; every `*_aud` field,
+  `USD_TO_AUD` and `MIN_MARGIN_AUD` ($10.00) are retained.
+* **Pillars: the five Morning Anthem keys** (§1.1).
+* `src/research/trend_gate.py` + `scripts/gate_trend_keywords.py` — the
+  Step-2 gate (below).
+
+#### Step 2 — the Jev product-intent gate
+
+Google Trends answers "what are people searching", not "what are people
+buying", so every candidate string is classified by Jev before it may cost a
+HasData Shopping request:
+
+1. **One `choice` question per candidate**, `<i>__product_intent`, over a
+   closed four-way set: `product_search` / `informational` / `news_or_brand` /
+   `service_or_digital`. Only `product_search` survives.
+2. **Batched** at `TREND_GATE_BATCH_SIZE` (8) candidates per System One call.
+3. **Contained**: a failed call retries once, then drops *only that batch*
+   with an explicit note. A missing `OPENROUTER_API_KEY` raises
+   `JevConfigError` → the runner's intervention block.
+4. **Jev authors nothing.** The keyword, its pillar and its Trends evidence are
+   carried through verbatim; the question offers no slot for the model to write
+   a string into.
+5. **A survivor is also screened by `carries_banned_token`** — the keyword
+   engine's own boundary. This was added *because of the pilot*: Jev rightly
+   reads `milk frother kmart` as a product search (it is one), but that string
+   could never become a bank keyword, so scraping it would waste a credit.
+   Brand-*manufacturer* queries (`nespresso frother`) still pass by design —
+   they are genuine product searches, and excluding branded goods is the
+   Step-3 curator's job.
+
+The pre-gate candidates are kept as `…-raw.json` with the verdict on each row,
+so every drop is auditable.
+
+#### Step 2 — the Jev selection pass (`src/research/trend_select.py`)
+
+The gated pool is wider than the Step-3 scrape can afford (one Google Shopping
+request per keyword, 10 HasData credits each), so the narrowing is a **decision
+made by Jev**, not a hand-pick — the same call shape the Step-6 ranker uses.
+
+**Jev's two Step-2 objectives:** **(A)** filter out non-products and irrelevant
+Trends — the **gate** pass enforces it (four-way intent verdict + banned-token
+screen); **(B)** pick the best 30 of the ~60 usable candidates across all five
+pillars, **representing the researched pool so the outcome is as close to
+pillar-unbiased as the data allows** — shared between the selection pass and
+code. The split is the design: Jev judges one candidate at a time (a
+per-candidate score cannot see the pool, so balance is not a judgement it can
+make, and asking it to balance would make the outcome depend on batching), and
+**code owns representation**.
+
+* **One score question per candidate**, `<i>__keyword_quality`, over five
+  ordered levels measuring one axis: how good the string is as a
+  supplier-sourcing keyword for its pillar.
+* **The state carries the context a decision model needs**: per candidate the
+  query, its pillar, its Trends evidence **verbatim** and the *kind* of evidence
+  (5-year mean vs rising/related-query figure — not the same claim); once per
+  call the brand line, the task, the selection size and the five pillar
+  descriptions.
+* **The cut is code, and representative by construction**: each pillar gets a
+  **quota** — its proportional share of the target, given a floor of
+  `TREND_SELECT_MIN_PER_PILLAR` (2) and never more than the pool holds,
+  reconciled to `TREND_SELECT_TARGET` (30) by largest remainder; within each
+  pillar the best rows take the quota, and a shortfall fills by score across the
+  pool. A pillar supplying 40 of 60 candidates takes ~20 of 30 slots rather than
+  all 30, and no pillar that supplied candidates is dropped. Ties break on
+  evidence-then-string, so a selection is reproducible. Batched at
+  `TREND_SELECT_BATCH_SIZE` (12), inside the vendor's ~13-question envelope.
+  `--no-pillar-quota` reverts to a pure best-of, and a floor that cannot fit the
+  target **raises** rather than silently overspending the budget.
+* **Fail-closed**: a failed batch retries once, then its candidates are
+  unclassified and rank last. If **nothing** scored, **nothing is selected** and
+  the runner raises `Step 2 Selection Failed` — spending the Step-3 budget on an
+  unranked pool is the failure this pass prevents.
+* Deliverables: the selected N go to
+  `MORNING_ANTHEM_TREND_KEYWORDS_PATH` (Step 3's intake, so its credit envelope
+  is exactly that list); the full gated pool goes to `…-gated.json` as the
+  **re-run reserve** — it already cost its HasData credits, so a different
+  `--target` can be tried without paying for trends again.
+
+**Pilot evidence (2026-10-12, live, 3 Jev calls, no HasData credits)** over the
+13-candidate pool: gate kept 12; selection scored them 4.95 (`hand held milk
+frother`), 4.69 (`matcha whisk`), 4.51, 4.00, 3.67, 3.67, 3.20, 3.10, 3.08,
+2.80, 2.24, 1.56 (`breville barista express`). Two findings:
+
+1. **The brand-query problem is solved here, not by a blacklist.** The brand and
+   comparison strings were not merely outscored for the top N — they scored at
+   the *bottom of the pool* (`breville barista express` lowest of all twelve),
+   because a brand-plus-model query is a poor sourcing keyword. No brand rule is
+   needed.
+2. **The pillar floor works**: three low-scoring rows from three pillars entered
+   on the floor while four higher-scoring `brew_fuel` rows stayed in reserve.
+
+#### Live pilot evidence (2026-10-12) — read-only, 20 HasData credits
+
+Two live Trends calls (10 credits each, the observed rate) then two Jev
+batches over 13 curated candidates:
+
+| Finding | Detail |
+|---|---|
+| Gate verdicts | **13/13 classified `product_search`**; the banned-token screen then dropped `milk frother kmart` → **12 kept** |
+| Demand is dominated by one pillar | `milk frother` 5-y AU mean **61** vs `incense burner` 5, `silk eye mask` 3, `garlic press` 3 |
+| One seed had no usable AU demand | `commuter backpack` — 16/262 weekly points had data, max 5, no mean reported. **`sunrise_move` still has no demand signal** and needs its own seeds |
+| Related queries are brand-heavy | of 50 AU related queries for `milk frother`, roughly half name a manufacturer or retailer (nespresso, breville, delonghi, smeg, kmart, aldi, big w, ikea) — they pass the intent gate legitimately, which is why the banned-token screen and the curator carry the load |
+| Yield ratio | 5 input terms + 50 related queries → 13 curated candidates → 12 kept |
+| **Second AU call (same day, 10 credits): the `sunrise_move` pillar is not trend-dead, its seed was too narrow** | Head terms carry real AU demand — `beach towel` 5-y mean 25 at peak 100, `dog leash` 16 — while phrase-level product names do not (`sand free towel` 2, `commuter backpack` peak 2, `hands free dog leash` 8/262 weeks). Google Trends reports head terms, not long-tail phrasings, and AU is a small market, so a specific phrase falls under the reporting floor. **Seed Trends with head terms; the long-tail phrasings belong downstream as Step-4 supplier keywords.** |
+
+#### Step 3 — the HasData scrape, the curator and the Jev pillar gate
+
+Three stages, in this order, and the order is the design:
+
+1. **Scrape** (`src/extractors/google_shopping_hasdata.py`) — one HasData Google
+   Shopping request per selected keyword, 10 credits each, pinned to the AU
+   market (`SHOPPING_GL`/`SHOPPING_DOMAIN`). One request returns the whole grid
+   (~65 rows); `HASDATA_GS_MAX_RESULTS_PER_KEYWORD` (20) bounds curation only,
+   never spend. The runner refuses to start above `HASDATA_GS_MAX_KEYWORDS` (30)
+   or `HASDATA_PRODUCTION_CAP` (400).
+2. **Curate** (`src/evaluators/gold_curator.py`) — the reasoning LLM **selects
+   rows by verbatim `url`** and writes only `compliance_note` /
+   `unit_economics_note`. Rows with neither a rating nor a review count are
+   filtered out before the LLM, so a gold product always carries on-page demand
+   evidence. Every product fact is code-assembled from the row; an invented or
+   edited url is dropped at the code-side join.
+3. **Pillar gate** (`src/research/pillar_gate.py`) — Jev classifies each curated
+   product into exactly one of the five pillars, or `discard`s it. **The gate is
+   the pillar's single author**, which is why the curator no longer assigns one.
+
+**The gate runs last on purpose (operator decision 2026-10-12).** A decision
+model is only as good as its context, and a pillar is not an honest question
+without commercial context — "is this a Restful Reset product?" reads
+differently when the row carries a price and 4.7/5 from 1,200 reviews than when it
+carries a bare title. So the state hands it the name, description, **the price
+as both its display string and its number**, the rating, the review count, the
+demand-evidence line and the source keyword, plus the five pillar descriptions.
+The numeric `price_value` needed a new field on `ShoppingRow`, taken from the
+payload's own `extractedPrice` with a defensive parse of the display string
+falling back behind it — `None` rather than a fabricated zero.
+
+The curator's own pillar guess is deliberately **not** passed to the gate: it
+would bias the classification the gate exists to make. (A stray `pillar` in a
+curation response is ignored rather than fatal — unlike
+`ProvisionalProductEvaluation`, where an undeclared field would be a *lost fact*
+rather than an unauthorised opinion.)
+
+**Failure containment**: a failed batch retries once, then its products are
+dropped with a note; one `discard` is a normal verdict. If the gate keeps
+**nothing**, the runner halts *before writing anything* — an empty gold list
+would leave Steps 4–6 reading a file that looks like a result.
+
+**Tests**: `tests/test_pillar_gate.py` (20 tests) covers the verdict set, the
+enriched state, the batching, the join, the retry containment, verbatim
+carry-through, `attach_pillars`, and the runner's wiring and zero-survivor halt.
+
+#### Step 4 — the keyword bank, exact title first
+
+Turns the gold list into the supplier search strings Step 5 feeds to
+CJdropshipping. **The strategy is exact-title first**, and it moves as much of the
+work as possible back into code:
+
+1. **The primary keyword is the product's own title**, produced by
+   `exact_keyword()` — a deterministic transform (lowercase, apostrophes removed,
+   every other run of non-alphanumerics collapsed to one space). Copying a string
+   is not a job for a model, and a code-derived string cannot hallucinate. That
+   exact string is the highest-precision query there is for the identical product.
+2. **The model's only job is the optional fallback**: one tightly-specific variant
+   of that title for a product whose exact title finds nothing — the same object
+   named through its mechanics, material, form factor or size. At most one per
+   product, and plenty of products get none; the prompt says an empty list is a
+   valid and common answer.
+
+So the bank is roughly one row per product plus the fallbacks that earned their
+place, and every row is typed `match ∈ {exact, tight_fallback}`.
+
+**Validation splits by who could have caused the problem** (`validate_bank`
+returns `BankProblem`s carrying the row index and a `droppable` flag):
+
+* **Code invariants** — an exact keyword that does not match its product's title,
+  a product with no exact row, a row naming an unknown product or another
+  product's pillar, a duplicate that reached validation — **fail the run**,
+  because a code invariant broke and nothing is written.
+* **Model slips** — a fallback that is too long or short, punctuated or
+  capitalised, carries a banned token, or shares no concrete word with its own
+  title (the cheap code-side proxy for "specific to THIS product") — cost **their
+  own row**, and the bank is re-validated without them. The product still has its
+  exact keyword, so one bad fallback must not void a run.
+* A model row that names an unknown product, or claims `match="exact"`, is
+  ignored on arrival: the model does not get to decide either.
+
+**What this deletes:** the 50–70 per-pool band, the chunked pools, the adaptive
+per-product target, the merged bank band, the broad/modifier pairing and its
+`tightens` links. All of them existed to spread a *generated* pool across
+products it could not otherwise name; with the title as the primary keyword,
+uniqueness is free and coverage is one row per product.
+
+#### Step 5 — CJ-only ingestion, product-major
+
+Every bank **product** runs through the CJdropshipping MCP pipeline — the sole
+supplier engine — under the full gate stack: the commercial gate (§6.2), the MCP
+payload liveness gate (§5), the mandatory freight quote to
+`CJ_DEFAULT_DEST_COUNTRY` (§6.3), the LLM viability gate, the AUD margin floor
+(`MIN_MARGIN_AUD`) and the 3-image gallery gate. Survivors are written to
+`<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/`.
+
+**The unit of ingestion is the product, not the keyword** (operator decision
+2026-10-12). A product's rows run in order — its **exact title first**, then its
+**fallback only to fill whatever target slots the exact keyword left open** — so
+a fallback is never paid for when the exact title already worked. Each engine
+gets its own pass at a product's keywords, since they write to separate supplier
+folders.
+
+Because the unit changed, the config key did too: `BANK_TARGET_PER_PRODUCT`
+(formerly `..._PER_KEYWORD`) is the number of ACCEPTed packages one product may
+contribute through one engine, and the summary reports
+`products_attempted` / `products_empty` with a per-engine `keywords_skipped`
+counter for the fallbacks that were not needed.
+
+#### Step 6 — Jev ranking (the gold kernel's last automated step)
+
+Reads the packages from `<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/`
+plus the Step-3 gold list, and ranks each package with Jev on three questions:
+`<slug>__similarity` (score — is it the same object as a gold product?),
+`<slug>__winning_value` (score — its own **AUD** retail, landed cost and
+projected margin weighed against the gold reference's demand evidence) and
+`<slug>__pillar` (choice — one of the five pillars, or `discard`). Tiers:
+`rank_score = 0.6·similarity + 0.4·value` ≥ `JEV_SHORTLIST_MIN_SCORE` (3.5) →
+shortlist, ≥ `JEV_REVIEW_MIN_SCORE` (2.5) → review, else disregard.
+
+**Ranking deletes nothing** — the ranker writes a report and touches no package
+directory (the Step-7 cleanup is the only step that deletes; see below), and Jev
+authors no product fact — every field in the report is copied verbatim from the
+package's `metadata.json`. A post-evaluation compliance gate then forces any
+package whose own text carries a banned token to `disregard` regardless of score.
+Deliverable: `outputs/json/morning-anthem-step-6-ranked-candidates.json` (+ `.md`).
+
+#### The launch run (one-off, operator decision 2026-10-12)
+
+A single full run that buys the whole gold list at once, because the CJ side
+costs no credits and only the research does:
+
+| Stage | Shape | Credits |
+|---|---|---|
+| Step 2 — Trends | ≤ 10 calls (up to 5 terms each) | ≤ 100 |
+| Step 3 — Google Shopping | **30 keywords** × 10 | **300** |
+| **Total** | | **≤ 400** |
+
+`HASDATA_PRODUCTION_CAP=400` and `HASDATA_GS_MAX_KEYWORDS=30` encode this, so
+the two halves sum to the cap exactly and ~600 credits of the monthly tier stay
+in reserve for the per-step pilots and reruns. Step 2's research yields ~60
+usable strings; the operator **hand-picks 30** (pillar-balanced, demand-ranked,
+brand/retailer strings excluded) and the other ~30 stay as the re-run reserve.
+Expected yield **~55 gold products** (~2 per keyword — the ratio the pipeline's
+own runs have produced); those become the reference set Steps 4–6 chase, with
+the Step-4 bank targeting each by exact title first and Step 5 looping over CJ
+(free in credits, bounded by pacing) to find the identical item or a close
+equivalent.
+
+#### Open items
+
+1. ~~Confirm the Trends credit rate~~ — **RESOLVED 2026-10-12: 10 credits per
+   request**, confirmed on the HasData dashboard. The launch-run envelope of 400
+   stands as written.
+2. **Step 4's exact-title-first strategy is not built** — the bank still emits
+   broad/modifier pairs.
+3. ~~`sunrise_move` seeds~~ — **RESOLVED 2026-10-12** by a second live Trends
+   call (10 credits): the pillar is not trend-dead, its *head terms* carry real
+   AU demand (`beach towel` 5-y mean 25 at peak 100, `dog leash` 16) while its
+   phrase-level product names do not (`sand free towel` 2, `commuter backpack`
+   peak 2, `hands free dog leash` 8/262 weeks). **Seed Trends with head terms,
+   not phrase-level product names** — the long-tail phrasings belong downstream
+   as Step-4 supplier keywords, once demand is proven.
+4. **`TREND_SELECT_TARGET` is the Step-3 budget.** 30 keywords = 300 credits;
+   changing it changes the scrape size, not just the list.
+5. **The production Step-2 research pass** (≤ 10 Trends calls) has not been run
+   — the pilot pool is 13 candidates, so the selection has only been exercised
+   on a small pool (a `--target` wider than the pool selects everything).
+

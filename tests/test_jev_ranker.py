@@ -41,6 +41,7 @@ from src.ranking.jev_client import (
 from src.keywords.generator import BANNED_TOKENS
 from src.ranking.jev_product_ranker import (
     COMPLIANCE_BANNED_TOKENS,
+    ELECTRICAL_ESCALATION_TOKENS,
     GOLD_REFERENCE_FIELDS,
     PRODUCT_STATE_FIELDS,
     SIMILARITY_WEIGHT,
@@ -57,14 +58,14 @@ from src.ranking.jev_product_ranker import (
 GOLD_PRODUCTS = [
     {
         "name": "Stainless garlic press",
-        "pillar": "curated_home",
+        "pillar": "morning_table",
         "demand_evidence": "rating 4.7/5, 1,204 reviews (Google Shopping AU)",
         "description": "Zinc-alloy press with a silicone garlic peeler.",
         "retail_price_text": "$24.95",
     },
     {
         "name": "Bamboo bath caddy",
-        "pillar": "self_care_rituals",
+        "pillar": "restful_reset",
         "demand_evidence": "rating 4.8/5, 2,310 reviews (Google Shopping AU)",
         "description": None,
         "retail_price_text": "$39.95",
@@ -134,7 +135,7 @@ class ScriptedJevClient:
         return list(self.calls[call]["questions"])
 
 
-def _perfect_answers(questions, similarity=4, value=4, pillar="curated_home"):
+def _perfect_answers(questions, similarity=4, value=4, pillar="morning_table"):
     """Answer every question in `questions` with the given RAW score levels."""
     answers = {}
     for qid in questions:
@@ -296,7 +297,7 @@ def test_answer_readers_reject_unusable_answers():
     assert answer_noul({"noul": None}) is None
     assert answer_noul({"noul": False}) is None
 
-    assert answer_choice({"choice": "curated_home"}) == "curated_home"
+    assert answer_choice({"choice": "morning_table"}) == "morning_table"
     assert answer_noul({"noul": 0.99}) == pytest.approx(0.99)
 
 
@@ -304,9 +305,11 @@ def test_question_constants_are_the_judgement_surface():
     assert len(SIMILARITY_LEVELS) == 5
     assert len(VALUE_LEVELS) == 5
     assert set(PILLAR_OPTIONS) == {
-        "curated_home",
-        "self_care_rituals",
-        "other",
+        "brew_fuel",
+        "sunrise_move",
+        "mindful_awakening",
+        "restful_reset",
+        "morning_table",
         "discard",
     }
     assert set(QUESTIONS) == {"similarity", "winning_value", "pillar"}
@@ -331,24 +334,22 @@ def test_thresholds_are_positive_and_ordered():
 # --- intake ---------------------------------------------------------------
 
 
-def test_collect_packages_spans_both_suppliers_and_qualifies_slugs(tmp_path):
+def test_collect_packages_scans_the_supplier_folder_and_qualifies_slugs(tmp_path):
     root = _export_root(
         tmp_path,
         packages=(
             ("cjdropshipping", "product-04"),
             ("cjdropshipping", "product-25"),
-            ("aliexpress", "product-04"),
         ),
     )
     ranker = _ranker(tmp_path, ScriptedJevClient(), export_root=root)
     packages = ranker.collect_packages()
 
-    # The same physical folder name in two suppliers is two packages, and the
-    # slugs stay distinct -- question ids are `<slug>__<question>`, so a
-    # collision would silently overwrite one supplier's answers.
+    # The slug is engine-qualified: question ids are `<slug>__<question>`, and
+    # the qualification is what would keep a second supplier's identically
+    # numbered folders from colliding in one state.
     slugs = sorted(p.slug for p in packages)
     assert slugs == [
-        "aliexpress_product_04",
         "cjdropshipping_product_04",
         "cjdropshipping_product_25",
     ]
@@ -356,15 +357,26 @@ def test_collect_packages_spans_both_suppliers_and_qualifies_slugs(tmp_path):
     assert all(json.loads(Path(p.package_dir, "metadata.json").read_text()) for p in packages)
 
 
+def test_collect_packages_ignores_a_retired_supplier_folder(tmp_path):
+    # The bank/ranker scan SUPPLIER_DIRS, so a leftover folder from a retired
+    # supplier is not walked at all — its packages can never enter a ranking.
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-04"),))
+    _write_package(root, "aliexpress", "product-04")
+
+    ranker = _ranker(tmp_path, ScriptedJevClient(), export_root=root)
+    assert [p.slug for p in ranker.collect_packages()] == [
+        "cjdropshipping_product_04"
+    ]
+
+
 def test_collect_packages_skips_non_packages_and_unreadable_metadata(tmp_path, caplog):
     root = _export_root(tmp_path, packages=(("cjdropshipping", "product-04"),))
     # Decoys the scan must ignore: a non product-named dir, a stray file, and
-    # a package whose metadata.json is not valid JSON.
+    # packages whose metadata.json is missing, not valid JSON, or not an object.
     (root / "cjdropshipping" / "notes").mkdir()
     (root / "cjdropshipping" / "README.md").write_text("hi", encoding="utf-8")
-    _write_package(root, "aliexpress", "product-03", raw="{not json")
-    # Non-object JSON is equally unusable.
-    _write_package(root, "aliexpress", "product-09", raw="[1, 2, 3]")
+    _write_package(root, "cjdropshipping", "product-03", raw="{not json")
+    _write_package(root, "cjdropshipping", "product-09", raw="[1, 2, 3]")
 
     ranker = _ranker(tmp_path, ScriptedJevClient(), export_root=root)
     with caplog.at_level(logging.WARNING):
@@ -428,10 +440,13 @@ def test_rank_batches_packages_and_shares_one_state(tmp_path):
         "cjdropshipping_product_04",
         "cjdropshipping_product_05",
     ]
-    # The per-product state carries the contract fields, and nothing else.
-    assert set(first["state"]["products"]["cjdropshipping_product_04"]) == set(
-        PRODUCT_STATE_FIELDS
-    )
+    # The per-product state carries the contract fields plus the code-derived
+    # markup — structured data the model reads, rather than prose it parses.
+    entry = first["state"]["products"]["cjdropshipping_product_04"]
+    assert set(entry) == set(PRODUCT_STATE_FIELDS) | {"markup_multiplier"}
+    assert set(entry) >= {
+        "suggested_price_aud", "estimated_cogs_aud", "projected_margin_aud",
+    }
     assert set(client.question_ids(0)) == {
         "cjdropshipping_product_04__similarity",
         "cjdropshipping_product_04__winning_value",
@@ -478,7 +493,7 @@ def test_rank_scores_and_tier_boundaries(tmp_path):
             elif question == "winning_value":
                 answers[qid] = {"type": "score", "score": value}
             else:
-                answers[qid] = {"type": "choice", "choice": "curated_home"}
+                answers[qid] = {"type": "choice", "choice": "morning_table"}
         return answers
 
     client = ScriptedJevClient(answers_for)
@@ -538,27 +553,59 @@ def test_composite_weights_are_the_configured_split():
 
 def test_compliance_tokens_are_the_union_specified():
     # The AICIS boundary tokens are the keyword engine's own tuple (one
-    # source of truth); the electrical/logistics terms ride on top.
-    for token in ("electric", "usb", "rechargeable", "jade", "quartz", "salt"):
+    # source of truth); the battery terms ride on top.
+    for token in ("jade", "quartz", "salt", "cream", "oil"):
         assert token in COMPLIANCE_BANNED_TOKENS
     assert all(token in COMPLIANCE_BANNED_TOKENS for token in BANNED_TOKENS)
+    for token in ("battery", "batteries", "lithium"):
+        assert token in COMPLIANCE_BANNED_TOKENS
+
+
+def test_electrical_goods_are_no_longer_deleted():
+    """Operator directive 2026-10-16: mains and USB goods are sellable.
+
+    They need a certification check, not a deletion — so the tokens moved out
+    of the compliance list and into the escalation list.
+    """
+    for token in ("electric", "usb", "rechargeable", "cordless"):
+        assert token not in COMPLIANCE_BANNED_TOKENS
+        assert token in ELECTRICAL_ESCALATION_TOKENS
+    # A battery is a shipping hazard whatever it powers, so it stays banned.
+    assert "battery" in COMPLIANCE_BANNED_TOKENS
 
 
 def test_compliance_hit_names_the_field_and_the_token():
     jade = {**METADATA, "product_title": "Green Jade Roller Stone Face Tool"}
-    assert "matched in product_title" in _compliance_hit(jade)
-    assert "'jade'" in _compliance_hit(jade)
-    usb = {
+    hit = _compliance_hit(jade)
+    assert "matched in product_title" in hit.note
+    assert "'jade'" in hit.note
+    assert hit.decisive is True  # a supplier-fact field: this one deletes
+    oily = {
         **METADATA,
-        "marketing_ad_copy": "Charge it once with any cable — USB ready.",
+        "marketing_ad_copy": "Rub with a little oil to keep the grain fed.",
     }
-    assert "'usb'" in _compliance_hit(usb)
-    assert "matched in marketing_ad_copy" in _compliance_hit(usb)
-    rechar = {**METADATA, "features": ["Rechargeable motor", "Soft head"]}
-    assert "'rechargeable'" in _compliance_hit(rechar)
-    assert "matched in features" in _compliance_hit(rechar)
+    hit = _compliance_hit(oily)
+    assert "'oil'" in hit.note
+    assert "matched in marketing_ad_copy" in hit.note
+    assert hit.decisive is False  # our own copy: note only, tier stays
+    battery = {**METADATA, "features": ["Runs on 2 AA battery cells", "Soft head"]}
+    hit = _compliance_hit(battery)
+    assert "matched in features" in hit.note
+    assert hit.decisive is False
     # The clean reference package has no hit on any scanned field.
-    assert _compliance_hit(METADATA) == ""
+    assert _compliance_hit(METADATA) is None
+
+
+def test_a_supplier_field_match_outranks_an_advisory_one():
+    """Title is scanned first, so contraband cannot hide behind clean copy."""
+    both = {
+        **METADATA,
+        "product_title": "Electric Salt And Pepper Grinder",
+        "marketing_ad_copy": "Runs for months on one charge.",
+    }
+    hit = _compliance_hit(both)
+    assert hit.decisive is True
+    assert "matched in product_title" in hit.note
 
 
 def test_a_shortlisted_package_matching_a_token_is_demoted_to_disregard(tmp_path):
@@ -584,23 +631,49 @@ def test_a_shortlisted_package_matching_a_token_is_demoted_to_disregard(tmp_path
     assert "compliance gate: banned token 'jade' matched in product_title" in package.notes
 
 
-def test_a_review_package_with_a_usb_copy_is_demoted_too(tmp_path):
+def test_a_match_in_our_own_copy_notes_but_does_not_demote(tmp_path):
+    """The pipeline must not delete a product over wording it wrote itself.
+
+    Live case: the top-scoring package of the 2026-10-13 run, a stainless
+    cutting board at 4.34, was deleted because its generated ad copy used the
+    word "oil" while describing board conditioning. An LLM-field match is
+    advisory now — the note stays, the tier is whatever the score earned.
+    """
     root = _export_root(tmp_path, packages=(("cjdropshipping", "product-05"),))
     _write_package(root, "cjdropshipping", "product-05", metadata={
         **METADATA,
-        "marketing_ad_copy": "Recharge quickly — one USB cable included.",
+        "marketing_ad_copy": "Rub with a little oil to keep the grain fed.",
     })
     client = ScriptedJevClient(
         lambda state, questions, i: _perfect_answers(
-            questions, similarity=2, value=2, pillar="curated_home"
+            questions, similarity=2, value=2, pillar="morning_table"
         )
     )
     ranker = _ranker(tmp_path, client, export_root=root)
     (package,) = ranker.rank()
 
-    # raw 2 -> 3.0 both questions -> rank 3.0: review, then overridden.
+    # raw 2 -> 3.0 both questions -> rank 3.0: review, and it STAYS review.
+    assert package.tier == "review"
+    assert "banned token 'oil' matched in marketing_ad_copy" in package.notes
+
+
+def test_an_advisory_match_cannot_rescue_a_low_score(tmp_path):
+    """Advisory only relaxes the override — the score still has to earn a tier."""
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-06"),))
+    _write_package(root, "cjdropshipping", "product-06", metadata={
+        **METADATA,
+        "features": ["Contains a lithium cell"],
+    })
+    client = ScriptedJevClient(
+        lambda state, questions, i: _perfect_answers(
+            questions, similarity=0, value=0, pillar="morning_table"
+        )
+    )
+    ranker = _ranker(tmp_path, client, export_root=root)
+    (package,) = ranker.rank()
+
     assert package.tier == "disregard"
-    assert "banned token 'usb' matched in marketing_ad_copy" in package.notes
+    assert "banned token 'lithium' matched in features" in package.notes
 
 
 def test_clean_packages_keep_their_tier_and_a_discard_note_composes(tmp_path):
@@ -618,7 +691,7 @@ def test_clean_packages_keep_their_tier_and_a_discard_note_composes(tmp_path):
         for qid in questions:
             slug, name = qid.rsplit("__", 1)
             if name == "pillar":
-                choice = "discard" if slug.endswith("product_06") else "curated_home"
+                choice = "discard" if slug.endswith("product_06") else "morning_table"
                 out[qid] = {"type": "choice", "choice": choice}
             else:
                 out[qid] = {"type": "score", "score": 4}
@@ -645,7 +718,7 @@ def test_missing_answer_keys_land_as_disregard_with_a_note(tmp_path):
             "cjdropshipping_product_04__similarity": {"type": "score", "score": 4},
             "cjdropshipping_product_04__pillar": {
                 "type": "choice",
-                "choice": "curated_home",
+                "choice": "morning_table",
             },
         }
     )
@@ -765,21 +838,21 @@ def _ranked_samples():
             metadata=METADATA,
             similarity_score=5.0,
             value_score=4.5,
-            pillar="curated_home",
+            pillar="morning_table",
             rank_score=4.8,
             tier="shortlist",
         ),
         RankedPackage(
-            package_dir="/root/aliexpress/product-03",
-            metadata={**METADATA, "product_title": "Bath caddy", "supplier_name": "AliExpress"},
+            package_dir="/root/cjdropshipping/product-03",
+            metadata={**METADATA, "product_title": "Bath caddy", "supplier_name": "CJdropshipping"},
             similarity_score=3.0,
             value_score=2.5,
-            pillar="self_care_rituals",
+            pillar="restful_reset",
             rank_score=2.8,
             tier="review",
         ),
         RankedPackage(
-            package_dir="/root/aliexpress/product-09",
+            package_dir="/root/cjdropshipping/product-09",
             metadata={**METADATA, "product_title": "Broken"},
             similarity_score=None,
             value_score=None,
@@ -807,7 +880,7 @@ def test_payload_groups_the_tiers_and_counts_them(tmp_path):
         "disregard": 1,
     }
     assert payload["tiers"]["shortlist"] == ["/root/cjdropshipping/product-04"]
-    assert payload["tiers"]["disregard"] == ["/root/aliexpress/product-09"]
+    assert payload["tiers"]["disregard"] == ["/root/cjdropshipping/product-09"]
     assert payload["summary"]["similarity_weight"] == SIMILARITY_WEIGHT
     assert payload["summary"]["value_weight"] == VALUE_WEIGHT
     assert len(payload["packages"]) == 3
@@ -876,3 +949,168 @@ def test_write_reports_writes_both_files(tmp_path):
     assert md_path.read_text(encoding="utf-8").startswith(
         "# Step 6 — Jev ranked candidates"
     )
+
+
+# ---------------------------------------------------------------------------
+# Step 6 is the gold kernel's last automated step: its judgement text says which
+# market and which currency it is judging, and its report lands under the
+# Morning Anthem deliverable names.
+# ---------------------------------------------------------------------------
+
+
+def test_the_value_question_states_the_currency_and_the_benchmark():
+    """The pipeline prices in AUD and ranks against AU demand evidence; a model
+    judging "value" has to be told both, or it prices for the wrong market."""
+    instructions = QUESTIONS["winning_value"]["instructions"]
+    assert "AUD" in instructions
+    assert "gold_reference" in instructions
+    # Margin alone is not value — the demand benchmark is the other half.
+    assert "margin alone is not demand" in instructions
+
+
+def test_the_similarity_question_asks_about_the_object_not_the_aisle():
+    instructions = QUESTIONS["similarity"]["instructions"]
+    assert "same object" in instructions
+    assert "gold_reference" in instructions
+
+
+def test_the_ranker_writes_under_the_morning_anthem_deliverable_name():
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "rank_runner_names",
+        Path(__file__).resolve().parents[1] / "scripts" / "rank_optimal_candidates.py",
+    )
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    assert runner.DEFAULT_OUTPUT.name == "morning-anthem-step-6-ranked-candidates.json"
+    assert runner.DEFAULT_OUTPUT.parent.name == "json"
+
+
+def test_the_state_carries_the_aud_figures_as_numbers_not_prose(tmp_path):
+    """The value judgement reads structured AUD figures, not a sentence.
+
+    The instruction names the fields; the numbers themselves ride in the state,
+    so the model is never asked to parse them out of text.
+    """
+    root = _export_root(tmp_path)
+    package = root / "cjdropshipping" / "product-04" / "metadata.json"
+    package.write_text(
+        json.dumps(
+            {
+                **METADATA,
+                "suggested_price_aud": 49.95,
+                "estimated_cogs_aud": 19.98,
+                "projected_margin_aud": 29.97,
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = ScriptedJevClient(lambda state, questions, i: _perfect_answers(questions))
+    _ranker(tmp_path, client, export_root=root).rank()
+
+    entry = client.calls[0]["state"]["products"]["cjdropshipping_product_04"]
+    assert entry["suggested_price_aud"] == pytest.approx(49.95)
+    assert entry["estimated_cogs_aud"] == pytest.approx(19.98)
+    assert entry["projected_margin_aud"] == pytest.approx(29.97)
+    # The markup is derived in code — the model must not do the division.
+    assert entry["markup_multiplier"] == pytest.approx(2.5)
+
+
+def test_a_missing_or_zero_cost_yields_no_markup_rather_than_a_crash():
+    from src.ranking.jev_product_ranker import _markup_multiplier
+
+    assert _markup_multiplier({"suggested_price_aud": 10, "estimated_cogs_aud": 0}) is None
+    assert _markup_multiplier({"suggested_price_aud": 10}) is None
+    assert _markup_multiplier({"estimated_cogs_aud": 4}) is None
+    assert _markup_multiplier({"suggested_price_aud": "x", "estimated_cogs_aud": 4}) is None
+    assert _markup_multiplier(
+        {"suggested_price_aud": 12.0, "estimated_cogs_aud": 4.0}
+    ) == pytest.approx(3.0)
+
+
+def test_an_electrical_shortlist_is_escalated_not_deleted(tmp_path):
+    """The package keeps its tier and gains a certification note."""
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-08"),))
+    _write_package(root, "cjdropshipping", "product-08", metadata={
+        **METADATA,
+        "product_title": "Electric Gooseneck Kettle 1L",
+    })
+    client = ScriptedJevClient(lambda state, questions, i: _perfect_answers(questions))
+    ranker = _ranker(tmp_path, client, export_root=root)
+    (package,) = ranker.rank()
+
+    assert package.tier == "shortlist"          # kept, not deleted
+    assert "[ESCALATE]" in package.notes
+    assert "EESS/ACMA" in package.notes
+
+
+def test_a_battery_powered_product_is_still_deleted(tmp_path):
+    """Batteries are a shipping hazard, so they stay contraband."""
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-09"),))
+    _write_package(root, "cjdropshipping", "product-09", metadata={
+        **METADATA,
+        "product_title": "Rechargeable Lithium Battery Desk Lamp",
+    })
+    client = ScriptedJevClient(lambda state, questions, i: _perfect_answers(questions))
+    ranker = _ranker(tmp_path, client, export_root=root)
+    (package,) = ranker.rank()
+
+    assert package.tier == "disregard"
+    assert "compliance gate: banned token" in package.notes
+    assert "matched in product_title" in package.notes
+
+
+def test_the_decision_model_is_a_per_run_choice_defaulting_to_jev(tmp_path):
+    """Jev is the default; the cheaper decider is opt-in, never a .env edit."""
+    from src.config import ALTERNATE_DECISION_MODEL, DEFAULT_DECISION_MODEL
+
+    assert DEFAULT_DECISION_MODEL == "typesafe/jev-1.13"
+    assert ALTERNATE_DECISION_MODEL == "perplexity/pplx-decider-flash-v1.2"
+
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-10"),))
+    _write_package(root, "cjdropshipping", "product-10", metadata=dict(METADATA))
+    client = ScriptedJevClient(lambda state, questions, i: _perfect_answers(questions))
+
+    default_ranker = _ranker(tmp_path, client, export_root=root)
+    assert default_ranker.decision_model is None
+
+    chosen = _ranker(
+        tmp_path, client, export_root=root, decision_model=ALTERNATE_DECISION_MODEL
+    )
+    assert chosen.decision_model == ALTERNATE_DECISION_MODEL
+
+
+def test_a_failed_report_write_leaves_the_previous_deliverable_intact(tmp_path, monkeypatch):
+    """The Step-6 report is Step 7's input, so a crash must not truncate it.
+
+    `write_reports` routes both files through `write_text_atomic`, so a failure
+    mid-write leaves whatever the destination held before rather than a partial
+    report that Step 7 would read as real.
+    """
+    import src.ranking.jev_product_ranker as ranker_module
+
+    json_path = tmp_path / "report.json"
+    md_path = tmp_path / "report.md"
+    json_path.write_text('{"old": true}', encoding="utf-8")
+    md_path.write_text("old digest", encoding="utf-8")
+
+    def boom(path, text):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ranker_module, "write_text_atomic", boom)
+    with pytest.raises(OSError):
+        write_reports(
+            [],
+            json_path,
+            md_path,
+            gold_products_path=tmp_path / "gold.json",
+            export_root=tmp_path,
+            batch_size=4,
+            shortlist_min_score=3.5,
+            review_min_score=2.5,
+        )
+
+    assert json_path.read_text(encoding="utf-8") == '{"old": true}'
+    assert md_path.read_text(encoding="utf-8") == "old digest"

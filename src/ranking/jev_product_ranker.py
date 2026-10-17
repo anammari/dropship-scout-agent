@@ -1,15 +1,18 @@
-"""Step 6 — rank the Step-5 gold-kernel packages against the gold products.
+"""Step 6 — rank the Step-5 Morning Anthem packages against the gold products.
 
 Intake is the gold-kernel tree written by Step 5
-(`<OPTIMAL_EXPORT_DIR>/{cjdropshipping,aliexpress}/product-NN/`, each a
-`metadata.json` + `images/` package) plus the Step-3 gold-standard product list
-(`outputs/json/step-3-gold-standard-products.json`). Every package in both
-supplier folders is ranked; nothing is filtered on the way in.
+(`<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/`, each a
+`metadata.json` + `images/` package — CJdropshipping is The Morning Anthem's
+sole supplier) plus the Step-3 gold-standard product list
+(`outputs/json/morning-anthem-step-3-gold-products.json`). Every package in
+the supplier folder is ranked; nothing is filtered on the way in.
 
-**Ranking is a report, not a deletion.** The ranker never moves or deletes a
+**Ranking writes a report and deletes nothing.** The ranker itself never moves
+or deletes a
 package directory — it writes a tiered report (shortlist / review / disregard)
-to `outputs/json/step-6-ranked-candidates.json` (+ `outputs/md/…md`) and lets
-the operator (Step 7) decide what to validate and link.
+to `outputs/json/morning-anthem-step-6-ranked-candidates.json` (+
+`outputs/md/…md`) and lets the operator (Step 7) decide what to validate and
+link.
 
 Batching (plan §8.2): one System One call carries a single shared state (the
 gold reference plus the batch's products) and three questions per product —
@@ -27,8 +30,10 @@ that module's docstring for the live probe finding).
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import mimetypes
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -40,6 +45,7 @@ from src.keywords.generator import (
     KeywordGenerationError,
     load_gold_products,
 )
+from src.pipeline.atomic_write import write_text_atomic
 from src.ranking.jev_client import (
     QUESTIONS,
     JevClient,
@@ -50,8 +56,8 @@ from src.ranking.jev_client import (
 
 logger = logging.getLogger(__name__)
 
-#: The supplier subfolders Step 5 writes, scanned in this order.
-SUPPLIER_DIRS = ("cjdropshipping", "aliexpress")
+#: The supplier subfolder Step 5 writes (CJdropshipping is the sole supplier).
+SUPPLIER_DIRS = ("cjdropshipping",)
 
 #: A package directory is `product-NN` (two or more digits), same shape the
 #: exporter allocates and the duplicate scan matches.
@@ -73,7 +79,15 @@ GOLD_REFERENCE_FIELDS = (
     "demand_evidence",
 )
 
-#: Package `metadata.json` fields projected into a call's per product state.
+#: Package `metadata.json` fields projected into a call's per product state, so
+#: the model reads the AUD figures as structured data rather than parsing prose.
+#: `markup_multiplier` is NOT one of them: the export contract has no such key,
+#: and it is derived in code (below) because the model must not do the division —
+#: the repo's rule is that LLM arithmetic is never trusted.
+#: A supplier photo larger than this is skipped rather than inlined; the
+#: gallery JPEGs observed run 30-60 KB, so only a pathological entry trips it.
+JEV_MAX_IMAGE_BYTES = 4_000_000
+
 PRODUCT_STATE_FIELDS = (
     "product_title",
     "category",
@@ -87,32 +101,147 @@ PRODUCT_STATE_FIELDS = (
     "supplier_retail_url",
 )
 
-#: The post-evaluation compliance gate (operator directive 2026-09-30): the
-#: AICIS boundary tokens — one source of truth with the keyword engine — plus
-#: the electrical/logistics terms (`electric`, `usb`, `rechargeable`, so a
-#: battery-powered PDP's logistics burden is caught the same way). A package
-#: whose human text matches one lands `disregard` with an explicit note,
-#: regardless of its Jev score: contraband never reaches shortlist/review.
-COMPLIANCE_BANNED_TOKENS = tuple(BANNED_TOKENS) + (
+
+def _markup_multiplier(metadata: Dict[str, Any]) -> Optional[float]:
+    """Suggested retail ÷ landed cost, to two places, or None.
+
+    Supplied because the margin floor is an OR — 2.5x markup OR AUD 10 gross —
+    and a model judging "winning value" should see both legs without dividing. A
+    zero or missing cost yields None rather than a division error or an infinite
+    markup.
+    """
+    retail = metadata.get("suggested_price_aud")
+    cogs = metadata.get("estimated_cogs_aud")
+    for value in (retail, cogs):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+    if cogs <= 0:
+        return None
+    return round(retail / cogs, 2)
+
+
+def _first_image_data_url(package_dir: Path) -> Optional[str]:
+    """The package's first gallery image as a data URL, or None.
+
+    The images are already on disk from Step 5, so this costs no fetch and no
+    HasData credit — it only stops the decider from judging an object it has
+    never seen. A missing or unreadable gallery degrades to text-only rather
+    than failing the ranking.
+    """
+    if not settings.JEV_SEND_IMAGES or settings.JEV_IMAGES_PER_PACKAGE < 1:
+        return None
+    try:
+        images = sorted((Path(package_dir) / "images").glob("image-*"))
+    except OSError:
+        return None
+    for image in images[: settings.JEV_IMAGES_PER_PACKAGE]:
+        try:
+            raw = image.read_bytes()
+        except OSError:
+            continue
+        if not raw or len(raw) > JEV_MAX_IMAGE_BYTES:
+            continue
+        mime = mimetypes.guess_type(image.name)[0] or "image/jpeg"
+        return f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+    return None
+
+
+def _product_state(
+    metadata: Dict[str, Any], image_url: Optional[str] = None
+) -> Dict[str, Any]:
+    """The per-product state entry: the projected fields plus the derived markup.
+
+    `image_url` is the package's own supplier photo as a data URL (operator
+    directive 2026-10-16). The decider accepts images in `state`, and the photo
+    is the only field that settles what the object actually IS — a supplier
+    title reading `Hand-made Coffee Pot Set` sat on a photo of a porcelain drip
+    cone, which no text field reveals.
+    """
+    state = {field: metadata.get(field) for field in PRODUCT_STATE_FIELDS}
+    state["markup_multiplier"] = _markup_multiplier(metadata)
+    if image_url:
+        state["product_image"] = image_url
+    return state
+
+
+#: The post-evaluation compliance gate: the AICIS boundary tokens — one source
+#: of truth with the keyword engine — plus the battery terms. A package whose
+#: human text matches one lands `disregard` with an explicit note, regardless of
+#: its score: contraband never reaches shortlist/review.
+#:
+#: **Electrical goods were REMOVED from this list on 2026-10-16** (operator
+#: directive). The store sells to Australia but is not an AU-registered
+#: electrical retailer, so mains and USB goods are no longer auto-deleted —
+#: they are ESCALATED instead (`ELECTRICAL_ESCALATION_TOKENS` below), and the
+#: operator checks compliance with the Electrical Equipment Safety System and
+#: ACMA standards against CJ before linking anything.
+#:
+#: **Batteries stay banned outright**, and they are a different case from a
+#: mains appliance: a cell is a shipping hazard regardless of certification.
+BATTERY_TOKENS = (
+    "battery",
+    "batteries",
+    "li-ion",
+    "lithium",
+    "aa battery",
+    "aaa battery",
+)
+
+COMPLIANCE_BANNED_TOKENS = tuple(BANNED_TOKENS) + BATTERY_TOKENS
+
+#: Terms that flag a package for a MANUAL electrical-safety check rather than
+#: deleting it. A shortlisted match keeps its tier and gains an `[ESCALATE]`
+#: note naming the standard, so the operator sees it in the report and on the
+#: row rather than discovering it after a live listing.
+ELECTRICAL_ESCALATION_TOKENS = (
     "electric",
+    "electrical",
     "usb",
     "rechargeable",
+    "cordless",
+    "mains",
+    "adapter",
+    "led",
 )
+
+#: Fields whose text is SUPPLIER FACT — copied from the CJ listing. A banned
+#: token here describes what the product actually is, so the match is decisive.
+COMPLIANCE_SUPPLIER_FIELDS = ("product_title",)
+
+#: Fields the PIPELINE WROTE — the LLM's marketing payload and feature list.
+#: A banned token here is a word choice, not a product fact: the ad copy for a
+#: wooden board mentioned "oil" (board conditioning) and the gate deleted the
+#: highest-scoring package of the run. An advisory match must not delete.
+COMPLIANCE_LLM_FIELDS = ("marketing_ad_copy", "features")
 
 #: The human-text fields the gate scans. `metadata.json` carries no
 #: description field, so the description role is the marketing payload.
-COMPLIANCE_SCAN_FIELDS = ("product_title", "marketing_ad_copy", "features")
+COMPLIANCE_SCAN_FIELDS = COMPLIANCE_SUPPLIER_FIELDS + COMPLIANCE_LLM_FIELDS
 
 
-def _compliance_hit(metadata: Dict[str, Any]) -> str:
-    """`compliance gate: ...` for the first banned-token match, else ''.
+@dataclass(frozen=True)
+class ComplianceHit:
+    """One banned-token match, and whether it can delete the package.
 
-    Deterministic: fields are scanned in `COMPLIANCE_SCAN_FIELDS` order, a
-    field's strings left to right, tokens in tuple order — the same
-    case-insensitive substring rule every other banned-token check in the
-    repo uses, so the note names exactly where the token sits.
+    `decisive` is True only for a supplier-fact field: that match forces
+    `disregard` regardless of score. An advisory (LLM-authored) match keeps
+    its note but leaves the tier to the score, because the pipeline must not
+    delete a product over wording the pipeline itself chose.
     """
-    for field in COMPLIANCE_SCAN_FIELDS:
+
+    note: str
+    decisive: bool
+
+
+def _scan_compliance_fields(metadata: Dict[str, Any], fields: Sequence[str]) -> str:
+    """The `compliance gate: ...` note for the first match in `fields`, else ''.
+
+    Deterministic: fields in the order given, a field's strings left to right,
+    tokens in tuple order — the same case-insensitive substring rule every
+    other banned-token check in the repo uses, so the note names exactly where
+    the token sits.
+    """
+    for field in fields:
         value = metadata.get(field)
         texts = value if isinstance(value, list) else (value,)
         for text in texts:
@@ -124,6 +253,46 @@ def _compliance_hit(metadata: Dict[str, Any]) -> str:
                         f"in {field}"
                     )
     return ""
+
+
+def _electrical_hit(metadata: Dict[str, Any]) -> Optional[str]:
+    """The `[ESCALATE]` note for an electrical product, or None.
+
+    Not a compliance failure: mains and USB goods are sellable, they simply
+    need the operator to confirm the supplier's certification against the
+    Electrical Equipment Safety System and ACMA standards before a listing goes
+    live. Scanning the same three human-text fields keeps the two checks
+    consistent; supplier fields are scanned first so the note names the
+    strongest evidence.
+    """
+    for field in COMPLIANCE_SCAN_FIELDS:
+        value = metadata.get(field)
+        texts = value if isinstance(value, list) else (value,)
+        for text in texts:
+            lowered = str(text or "").lower()
+            for token in ELECTRICAL_ESCALATION_TOKENS:
+                if token in lowered:
+                    return (
+                        f"[ESCALATE] electrical ({token!r} in {field}) — confirm "
+                        "EESS/ACMA compliance with CJ before linking"
+                    )
+    return None
+
+
+def _compliance_hit(metadata: Dict[str, Any]) -> Optional[ComplianceHit]:
+    """The compliance verdict for a package, or None when its text is clean.
+
+    Supplier fields are scanned first so a decisive match always outranks an
+    advisory one — a package whose title says "electric" is contraband even
+    if its ad copy is innocent.
+    """
+    supplier_note = _scan_compliance_fields(metadata, COMPLIANCE_SUPPLIER_FIELDS)
+    if supplier_note:
+        return ComplianceHit(supplier_note, decisive=True)
+    llm_note = _scan_compliance_fields(metadata, COMPLIANCE_LLM_FIELDS)
+    if llm_note:
+        return ComplianceHit(llm_note, decisive=False)
+    return None
 
 
 class JevRankingError(JevError):
@@ -162,9 +331,8 @@ def _slug(engine: str, dir_name: str) -> str:
     """A question-id-safe, engine-qualified key for a package.
 
     Question ids are `<slug>__<question>`, so the slug must not itself contain
-    `__`; and because two suppliers number their folders independently, the
-    engine has to qualify the slug or `aliexpress/product-04` and
-    `cjdropshipping/product-04` would collide in one state.
+    `__`; and the engine qualifies the slug so packages from independently
+    numbered supplier folders can never collide in one state.
     """
     safe = re.sub(r"[^a-z0-9_]", "_", f"{engine}_{dir_name}".lower())
     return safe
@@ -181,11 +349,14 @@ class JevProductRanker:
         batch_size: Optional[int] = None,
         shortlist_min_score: Optional[float] = None,
         review_min_score: Optional[float] = None,
+        decision_model: Optional[str] = None,
     ) -> None:
         self.gold_products_path = Path(
-            gold_products_path or settings.GOLD_PRODUCTS_PATH
+            gold_products_path or settings.MORNING_ANTHEM_GOLD_PRODUCTS_PATH
         )
-        self.export_root = Path(export_root or settings.OPTIMAL_EXPORT_DIR)
+        self.export_root = Path(
+            export_root or settings.MORNING_ANTHEM_EXPORT_DIR
+        )
         self.batch_size = (
             batch_size if batch_size is not None else settings.JEV_BATCH_SIZE
         )
@@ -206,7 +377,16 @@ class JevProductRanker:
         self.gold_products = self._load_gold()
         # The client last: with an injected client this never touches `.env`,
         # so tests need no credential.
-        self.client = client if client is not None else JevClient()
+        # Which decision model answers the three questions is a PER-RUN choice
+        # (operator directive 2026-10-17): Jev unless `decision_model` names
+        # another System One model. Both speak the same protocol, so nothing
+        # else in this class changes.
+        self.decision_model = decision_model
+        self.client = (
+            client
+            if client is not None
+            else JevClient(model=decision_model or settings.JEV_MODEL)
+        )
 
     # --- intake -----------------------------------------------------------
 
@@ -217,7 +397,7 @@ class JevProductRanker:
             raise JevRankingError(str(exc)) from exc
 
     def collect_packages(self) -> List[PackageRef]:
-        """Every `product-NN` package under the two supplier folders.
+        """Every `product-NN` package under the supplier folder(s).
 
         A package whose `metadata.json` is missing or unreadable is skipped
         with a warning rather than aborting the run — the same tolerance the
@@ -293,10 +473,12 @@ class JevProductRanker:
     ) -> List[RankedPackage]:
         state = {
             "gold_reference": gold_reference,
+            # Structured data, not prose: the AUD figures and the derived markup
+            # ride here so the model reads them rather than parsing a sentence.
             "products": {
-                ref.slug: {
-                    key: ref.metadata.get(key) for key in PRODUCT_STATE_FIELDS
-                }
+                ref.slug: _product_state(
+                    ref.metadata, _first_image_data_url(ref.package_dir)
+                )
                 for ref in batch
             },
         }
@@ -344,9 +526,9 @@ class JevProductRanker:
             ]
             if pillar == "discard":
                 notes.append("Jev classified this package as discard")
-            compliance_note = _compliance_hit(ref.metadata)
-            if compliance_note:
-                notes.append(compliance_note)
+            compliance = _compliance_hit(ref.metadata)
+            if compliance:
+                notes.append(compliance.note)
             return RankedPackage(
                 package_dir=ref.package_dir,
                 metadata=ref.metadata,
@@ -370,20 +552,41 @@ class JevProductRanker:
         notes = ""
         if pillar == "discard":
             notes = "Jev classified this package as discard"
-        compliance_note = _compliance_hit(ref.metadata)
-        if compliance_note:
-            # Override, not a suggestion: a contraband package never reaches
-            # shortlist/review regardless of its Jev score, and its note
-            # says why.
+        compliance = _compliance_hit(ref.metadata)
+        if compliance:
+            # A SUPPLIER-field match is an override, not a suggestion: the
+            # product IS the contraband, so it never reaches shortlist/review
+            # regardless of its Jev score. An LLM-authored match only records
+            # the note — deleting over the pipeline's own word choice would
+            # void a good product, which is what happened to the top-scoring
+            # package of the 2026-10-13 run.
             if notes:
                 notes += "; "
-            notes += compliance_note
-            if tier != "disregard":
+            notes += compliance.note
+            if compliance.decisive and tier != "disregard":
                 logger.warning(
                     "Compliance gate demoted %s from %s to disregard: %s",
-                    ref.slug, tier, compliance_note,
+                    ref.slug, tier, compliance.note,
                 )
-            tier = "disregard"
+                tier = "disregard"
+            elif not compliance.decisive:
+                logger.info(
+                    "Compliance gate advisory on %s (tier left at %s): %s",
+                    ref.slug, tier, compliance.note,
+                )
+
+        if tier in ("shortlist", "review"):
+            escalation = _electrical_hit(ref.metadata)
+            if escalation:
+                # Kept, not deleted — but flagged so an uncertified mains or
+                # USB good cannot reach a live listing unnoticed.
+                if notes:
+                    notes += "; "
+                notes += escalation
+                logger.warning(
+                    "Electrical escalation on %s (%s): %s",
+                    ref.slug, tier, escalation,
+                )
         logger.info(
             "Ranked %s: similarity=%.2f value=%.2f rank=%.2f tier=%s pillar=%s",
             ref.slug, similarity, value, rank_score, tier, pillar,
@@ -425,6 +628,7 @@ def packages_to_payload(
     batch_size: int,
     shortlist_min_score: float,
     review_min_score: float,
+    model: str = settings.JEV_MODEL,
 ) -> Dict[str, Any]:
     """The structured JSON ranking document."""
     tiers = {tier: [] for tier in _TIER_ORDER}
@@ -441,7 +645,9 @@ def packages_to_payload(
             "review_min_score": review_min_score,
             "gold_products_path": str(gold_products_path),
             "export_root": str(export_root),
-            "model": settings.JEV_MODEL,
+            # The model that actually answered this run, so a report always
+            # states what produced it rather than what the default was.
+            "model": model,
         },
         "packages": [asdict(package) for package in packages],
         "tiers": tiers,
@@ -514,6 +720,7 @@ def write_reports(
     batch_size: int,
     shortlist_min_score: float,
     review_min_score: float,
+    model: str = settings.JEV_MODEL,
 ) -> Dict[str, Any]:
     """Write the JSON ranking and its Markdown digest; returns the payload."""
     payload = packages_to_payload(
@@ -523,11 +730,13 @@ def write_reports(
         batch_size=batch_size,
         shortlist_min_score=shortlist_min_score,
         review_min_score=review_min_score,
+        model=model,
     )
+    # Atomic, like every other deliverable writer: this report is Step 7's
+    # input, so a crash mid-write must not truncate it and destroy the previous
+    # good copy. `write_text_atomic` also creates the parent directory.
     json_path = Path(json_path)
     md_path = Path(md_path)
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    md_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    md_path.write_text(render_markdown(packages, payload), encoding="utf-8")
+    write_text_atomic(json_path, json.dumps(payload, indent=2))
+    write_text_atomic(md_path, render_markdown(packages, payload))
     return payload

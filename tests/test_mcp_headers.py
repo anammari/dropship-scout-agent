@@ -23,7 +23,7 @@ import pytest
 
 from scripts import mcp_headers
 
-_CREDENTIAL_VARS = ("HASDATA_API_KEY", "APIFY_TOKEN")
+_CREDENTIAL_VARS = ("HASDATA_API_KEY",)
 
 
 @pytest.fixture(autouse=True)
@@ -52,17 +52,15 @@ def env_file(tmp_path, monkeypatch):
 
 
 def test_parse_env_file_skips_comments_and_blanks(env_file):
-    path = env_file('# a comment\n\nHASDATA_API_KEY="abc"\n   \nAPIFY_TOKEN="def"\n')
+    path = env_file('# a comment\n\nHASDATA_API_KEY="abc"\n   \n')
     assert mcp_headers.parse_env_file(path) == {
         "HASDATA_API_KEY": "abc",
-        "APIFY_TOKEN": "def",
     }
 
 
 def test_parse_env_file_handles_export_prefix_and_quote_styles(env_file):
-    path = env_file("export APIFY_TOKEN='tok'\nHASDATA_API_KEY=\"key\"\nPLAIN=raw\n")
+    path = env_file("export HASDATA_API_KEY='key'\nPLAIN=raw\n")
     assert mcp_headers.parse_env_file(path) == {
-        "APIFY_TOKEN": "tok",
         "HASDATA_API_KEY": "key",
         "PLAIN": "raw",
     }
@@ -106,7 +104,7 @@ def test_blank_either_side_resolves_to_empty(monkeypatch):
 
 
 def test_missing_from_both_sides_is_empty():
-    assert mcp_headers.resolve_credential("APIFY_TOKEN", {}) == ""
+    assert mcp_headers.resolve_credential("HASDATA_API_KEY", {}) == ""
 
 
 # ----------------------------------------------------------------------
@@ -120,10 +118,11 @@ def test_hasdata_header_shape():
     }
 
 
-def test_apify_header_carries_bearer_prefix():
-    assert mcp_headers.headers_for("apify", {"APIFY_TOKEN": "tok"}) == {
-        "Authorization": "Bearer tok"
-    }
+def test_the_retired_apify_server_is_no_longer_served():
+    # HasData is the pipeline's exclusive data provider; the Apify trend
+    # server was retired on the Morning Anthem branch, so its key is gone.
+    with pytest.raises(KeyError):
+        mcp_headers.headers_for("apify", {"APIFY_TOKEN": "tok"})
 
 
 def test_missing_credential_raises_value_error():
@@ -172,9 +171,9 @@ def test_main_missing_credential_exits_nonzero_with_empty_stdout(env_file, capsy
 
 
 def test_main_error_message_never_contains_a_credential(env_file, capsys):
-    env_file('APIFY_TOKEN=""\n')
-    mcp_headers.main(["mcp_headers.py", "apify"])
-    assert "Bearer" not in capsys.readouterr().err
+    env_file('HASDATA_API_KEY="   "\n')
+    mcp_headers.main(["mcp_headers.py", "hasdata"])
+    assert "hd-" not in capsys.readouterr().err
 
 
 # ----------------------------------------------------------------------
@@ -193,12 +192,11 @@ def test_subprocess_contract_stdout_is_a_json_object_of_strings(tmp_path):
     target = scripts / "mcp_headers.py"
     target.write_text(Path(mcp_headers.__file__).read_text(encoding="utf-8"), encoding="utf-8")
     (tmp_path / ".env").write_text(
-        'HASDATA_API_KEY="hd-test-key"\nAPIFY_TOKEN="ap-test-token"\n', encoding="utf-8"
+        'HASDATA_API_KEY="hd-test-key"\n', encoding="utf-8"
     )
 
     for server, expected in (
         ("hasdata", {"x-api-key": "hd-test-key"}),
-        ("apify", {"Authorization": "Bearer ap-test-token"}),
     ):
         result = subprocess.run(
             [sys.executable, str(target), server],

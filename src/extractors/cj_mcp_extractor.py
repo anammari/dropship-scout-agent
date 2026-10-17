@@ -37,8 +37,8 @@ fabricated — the same skip-don't-invent rule every extractor follows.
 Chain exception mapping (plan §4.2): `CjMcpNotConfiguredError` ->
 `ExtractorNotConfiguredError("CJ_MCP_TOKEN")`; `CjMcpConnectionError` /
 `CjMcpToolError` -> `ExtractorBlockedException`, so the orchestrator's
-chain falls through to AliExpress rather than retrying a dead
-endpoint.
+chain surfaces the failure rather than retrying a dead endpoint (CJ is the
+pipeline's only supplier engine).
 
 Zero LLM involvement — every field is tool-returned data for the exact SKU
 listing.
@@ -118,8 +118,14 @@ class CjMcpExtractor(BaseSupplierExtractor):
         self._max_products = max_products or settings.CJ_MAX_PRODUCTS_PER_KEYWORD
 
     async def fetch_products(
-        self, keywords: List[str], country: str = "AU"
+        self, keywords: List[str], country: Optional[str] = None
     ) -> List[RawSupplierProduct]:
+        # The destination lane: where the freight quote is taken to and the
+        # country whose warehouse stock the liveness gate prefers. The Morning
+        # Anthem launches shipping to Australia from CJ's China warehouse, so
+        # CJ_DEFAULT_DEST_COUNTRY defaults to AU; an explicit `country` argument
+        # (the orchestrator's TARGET_COUNTRY) still wins.
+        country = country or settings.CJ_DEFAULT_DEST_COUNTRY
         client = self._client if self._client is not None else get_cj_mcp_client()
         if not client.configured:
             raise ExtractorNotConfiguredError("CJ_MCP_TOKEN")
@@ -215,8 +221,7 @@ class CjMcpExtractor(BaseSupplierExtractor):
     def _passes_winner_gate(self, item_id: str, hit: dict) -> bool:
         """The CJ quantitative "winning product" gate (plan §6.2).
 
-        Mirrors the AliExpress extractor's gate of the same name, but is
-        single-metric by necessity: CJ's MCP surface reports no
+        Single-metric by necessity: CJ's MCP surface reports no
         historical-sales figure under any name, so the dropshipper listing
         count is the only commercial proof available. A hit that does not
         report one is unproven and dropped — the same inverted tolerance

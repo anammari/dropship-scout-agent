@@ -16,17 +16,21 @@ from src.models import (
     RawSupplierProduct,
 )
 
-_ALI_URL = "https://www.aliexpress.com/item/1005006112233445.html"
-_CJ_URL = "https://developers.cjdropshipping.com/product/12345678.html"
-_IMG1 = "https://ae01.alicdn.com/kf/S123.jpg"
-_IMG2 = "https://ae01.alicdn.com/kf/S456.jpg"
-_IMG3 = "https://ae01.alicdn.com/kf/S789.jpg"
+_CJ_URL = "https://cjdropshipping.com/product/1745360894529376256.html"
+# A non-supplier marketplace PDP shape, kept for the "wrong supplier" cases:
+# The Morning Anthem sources from CJdropshipping exclusively, so any other
+# marketplace's item-page shape must be rejected for a CJ-named product.
+_FOREIGN_PDP_URL = "https://www.ebay.com.au/itm/123456"
+_FOREIGN_SEARCH_URL = "https://www.ebay.com.au/sch/i.html?q=desk+organiser"
+_IMG1 = "https://cc-west-usa.oss-accelerate.aliyuncs.com/S123.jpg"
+_IMG2 = "https://cc-west-usa.oss-accelerate.aliyuncs.com/S456.jpg"
+_IMG3 = "https://cc-west-usa.oss-accelerate.aliyuncs.com/S789.jpg"
 
 
 def _raw_product(**overrides) -> RawSupplierProduct:
     base = dict(
-        supplier_name="AliExpress",
-        supplier_retail_url=_ALI_URL,
+        supplier_name="CJdropshipping",
+        supplier_retail_url=_CJ_URL,
         product_title="Ergonomic Desk Cable Spine Organiser",
         product_description="Modular cable management spine with a steel base.",
         price_aud=12.50,
@@ -70,19 +74,15 @@ def _final(provisional=None, raw=None) -> ProductCandidateEvaluation:
 
 def test_valid_raw_product_round_trips():
     raw = _raw_product()
-    assert raw.supplier_name == "AliExpress"
+    assert raw.supplier_name == "CJdropshipping"
     assert raw.price_aud == 12.50
     assert raw.shipping_cost_aud == 4.30
     assert raw.image_urls == [_IMG1, _IMG2, _IMG3]
 
 
 def test_every_registered_supplier_is_known():
-    assert KNOWN_SUPPLIERS == {"AliExpress", "CJdropshipping"}
-    for supplier, url in [
-        ("AliExpress", _ALI_URL),
-        ("CJdropshipping", _CJ_URL),
-    ]:
-        assert _raw_product(supplier_name=supplier, supplier_retail_url=url)
+    assert KNOWN_SUPPLIERS == {"CJdropshipping"}
+    assert _raw_product(supplier_name="CJdropshipping", supplier_retail_url=_CJ_URL)
 
 
 def test_a_retired_supplier_is_no_longer_acceptable():
@@ -106,21 +106,14 @@ def test_supplier_url_must_be_absolute():
 
 
 def test_supplier_url_must_match_the_supplier_pdp_shape():
-    # An AliExpress-named product whose URL is an eBay listing shape.
+    # A CJ-named product whose URL is some other marketplace's listing shape.
     with pytest.raises(ValidationError, match="product-page shape"):
-        _raw_product(supplier_retail_url="https://www.ebay.com.au/itm/123456")
-    # A CJ-named product pointing at an AliExpress item page.
-    with pytest.raises(ValidationError, match="product-page shape"):
-        _raw_product(
-            supplier_name="CJdropshipping", supplier_retail_url=_ALI_URL
-        )
+        _raw_product(supplier_retail_url=_FOREIGN_PDP_URL)
 
 
 def test_search_gateway_urls_are_rejected():
     with pytest.raises(ValidationError, match="search"):
-        _raw_product(supplier_retail_url="https://www.aliexpress.com/w/wholesale-desk.html")
-    with pytest.raises(ValidationError, match="search"):
-        _raw_product(supplier_retail_url="https://www.aliexpress.com/wholesale?SearchText=desk")
+        _raw_product(supplier_retail_url=_FOREIGN_SEARCH_URL)
 
 
 def test_cj_canonical_and_legacy_pdp_shapes_both_validate():
@@ -261,9 +254,11 @@ def test_shipping_notice_is_derived_from_the_quote():
             shipping_transit_days="6-10",
         )
     )
+    # Calendar days, not business days: CJ states its windows in calendar days,
+    # so the old "business days" label promised a faster delivery than quoted.
     assert final.shipping_notice_au == (
-        "Standard tracked international shipping to Australia via "
-        "CJPacket Eub: 6-10 business days."
+        "Standard tracked international shipping to Australia from China "
+        "via CJPacket Eub: 6-10 days."
     )
 
 
@@ -296,20 +291,22 @@ def test_shipping_notice_omits_the_window_when_the_quote_reports_none():
         )
     )
     assert final.shipping_notice_au == (
-        "Standard tracked international shipping to Australia via "
-        "CJPacket Eub."
+        "Standard tracked international shipping to Australia from China "
+        "via CJPacket Eub."
     )
 
 
 def test_unquoted_shipping_notice_claims_no_service_or_transit():
-    # AliExpress quotes no freight, so there is nothing to assert
-    # about tracking or a delivery window — asserting one anyway is the same
-    # class of unsupported claim as the "free shipping" line this field
-    # replaced.
+    # With no freight quote there is nothing to assert about tracking or a
+    # delivery window — asserting one anyway is the same class of unsupported
+    # claim as the "free shipping" line this field replaced. CJ always quotes,
+    # so this branch is the defensive one.
     final = _final(raw=_low_cogs())
-    assert final.shipping_notice_au == "Ships to Australia from the supplier."
+    assert final.shipping_notice_au == (
+        "Standard tracked international shipping to Australia from China."
+    )
     lowered = final.shipping_notice_au.lower()
-    for unsupported in ("business days", "tracked", "free", "7-12"):
+    for unsupported in ("business days", "free", "7-12"):
         assert unsupported not in lowered
 
 
@@ -377,8 +374,8 @@ def test_final_accept_passes_on_margin_over_the_floor_even_below_3x():
 
 def test_final_accept_survives_the_relaxed_floor_below_3x():
     # COGS 4.00 with a 2.75x retail: the original 3.0x / AUD 25 floor rejected
-    # this, which is exactly the realistic AU pricing the DS Center cost basis
-    # now produces. The floor is relaxed to 2.5x / AUD 20.
+    # this, which is exactly the realistic AU pricing a real supplier landed
+    # cost produces. The floor is 2.5x / AUD 10.
     final = _final(_provisional(suggested_retail_aud=11.00), raw=_low_cogs())
     assert final.verdict == "ACCEPT"
     assert final.markup_multiplier == pytest.approx(2.75, abs=0.01)

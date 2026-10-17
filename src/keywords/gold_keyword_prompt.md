@@ -1,100 +1,98 @@
-# Step 4 — gold-standard keyword generation prompt
+# Step 4 — supplier keyword prompt (exact title first, fallback only)
 
 The prompt `src.keywords.generator` feeds to the configured reasoning LLM
 (OpenAI-compatible `LLM_BASE_URL`, model `LLM_MODEL`) together with the
-GOLD-STANDARD winning products of the Step 3 Google Shopping research, to
-produce the supplier search keywords (the "GOLD-STANDARD keyword bank") that
-Step 5 ingests through BOTH dropship supplier pipelines and that Step 6 later
-ranks against. The bank is generated in pool chunks: the table is sliced, and
-each chunk generates its own validated 50–70 pool under this same prompt —
-this file needs no chunk knowledge because each call's table is exactly the
-slice it covers. The merged bank must additionally clear the merged band in
-code (the chunks' summed target ± the bank slack). This file is a tracked
-package resource: the generator renders the `{PRODUCT_TABLE}` slot from the
-live Step 3 deliverable, batches the chunk's table (4 products per call
-against the documented output-limit truncation), parses each response's
-JSON, salvages a truncated tail, and validates each pool — then the merged
-bank — in code before returning it.
+GOLD-STANDARD products of the Step 3 research, to produce the supplier search
+keywords — the "keyword bank" — that Step 5 feeds to **CJdropshipping**, The
+Morning Anthem's sole supplier.
+
+**The primary keyword is not written here.** Each product's exact-title keyword
+is derived in code from the product's own name, so the model has no part in it.
+What this prompt asks for is the **fallback**: tightly-specific variants of
+the product's title, for use only if the exact title finds nothing in the
+supplier catalogue. How many a product earns is not the model's call — the
+table's `Fallbacks` column carries a per-product budget, ranked by how well
+evidenced the product is, so the strongest gold products get several distinct
+search strings and the thinnest get one or none.
+
+This file is a tracked package resource: the generator renders the
+`{PRODUCT_TABLE}` slot from the live Step 3 deliverable, batches the table (4
+products per call against the documented output-limit truncation), parses each
+response's JSON and salvages a truncated tail — then re-validates every row in
+code before returning the bank.
 
 ---
 
 ## System message
 
-You are a senior dropship supplier-sourcing analyst. You receive a table of
-GOLD-STANDARD winning products — physical goods with live evidence of
-recent Australian demand (Google Shopping AU research). Your job is to turn
-each product into the exact English search strings that dropshipping
-supplier catalogues will match against for the IDENTICAL product or a
-HIGHLY SIMILAR one. The destination catalogues are: CJDropshipping, the
-AliExpress Dropshipping Center, the DSers Shopify app catalogue, and the
-Zendrop Shopify app catalogue.
+You are a senior dropship supplier-sourcing analyst for The Morning Anthem — a
+premium morning lifestyle brand launching to Australian shoppers. You receive a
+table of GOLD-STANDARD products: physical goods with live evidence of recent
+Australian demand.
 
-You write supplier search keywords, not customer-facing copy and not
-product titles. A supplier catalogue indexes generic trade vocabulary:
-materials, mechanisms, form factors, pack sizes.
+Each product is already searched for by its **own title**, derived in code. Your
+job is the **fallback**: alternative search strings for the same physical
+object, to be used only if the exact title turns up nothing in the
+**CJdropshipping** catalogue. A good fallback is what that catalogue actually
+indexes — the object's mechanics, material, form factor or size — and it is
+worthless if it is broader than the product or names something else. The
+`Fallbacks` column gives each product its own budget; use it, do not exceed it.
+
+You write supplier search keywords, not customer-facing copy. Never write a
+product title: that is already used.
 
 ## User message
 
-Below are the gold-standard products. Turn them into **50–70 supplier
-search keywords** in total.
+Below are the gold-standard products. For each, write **up to as many fallback
+keywords as its `Fallbacks` column allows** — and only where honest ones exist.
+Each fallback for a product must be a genuinely different search string, not a
+reworded twin of another you wrote for the same product.
 
 {PRODUCT_TABLE}
 
 ### Requirements
 
-1. **50–70 keywords in total**, spread across every product in the table
-   (the per-product floor is enforced in code).
+1. **Respect each product's `Fallbacks` budget, and usually write fewer.** An
+   empty list is a valid and common answer. A weak fallback is worse than no
+   fallback, because it spends a supplier search on a string that will not find
+   the product. Two near-identical strings for one product are worse still:
+   they spend two searches to learn the same nothing.
 
-2. **Every keyword is unique across the whole response and across the whole
-   pool.** Two products never share a keyword string — a repeat is dropped in
-   code, and a product left with too few of its own fails the run. The strings
-   earlier batches already used are listed in the call block below the table;
-   never repeat one of them. Where two products are close in kind, keep the
-   shared head term for ONE of them and differentiate the other by mechanism,
-   form, size or pack size (`rocking garlic press`, `garlic press with
-   cleaner`, `double wall french press`, `8 cup french press`) — never by
-   brand, which is banned.
+2. **The same physical object, named more specifically or more generically only
+   in its trade vocabulary.** The fallback must describe the identical kind of
+   object through its mechanics, material, form factor or size — for example
+   `stainless steel garlic press with cleaner` for a stainless garlic press.
+   It must **share at least one concrete word with the product's title** (a
+   word of three or more letters). A fallback sharing none is a different
+   product or a wider category, and it is rejected in code.
 
-3. **Every product yields both kinds of keyword, deliberately paired:**
-   - **broad** — the generic supplier search string the catalogue indexes
-     (e.g. `stainless garlic press`).
-   - **modifier** — the same product tightened with a functional, material,
-     size, mechanism or pack-size modifier a supplier listing actually
-     carries (e.g. `stainless garlic press with peeler`). Every modifier
-     names the broad keyword it tightens via `tightens`.
-   - Roughly balance the two roles per product.
+3. **Never the product's title itself**, and never a generic category
+   (`kitchen tools`, `home accessories`): a category string finds hundreds of
+   unrelated listings and is not a fallback for anything.
 
-4. **Describe the physical product, not the marketing angle.** Prefer the
-   attributes visible in the product's table row — material, mechanism,
-   form factor, pack size, colour where it is a real variant axis.
+4. **Australian English, supplier vocabulary.** Lowercase, 2–7 words, no
+   punctuation, no brand names, no invented SKUs, no marketplace names.
 
-5. **Australian English, supplier vocabulary.** Lowercase, 2–7 words per
-   keyword, no punctuation, no brand names, no invented SKUs.
+5. **Hard AICIS boundary.** Tools, hardware and textiles only. No cosmetics,
+   liquids, creams, soaps, bath salts, gels, oils, supplements, raw minerals or
+   mineral-sourcing language (never: dead sea, diatomaceous, jade, quartz,
+   crystal, mud, salt, soap, cream, lotion, serum, gel, shampoo bar, supplement,
+   vitamin, oil, kmart, bunnings, coles, woolworths, big w, toilet, walmart,
+   target, amazon basics, ikea) — not even inside a longer keyword. No cultural
+   icon, celebrity or copyrighted term.
 
-6. **Hard AICIS boundary.** Tools, hardware and textiles only. No
-   cosmetics, liquids, creams, soaps, bath salts, gels, oils, supplements,
-   raw minerals or mineral-sourcing language (never: dead sea,
-   diatomaceous, jade, quartz, crystal, mud, salt, soap, cream, lotion,
-   serum, gel, shampoo bar, supplement, vitamin, oil, kmart, bunnings,
-   coles, woolworths, big w, toilet) — not even inside a longer keyword.
-   No cultural icon, celebrity or copyrighted term.
-
-7. **Exclude commodity-replacement intent.** Supermarket/hardware-store
+6. **Exclude commodity-replacement intent.** Supermarket or hardware-store
    replacement phrasing (`pumice stone bunnings` style) is out.
 
-8. **`product` must equal a table row's product name verbatim**; `pillar`
-   is copied from that row (`curated_home`, `self_care_rituals`, or
-   `other`).
+7. **`product` must equal a table row's product name verbatim.** Do not write a
+   `pillar` or a `match` field — the code attaches those.
 
-9. **Output strict JSON only** — no markdown fence, no commentary. Keep
-   any single response to **at most ~30 keywords** and always close the
-   JSON — a truncated response is unusable:
+8. **Output strict JSON only** — no markdown fence, no commentary. Keep any
+   single response to **at most ~30 keywords** and always close the JSON — a
+   truncated response is unusable:
 
-   {"keywords": [{"keyword": "stainless garlic press",
-      "product": "<table row name>", "pillar": "curated_home",
-      "role": "broad", "tightens": null,
-      "rationale": "Head term for the tool category"}, ...]}
+   {"keywords": [{"keyword": "stainless steel garlic press with cleaner",
+      "product": "<table row name verbatim>",
+      "rationale": "adds the cleaner mechanism"}, ...]}
 
-   `role` is `broad` or `modifier`; `tightens` names a broad keyword from
-   the same response, or is null for broad rows; `rationale` is at most
-   6 words and invents no prices or demand figures.
+   `rationale` is at most 6 words and invents no prices or demand figures.

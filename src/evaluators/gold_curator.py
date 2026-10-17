@@ -1,10 +1,14 @@
-"""Step 3 (updated multi-step pipeline): LLM curation of Google Shopping rows.
+"""Step 3 (Morning Anthem pipeline): LLM curation of Google Shopping rows.
 
 The reasoning LLM turns the scraped Google Shopping AU rows into the
 GOLD-STANDARD product list — but under the repo's anti-hallucination posture
 the LLM is only ever allowed to *select and annotate*: its output references
-rows by their exact `url` plus the three judgement fields it owns (`pillar`,
-`compliance_note`, `unit_economics_note`). Every product fact in the
+rows by their exact `url` plus the two judgement fields it owns
+(`compliance_note`, `unit_economics_note`). **The pillar is NOT the curator's
+to assign** — it is decided downstream by the Jev pillar gate
+(`src/research/pillar_gate.py`), which sees the same row enriched with its
+numeric price, rating and review count, so the pipeline has one informed pillar
+opinion rather than two competing ones. Every product fact in the
 deliverable (name, url, price, merchant, demand evidence, keyword
 attribution) is assembled by code from the verbatim scraped rows, so a
 hallucinated or mistyped url can never become a product — it is dropped by
@@ -22,17 +26,26 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
 from src.config import settings
-from src.extractors.google_shopping import ShoppingRow
+from src.extractors.shopping_row import ShoppingRow
 
 logger = logging.getLogger(__name__)
 
-PILLARS = ("curated_home", "self_care_rituals", "other")
+#: The Morning Anthem merchandising pillars. Single source of truth shared
+#: with the Step-4 keyword generator and the Step-6 Jev ranker (which imports
+#: this tuple): every gold product carries exactly one of these keys.
+PILLARS = (
+    "brew_fuel",
+    "sunrise_move",
+    "mindful_awakening",
+    "restful_reset",
+    "morning_table",
+)
 
 TEMPERATURE = 0.3
 #: The configured model (`deepseek-v4.x-flash:cloud`) is a *reasoning* model:
@@ -48,9 +61,10 @@ ROWS_PER_CALL = 10
 
 SYSTEM_MESSAGE = (
     "You are a senior e-commerce market research expert specializing in the "
-    "Australian e-commerce market. You select GOLD-STANDARD product winners "
-    "from scraped Google Shopping AU rows: on-demand, high value-proposition, "
-    "inert physical goods purchased or sought recently by Australians."
+    "Australian e-commerce market for The Morning Anthem, a premium morning "
+    "lifestyle brand. You select GOLD-STANDARD product winners from scraped "
+    "Google Shopping AU rows: on-demand, high value-proposition, inert "
+    "physical goods purchased or sought recently by Australian shoppers."
 )
 
 USER_TEMPLATE = """### Hard rules
@@ -64,14 +78,16 @@ USER_TEMPLATE = """### Hard rules
    formulated products, or mineral-sourcing claims (no Dead Sea mud and the
    like). NO consumables, even as an accessory. Inert physical tools only. No
    celebrity/cultural-icon IP and no counterfeit-friendly branded goods.
-4. Economics: prefer rows whose visible price can plausibly leave at least a
-   2.5x markup or AUD $10.00+ gross margin over a landed supplier cost with
-   standard AU packet shipping (7-12 business days). When the row gives no
-   basis, set `unit_economics_note` to null — never estimate from imagination.
-5. `pillar` is exactly one of `curated_home` (functional/aesthetic kitchen,
-   preparation, dining/tabletop objects), `self_care_rituals` (non-electric,
-   durable wellness, relaxation, bath accessories), or `other` (only when the
-   row itself evidences high AU demand).
+4. Economics: prefer rows whose visible AUD price can plausibly leave at
+   least a 2.5x markup or AUD $10.00+ gross margin over a landed supplier
+   cost with standard AU packet shipping (7-12 business days). When the row
+   gives no basis, set `unit_economics_note` to null — never estimate from
+   imagination.
+5. **Do not assign a pillar.** A later stage classifies each selected product
+   against The Morning Anthem's five pillars, with the price and rating figures
+   in front of it. Your job is only to select rows worth carrying, so keep a row
+   whose product is a real physical good even if you are unsure which pillar it
+   belongs to.
 6. `compliance_note` is one short sentence on why the item is an AICIS-exempt
    inert accessory and IP-clean — only when true; otherwise leave the product
    out entirely.
@@ -80,7 +96,7 @@ USER_TEMPLATE = """### Hard rules
 8. Output strict JSON only — no markdown fence, no commentary, and always
    close the JSON (a truncated response is unusable):
 
-   {"products": [{"url": "https://...", "pillar": "curated_home",
+   {"products": [{"url": "https://...",
    "compliance_note": "...", "unit_economics_note": "... or null"}]}
 
 ### Rows (Google Shopping AU, scraped live)
@@ -97,22 +113,56 @@ class GoldCurationConfigError(GoldCurationError):
 
 
 class GoldSelection(BaseModel):
-    """One LLM judgement over one scraped row (referenced by verbatim url)."""
+    """One LLM judgement over one scraped row (referenced by verbatim url).
+
+    Deliberately carries no `pillar`: the pillar is the Jev pillar gate's
+    decision, made downstream with the row's numeric price and rating in view.
+    """
 
     url: str
-    pillar: str
     compliance_note: str
     unit_economics_note: Optional[str] = None
 
 
-class GoldStandardProduct(BaseModel):
-    """One row of the Step-3 deliverable (facts are code-assembled)."""
+class CuratedProduct(BaseModel):
+    """One row the curator selected and code assembled — BEFORE classification.
+
+    Every field here is a scraped fact or a code-derived string; the LLM chose
+    the row and wrote only the two notes. `pillar` is deliberately absent: the
+    Jev pillar gate decides it, downstream, and `GoldStandardProduct` is where
+    that verdict lands. Keeping the two models apart means a product can never
+    be mistaken for classified while it is not.
+    """
 
     name: str
     url: str
     description: Optional[str] = None
     retail_price_text: Optional[str] = None
-    pillar: str
+    compliance_note: str
+    demand_evidence: str
+    unit_economics_note: Optional[str] = None
+    source_keyword: str = ""
+
+
+class GoldStandardProduct(BaseModel):
+    """One row of the Step-3 deliverable: a curated product WITH its pillar.
+
+    `pillar` is required, not defaulted. The only constructor is the Jev pillar
+    gate (`src/research/pillar_gate.py`), so every instance that exists has been
+    classified and the model cannot represent a half-finished product.
+    """
+
+    name: str
+    url: str
+    description: Optional[str] = None
+    retail_price_text: Optional[str] = None
+    pillar: Literal[
+        "brew_fuel",
+        "sunrise_move",
+        "mindful_awakening",
+        "restful_reset",
+        "morning_table",
+    ]
     compliance_note: str
     demand_evidence: str
     unit_economics_note: Optional[str] = None
@@ -185,7 +235,7 @@ def _demand_evidence(row: ShoppingRow) -> str:
         return f"rating {row.rating:g}/5 (review count not reported)"
     if row.rating_count:
         return f"{row.rating_count} reviews (Google Shopping AU)"
-    # The actor carries no purchased-recently KPI; say so rather than invent.
+    # The scrape carries no purchased-recently KPI; say so rather than invent.
     return "not_available_from_source"
 
 
@@ -273,33 +323,46 @@ class GoldProductCurator:
             )
         return content
 
-    def curate(self, rows: List[ShoppingRow]) -> List[GoldStandardProduct]:
-        """Select + annotate rows into gold-standard products (code-assembled).
+    def curate(self, rows: List[ShoppingRow]) -> List[CuratedProduct]:
+        """Select + annotate rows into curated products (code-assembled facts).
 
-        Rows carrying no rating/review KPI are dropped before the LLM: a gold
-        product must cite on-page demand evidence, so
-        `demand_evidence="not_available_from_source"` can never be emitted.
+        Two filters run BEFORE the LLM, both fail-closed, because a gold row that
+        cannot carry its own evidence is not worth reasoning about:
+
+        * **demand evidence** (operator decision 2026-09-28) — a row with neither
+          a rating nor a review count has no verifiable demand signal, so
+          `demand_evidence="not_available_from_source"` can never be emitted;
+        * **a readable price** (operator decision 2026-10-12) — the gold list's
+          retail price is the benchmark the whole exercise is measured against,
+          and it is what the curator's own `unit_economics_note` reasons from. A
+          row whose price cannot be read is dropped here rather than carried as a
+          blank. Note this price is *benchmark* evidence, not a cost: Step 5's
+          margin floor is computed from the supplier's own listed price plus its
+          freight quote, so a missing gold price would not corrupt the margin
+          maths — it would leave a hole in the reference set instead.
         """
         if not rows:
             raise GoldCurationError("no scraped rows to curate")
-        # Demand-evidence filter (operator decision 2026-09-28): a row with
-        # neither a rating nor a review count has no verifiable AU demand
-        # signal and is filtered out pre-LLM, saving the reasoning tokens too.
         demand_rows = [
-            row for row in rows if row.rating is not None or row.rating_count
+            row
+            for row in rows
+            if (row.rating is not None or row.rating_count)
+            and row.price_value is not None
         ]
         dropped_no_kpi = len(rows) - len(demand_rows)
         if dropped_no_kpi:
             logger.info(
-                "demand-evidence filter: dropped %d row(s) with no "
-                "rating/review KPI before the LLM", dropped_no_kpi,
+                "row filters: dropped %d row(s) lacking a rating/review KPI or "
+                "a readable price, before the LLM",
+                dropped_no_kpi,
             )
         if not demand_rows:
             raise GoldCurationError(
-                "every scraped row lacks rating/review KPIs — no gold "
-                "product could carry on-page demand evidence"
+                "every scraped row lacks a rating/review KPI or a readable "
+                "price — no gold product could carry its own demand evidence "
+                "and benchmark price"
             )
-        products: List[GoldStandardProduct] = []
+        products: List[CuratedProduct] = []
         seen: set = set()
         dropped_at_join = 0
         for start in range(0, len(demand_rows), self.rows_per_call):
@@ -328,13 +391,6 @@ class GoldProductCurator:
                     )
                     continue
                 url = selection.url.strip()
-                if selection.pillar not in PILLARS:
-                    dropped_at_join += 1
-                    logger.warning(
-                        "dropping curated product %r: unknown pillar %r",
-                        url, selection.pillar,
-                    )
-                    continue
                 row = batch_urls.get(url)
                 if row is None:
                     dropped_at_join += 1
@@ -349,12 +405,11 @@ class GoldProductCurator:
                     continue
                 seen.add(url)
                 products.append(
-                    GoldStandardProduct(
+                    CuratedProduct(
                         name=row.title,
                         url=row.url,
                         description=row.description,
                         retail_price_text=row.price_text,
-                        pillar=selection.pillar,
                         compliance_note=selection.compliance_note,
                         demand_evidence=_demand_evidence(row),
                         unit_economics_note=selection.unit_economics_note,

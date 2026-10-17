@@ -1,4 +1,4 @@
-"""Unit tests for the Step-5 keyword bank and its dual-supplier ingestion.
+"""Unit tests for the Step-5 keyword bank and its supplier ingestion.
 
 Hermetic: the bank loader is exercised on tmp files, and
 `ingest_keyword_bank` runs against fake extractors, a fake evaluator and fake
@@ -6,6 +6,12 @@ exporters. The real `run_pipeline` IS used (the module reuses it rather than
 forking it), so these tests also prove the bank path inherits the existing
 per-leg funnel counters, the image-gate accounting and the early-stop rule.
 No network, no real engines.
+
+The Morning Anthem ingests through CJdropshipping only, so the single-engine
+tests use the real `BANK_ENGINES`. The per-leg fan-out / leg-failure
+machinery is still generic (it exists so a second supplier can be added
+without a rewrite), so those tests drive it with a synthetic second engine
+patched in — coverage is preserved without resurrecting a retired supplier.
 """
 
 from __future__ import annotations
@@ -38,14 +44,15 @@ from src.pipeline.keyword_bank import (
 # ----------------------------------------------------------------------
 
 
-def _bank_row(keyword: str, product: str = "Gold Product") -> Dict[str, Any]:
+def _bank_row(
+    keyword: str, product: str = "Gold Product", match: str = "exact"
+) -> Dict[str, Any]:
     return {
         "keyword": keyword,
         "product": product,
-        "pillar": "curated_home",
-        "role": "broad",
-        "tightens": None,
-        "rationale": "Head term",
+        "pillar": "morning_table",
+        "match": match,
+        "rationale": "the gold product's own title",
     }
 
 
@@ -55,20 +62,17 @@ def _write_bank(tmp_path: Path, payload: Any, name: str = "bank.json") -> Path:
     return path
 
 
-def _product(engine: str, keyword: str, index: int) -> RawSupplierProduct:
+def _product(keyword: str, index: int) -> RawSupplierProduct:
+    """A verified CJ listing (the pipeline's only supplier)."""
     return RawSupplierProduct(
-        supplier_name="CJdropshipping" if engine == "cjdropshipping" else "AliExpress",
-        supplier_retail_url=(
-            f"https://cjdropshipping.com/product/{index}.html"
-            if engine == "cjdropshipping"
-            else f"https://www.aliexpress.com/item/{index}.html"
-        ),
-        product_title=f"{engine} {keyword} #{index}",
+        supplier_name="CJdropshipping",
+        supplier_retail_url=f"https://cjdropshipping.com/product/{index}.html",
+        product_title=f"cjdropshipping {keyword} #{index}",
         product_description="A physical tool.",
         price_aud=5.0,
-        shipping_cost_aud=9.0 if engine == "cjdropshipping" else 0.0,
+        shipping_cost_aud=9.0,
         image_urls=[
-            f"https://cdn.example.com/{engine}/{keyword}/{index}-{n}.jpg"
+            f"https://cdn.example.com/cj/{keyword}/{index}-{n}.jpg"
             for n in range(3)
         ],
     )
@@ -171,10 +175,14 @@ def _factory(
     return build
 
 
-def _products_per_engine(count: int = 2) -> Dict[str, List[RawSupplierProduct]]:
+def _products_per_engine(
+    count: int = 2, engines: Optional[List[str]] = None
+) -> Dict[str, List[RawSupplierProduct]]:
+    import src.pipeline.keyword_bank as bank_module
+
     return {
-        engine: [_product(engine, "kw", index) for index in range(count)]
-        for engine in BANK_ENGINES
+        engine: [_product("kw", index) for index in range(count)]
+        for engine in (engines if engines is not None else bank_module.BANK_ENGINES)
     }
 
 
@@ -190,8 +198,10 @@ async def _ingest(
     export_root: Optional[Path] = None,
     exporters: Optional[Dict[str, Any]] = None,
 ):
-    products = products or _products_per_engine()
-    engines = engines or list(BANK_ENGINES)
+    import src.pipeline.keyword_bank as bank_module
+
+    engines = engines or list(bank_module.BANK_ENGINES)
+    products = products or _products_per_engine(engines=engines)
     errors = errors or {}
     exporters = exporters or {engine: _FakeExporter(engine) for engine in engines}
     factories = {
@@ -200,7 +210,7 @@ async def _ingest(
     }
     return await ingest_keyword_bank(
         keywords=keywords,
-        target_per_keyword=target,
+        target_per_product=target,
         evaluator=evaluator or _FakeEvaluator(),
         exporters=exporters,
         extractor_factories=factories,
@@ -209,17 +219,78 @@ async def _ingest(
 
 
 def _keywords(count: int = 2) -> List[BankKeyword]:
+    """`count` keywords, each belonging to its OWN product.
+
+    One product per keyword keeps these tests about the per-leg machinery; the
+    product-major behaviour (exact first, fallback only to fill) is exercised by
+    `_product_keywords` below.
+    """
     return [
         BankKeyword(
             keyword=f"keyword {index}",
-            product="Gold Product",
-            pillar="curated_home",
-            role="broad",
-            tightens=None,
-            rationale="Head term",
+            product=f"Gold Product {index}",
+            pillar="morning_table",
+            match="exact",
+            rationale="the gold product's own title",
         )
         for index in range(count)
     ]
+
+
+def _product_keywords(
+    exact: Optional[str] = None, fallback: Optional[str] = None
+) -> List[BankKeyword]:
+    """One product's rows, exact before fallback, as the loader would sort them."""
+    rows: List[BankKeyword] = []
+    if exact is not None:
+        rows.append(
+            BankKeyword(
+                keyword=exact,
+                product="Gold Product",
+                pillar="morning_table",
+                match="exact",
+                rationale="the gold product's own title",
+            )
+        )
+    if fallback is not None:
+        rows.append(
+            BankKeyword(
+                keyword=fallback,
+                product="Gold Product",
+                pillar="morning_table",
+                match="tight_fallback",
+                rationale="names the mechanism",
+            )
+        )
+    return rows
+
+
+#: A synthetic second engine, used ONLY to exercise the generic per-leg
+#: fan-out / leg-failure machinery (which the single-supplier bank still
+#: carries so a future supplier needs no rewrite). HasData/CJ remain the only
+#: real engines.
+SECOND_ENGINE = "secondary"
+
+
+@pytest.fixture
+def two_engines(monkeypatch):
+    """Patch a second fake engine into the bank's registered engine set."""
+    import src.pipeline.keyword_bank as bank_module
+
+    monkeypatch.setattr(
+        bank_module, "BANK_ENGINES", ("cjdropshipping", SECOND_ENGINE)
+    )
+    # The synthetic engine needs a supplier subfolder too, or the summary's
+    # export-root map cannot name where its packages would land.
+    monkeypatch.setattr(
+        bank_module,
+        "OPTIMAL_SUPPLIER_DIRS",
+        {"cjdropshipping": "cjdropshipping", SECOND_ENGINE: SECOND_ENGINE},
+    )
+    monkeypatch.setattr(
+        settings, "SUPPLIER_PRIORITY_ORDER", ["cjdropshipping", SECOND_ENGINE]
+    )
+    return ("cjdropshipping", SECOND_ENGINE)
 
 
 # ----------------------------------------------------------------------
@@ -232,9 +303,9 @@ def test_load_keyword_bank_reads_typed_rows(tmp_path):
     bank = load_keyword_bank(path)
     assert [row.keyword for row in bank] == ["stainless garlic press"]
     assert isinstance(bank[0], BankKeyword)
-    assert bank[0].pillar == "curated_home"
-    assert bank[0].role == "broad"
-    assert bank[0].tightens is None
+    assert bank[0].pillar == "morning_table"
+    assert bank[0].match == "exact"
+    assert bank[0].rationale
 
 
 def test_load_keyword_bank_accepts_a_bare_list_payload(tmp_path):
@@ -242,19 +313,17 @@ def test_load_keyword_bank_accepts_a_bare_list_payload(tmp_path):
     assert [row.keyword for row in load_keyword_bank(path)] == ["pumice foot file"]
 
 
-def test_load_keyword_bank_keeps_a_modifier_s_tightens(tmp_path):
-    row = _bank_row("stainless garlic press with peeler")
-    row["role"] = "modifier"
-    row["tightens"] = "stainless garlic press"
+def test_load_keyword_bank_reads_a_fallback_row(tmp_path):
+    row = _bank_row("stainless steel garlic press with cleaner", match="tight_fallback")
     path = _write_bank(tmp_path, {"keywords": [row]})
-    assert (
-        load_keyword_bank(path)[0].tightens == "stainless garlic press"
-    )
+    loaded = load_keyword_bank(path)[0]
+    assert loaded.match == "tight_fallback"
+    assert loaded.rationale
 
 
 def test_load_keyword_bank_defaults_to_the_configured_path(tmp_path, monkeypatch):
     path = _write_bank(tmp_path, {"keywords": [_bank_row("garlic press")]})
-    monkeypatch.setattr(settings, "KEYWORD_BANK_PATH", str(path))
+    monkeypatch.setattr(settings, "MORNING_ANTHEM_KEYWORD_BANK_PATH", str(path))
     assert [row.keyword for row in load_keyword_bank()] == ["garlic press"]
 
 
@@ -304,6 +373,38 @@ def test_load_keyword_bank_rejects_a_non_string_keyword(tmp_path):
     assert "no usable 'keyword' string" in str(excinfo.value)
 
 
+def test_load_keyword_bank_defaults_a_missing_match_field_to_exact(tmp_path):
+    # A bank written before the exact-title strategy existed carries no
+    # `match`; the loader reads it as an exact keyword rather than dropping it.
+    row = _bank_row("stainless garlic press")
+    row.pop("match")
+    path = _write_bank(tmp_path, {"keywords": [row]})
+    assert load_keyword_bank(path)[0].match == "exact"
+
+
+def test_load_keyword_bank_orders_exact_keywords_before_their_fallbacks(tmp_path):
+    # The exact (verbatim-title) keywords ingest first, so the highest-precision
+    # query gets the first chance at the per-keyword export slots and a tight
+    # fallback only fills what the exact title could not.
+    path = _write_bank(
+        tmp_path,
+        {
+            "keywords": [
+                _bank_row("stainless steel garlic press", match="tight_fallback"),
+                _bank_row("Stainless Steel Garlic Press", match="exact"),
+                _bank_row("garlic press with cleaner", match="tight_fallback"),
+                _bank_row("Olive Wood Serving Board", match="exact"),
+            ]
+        },
+    )
+    assert [row.match for row in load_keyword_bank(path)] == [
+        "exact",
+        "exact",
+        "tight_fallback",
+        "tight_fallback",
+    ]
+
+
 def test_load_keyword_bank_rejects_a_blank_keyword(tmp_path):
     path = _write_bank(tmp_path, {"keywords": [_bank_row("   ")]})
     with pytest.raises(KeywordBankError):
@@ -322,34 +423,48 @@ def test_load_keyword_bank_rejects_a_banned_token_keyword(tmp_path):
 
 
 # ----------------------------------------------------------------------
-# ingest_keyword_bank — dual-engine fan-out
+# ingest_keyword_bank — per-engine fan-out
 # ----------------------------------------------------------------------
 
 
-async def test_ingest_runs_both_engines_for_every_keyword(tmp_path):
+async def test_ingest_runs_the_registered_engine_for_every_keyword(tmp_path):
+    keywords = _keywords(3)
+    calls: list = []
+    await _ingest(keywords, tmp_path, calls=calls)
+    assert sorted(calls) == sorted(
+        ("cjdropshipping", keyword.keyword) for keyword in keywords
+    )
+    assert list(BANK_ENGINES) == ["cjdropshipping"]
+
+
+async def test_ingest_runs_every_registered_engine_for_every_keyword(
+    tmp_path, two_engines
+):
+    # The fan-out is generic: with a second engine registered, every keyword
+    # runs through EVERY engine (the Morning Anthem registers one, but the
+    # machinery is what lets a second supplier be added without a rewrite).
     keywords = _keywords(3)
     calls: list = []
     await _ingest(keywords, tmp_path, calls=calls)
     assert sorted(calls) == sorted(
         (engine, keyword.keyword)
         for keyword in keywords
-        for engine in BANK_ENGINES
+        for engine in two_engines
     )
 
 
 async def test_ingest_shares_one_evaluator_across_engines(tmp_path):
     log: list = []
     await _ingest(_keywords(1), tmp_path, evaluator=_FakeEvaluator(log=log))
-    # The evaluator saw one product from EACH engine — the legs are separate
-    # run_pipeline calls, not one chain that stops at the first engine.
-    assert any(title.startswith("cjdropshipping") for title in log)
-    assert any(title.startswith("aliexpress") for title in log)
+    # The evaluator saw the leg's products — the leg is a run_pipeline call of
+    # its own, not a chain that stops at the first engine.
+    assert log and all(title.startswith("cjdropshipping") for title in log)
 
 
 async def test_ingest_folds_counters_across_per_leg_summaries(tmp_path):
     summary = await _ingest(_keywords(2), tmp_path, target=2)
     assert summary.keywords_total == 2
-    assert summary.keywords_attempted == 2
+    assert summary.products_attempted == 2
     for engine in BANK_ENGINES:
         counters = summary.per_engine[engine]
         # 2 keywords x 2 products per leg, all ACCEPTed and exported.
@@ -360,7 +475,7 @@ async def test_ingest_folds_counters_across_per_leg_summaries(tmp_path):
         assert counters["accepted"] == 4
         assert counters["rejected"] == 0
         assert counters["candidates_exported"] == 4
-    assert summary.total_exports == 8
+    assert summary.total_exports == 4
 
 
 async def test_ingest_counts_rejected_candidates_per_engine(tmp_path):
@@ -400,7 +515,7 @@ async def test_ingest_folds_exporter_counters_as_deltas_not_running_totals(tmp_p
         folded = summary.per_engine[engine]["skipped_duplicate"]
         assert folded == exporters[engine].skipped_duplicate
         assert folded > 0
-    assert summary.total_exports == 2
+    assert summary.total_exports == 1
 
 
 async def test_ingest_does_not_go_negative_when_a_leg_scrapes_nothing(tmp_path):
@@ -432,7 +547,7 @@ async def test_ingest_does_not_go_negative_when_a_leg_scrapes_nothing(tmp_path):
 
 
 async def test_ingest_uses_the_configured_target_when_not_passed(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "BANK_TARGET_PER_KEYWORD", 1)
+    monkeypatch.setattr(settings, "BANK_TARGET_PER_PRODUCT", 1)
     products = _products_per_engine(count=3)
     engines = list(BANK_ENGINES)
     summary = await ingest_keyword_bank(
@@ -453,63 +568,69 @@ async def test_ingest_uses_the_configured_target_when_not_passed(tmp_path, monke
 # ----------------------------------------------------------------------
 
 
-async def test_ingest_skips_only_the_failing_leg_and_counts_it(tmp_path):
+async def test_ingest_skips_only_the_failing_leg_and_counts_it(tmp_path, two_engines):
+    cj_engine, second = two_engines
     summary = await _ingest(
         _keywords(2),
         tmp_path,
-        errors={"cjdropshipping": ExtractorNotConfiguredError("CJ_MCP_TOKEN")},
+        errors={cj_engine: ExtractorNotConfiguredError("CJ_MCP_TOKEN")},
     )
-    cj = summary.per_engine["cjdropshipping"]
+    cj = summary.per_engine[cj_engine]
     assert cj["keywords_run"] == 0
     assert cj["leg_failures"] == 2
     assert cj["candidates_scraped"] == 0
     # The other engine still ran every keyword and exported.
-    ali = summary.per_engine["aliexpress"]
-    assert ali["keywords_run"] == 2
-    assert ali["leg_failures"] == 0
-    assert ali["candidates_exported"] == 4
+    other = summary.per_engine[second]
+    assert other["keywords_run"] == 2
+    assert other["leg_failures"] == 0
+    assert other["candidates_exported"] == 4
     assert summary.total_exports == 4
 
 
-async def test_ingest_skips_a_blocked_leg(tmp_path):
+async def test_ingest_skips_a_blocked_leg(tmp_path, two_engines):
+    cj_engine, second = two_engines
     summary = await _ingest(
         _keywords(1),
         tmp_path,
-        errors={"aliexpress": ExtractorBlockedException("anti-bot wall")},
+        errors={second: ExtractorBlockedException("supplier wall")},
     )
-    assert summary.per_engine["aliexpress"]["leg_failures"] == 1
-    assert summary.per_engine["cjdropshipping"]["candidates_exported"] == 2
+    assert summary.per_engine[second]["leg_failures"] == 1
+    assert summary.per_engine[cj_engine]["candidates_exported"] == 2
 
 
-async def test_ingest_raises_when_every_engine_fails_every_keyword(tmp_path):
+async def test_ingest_raises_when_every_engine_fails_every_keyword(tmp_path, two_engines):
+    cj_engine, second = two_engines
     with pytest.raises(BankIngestionFailedError) as excinfo:
         await _ingest(
             _keywords(2),
             tmp_path,
             errors={
-                "cjdropshipping": ExtractorNotConfiguredError("CJ_MCP_TOKEN"),
-                "aliexpress": ExtractorBlockedException("anti-bot wall"),
+                cj_engine: ExtractorNotConfiguredError("CJ_MCP_TOKEN"),
+                second: ExtractorBlockedException("supplier wall"),
             },
         )
     message = str(excinfo.value)
     assert "Every registered bank engine failed" in message
-    assert "cjdropshipping" in message
-    assert "aliexpress" in message
+    assert cj_engine in message
+    assert second in message
 
 
-async def test_ingest_does_not_raise_when_one_engine_handles_every_keyword(tmp_path):
+async def test_ingest_does_not_raise_when_one_engine_handles_every_keyword(
+    tmp_path, two_engines
+):
+    cj_engine, _second = two_engines
     summary = await _ingest(
         _keywords(2),
         tmp_path,
-        errors={"cjdropshipping": ExtractorNotConfiguredError("CJ_MCP_TOKEN")},
+        errors={cj_engine: ExtractorNotConfiguredError("CJ_MCP_TOKEN")},
     )
     assert summary.total_exports > 0
 
 
-async def test_ingest_counts_keywords_that_returned_no_product(tmp_path):
+async def test_ingest_counts_products_that_returned_no_product(tmp_path):
     products = {engine: [] for engine in BANK_ENGINES}
     summary = await _ingest(_keywords(3), tmp_path, products=products)
-    assert summary.keywords_empty == 3
+    assert summary.products_empty == 3
     # Both legs RAN (an empty catalogue is not a failure) — nothing to export.
     for engine in BANK_ENGINES:
         assert summary.per_engine[engine]["keywords_run"] == 3
@@ -518,12 +639,13 @@ async def test_ingest_counts_keywords_that_returned_no_product(tmp_path):
 
 
 async def test_ingest_with_one_engine_still_raises_when_it_fails_everything(tmp_path):
+    # With CJ the only engine, a total failure is the intervention case.
     with pytest.raises(BankIngestionFailedError):
         await _ingest(
             _keywords(1),
             tmp_path,
-            engines=["aliexpress"],
-            errors={"aliexpress": ExtractorBlockedException("anti-bot wall")},
+            engines=["cjdropshipping"],
+            errors={"cjdropshipping": ExtractorBlockedException("MCP wall")},
         )
 
 
@@ -532,11 +654,10 @@ async def test_ingest_with_one_engine_still_raises_when_it_fails_everything(tmp_
 # ----------------------------------------------------------------------
 
 
-async def test_export_roots_are_the_two_supplier_subfolders(tmp_path):
+async def test_export_roots_are_the_supplier_subfolders(tmp_path):
     summary = await _ingest(_keywords(1), tmp_path)
     assert summary.export_roots == {
         "cjdropshipping": str(tmp_path / "cjdropshipping"),
-        "aliexpress": str(tmp_path / "aliexpress"),
     }
 
 
@@ -544,7 +665,6 @@ def test_default_exporters_bind_one_exporter_per_supplier_subfolder(tmp_path):
     exporters = _default_exporters(tmp_path, list(BANK_ENGINES))
     assert set(exporters) == set(BANK_ENGINES)
     assert Path(exporters["cjdropshipping"].export_dir) == tmp_path / "cjdropshipping"
-    assert Path(exporters["aliexpress"].export_dir) == tmp_path / "aliexpress"
     # Nothing is created until a package is actually written.
     assert not (tmp_path / "cjdropshipping").exists()
 
@@ -553,3 +673,105 @@ async def test_exported_packages_land_under_the_supplier_subfolder(tmp_path):
     summary = await _ingest(_keywords(1), tmp_path)
     folders = {Path(result.product_dir).parent.name for result in summary.exports}
     assert folders == set(BANK_ENGINES)
+
+
+# ----------------------------------------------------------------------
+# ingest_keyword_bank — the product is the unit: exact first, fallback
+# only to fill what the exact left open
+# ----------------------------------------------------------------------
+
+
+async def test_the_fallback_runs_only_when_the_exact_keyword_underfills(tmp_path):
+    """The exact title gets first refusal; a satisfied product costs no more."""
+    # Two products per keyword, target 2: the exact keyword fills both slots, so
+    # the fallback is never searched.
+    keywords = _product_keywords("gold title", "tight fallback")
+    summary = await _ingest(keywords, tmp_path, target=2)
+
+    cj = summary.per_engine["cjdropshipping"]
+    assert cj["keywords_run"] == 1  # only the exact keyword
+    assert cj["keywords_skipped"] == 1
+    assert cj["candidates_exported"] == 2
+    assert summary.total_exports == 2
+
+
+async def test_the_fallback_fills_the_slots_the_exact_keyword_left_open(tmp_path):
+    # Target 3 with 2 products available per leg: the exact keyword returns both,
+    # leaving one slot, so the fallback runs for exactly that one.
+    keywords = _product_keywords("gold title", "tight fallback")
+    summary = await _ingest(keywords, tmp_path, target=3)
+
+    cj = summary.per_engine["cjdropshipping"]
+    assert cj["keywords_run"] == 2
+    assert cj["keywords_skipped"] == 0
+    assert cj["candidates_exported"] == 3
+
+
+async def test_the_fallback_runs_when_the_exact_keyword_returns_nothing(tmp_path):
+    # Target 2, but the product's leg returns nothing for the exact keyword: the
+    # fallback then runs with the full target, which is the case the whole
+    # two-strategy design exists for.
+    keywords = _product_keywords("gold title", "tight fallback")
+    products = {engine: _products_per_engine(1, engines=[engine])[engine]
+                for engine in BANK_ENGINES}
+    summary = await _ingest(keywords, tmp_path, target=2, products=products)
+    cj = summary.per_engine["cjdropshipping"]
+    assert cj["keywords_run"] == 2
+    assert cj["candidates_exported"] == 2
+
+
+async def test_a_skipped_fallback_is_logged_so_the_decision_is_visible(tmp_path, caplog):
+    with caplog.at_level("INFO"):
+        await _ingest(
+            _product_keywords("gold title", "tight fallback"), tmp_path, target=2
+        )
+    assert any("already filled this product's" in r.message for r in caplog.records)
+    # And the leg line names which strategy ran, so a log reader can tell the
+    # exact title from the fallback.
+    assert any("match=exact" in r.message for r in caplog.records)
+
+
+async def test_each_engine_gets_its_own_pass_at_the_products_keywords(tmp_path, two_engines):
+    """The two engines are independent: one filling its target does not stop the
+    other from searching the same product."""
+    cj_engine, second = two_engines
+    keywords = _product_keywords("gold title", "tight fallback")
+    summary = await _ingest(keywords, tmp_path, target=2)
+
+    for engine in two_engines:
+        counters = summary.per_engine[engine]
+        assert counters["keywords_run"] == 1
+        assert counters["keywords_skipped"] == 1
+        assert counters["candidates_exported"] == 2
+    assert summary.total_exports == 4
+
+
+async def test_a_product_whose_exact_leg_fails_still_tries_its_fallback(tmp_path):
+    """A blocked exact leg must not swallow the product's fallback.
+
+    With one engine and every leg blocked the bank raises — the intervention
+    case — so the proof that the fallback was still attempted is the leg count in
+    the failure message: 2 legs for 1 product means the exact keyword AND its
+    fallback were both searched.
+    """
+    keywords = _product_keywords("gold title", "tight fallback")
+    with pytest.raises(BankIngestionFailedError) as excinfo:
+        await _ingest(
+            keywords,
+            tmp_path,
+            target=1,
+            errors={"cjdropshipping": ExtractorBlockedException("MCP wall")},
+        )
+    message = str(excinfo.value)
+    assert "1 product(s)" in message
+    assert "cjdropshipping (2 leg(s))" in message
+
+
+async def test_products_are_iterated_in_bank_order(tmp_path):
+    keywords = _product_keywords("alpha exact", None) + _product_keywords("beta exact", None)
+    keywords[1] = BankKeyword(
+        keyword="beta exact", product="Second Product", pillar="brew_fuel",
+        match="exact", rationale="its own title",
+    )
+    summary = await _ingest(keywords, tmp_path, target=1)
+    assert summary.products_attempted == 2

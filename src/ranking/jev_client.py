@@ -92,25 +92,67 @@ SIMILARITY_LEVELS: List[str] = [
 
 #: Winning-value levels, ordered worst -> best. Margin/markup are the real
 #: figures carried in a package's `metadata.json`; demand evidence is what the
-#: gold reference records. The bar wants BOTH: strong AU demand evidence AND
+#: gold reference records. The bar wants BOTH: strong demand evidence AND
 #: strong gated economics, never one propping up the other.
 VALUE_LEVELS: List[str] = [
     "no sale evidence and weak economics",
     "weak evidence and marginal economics",
     "moderate demand evidence or acceptable economics",
     "good demand evidence and strong gated economics",
-    "strong AU demand evidence plus strong gated economics",
+    "strong demand evidence plus strong gated economics",
 ]
 
-#: Pillar options for the per product choice question, keyed by the pillar
-#: value used across the pipeline; `discard` is a real verdict, not an error.
+#: The Morning Anthem merchandising pillars, with their product lines, as
+#: Jev choice options. Single source of truth for the pillar keys used across
+#: the pipeline (the Step-3 curator and the Step-4 keyword generator import
+#: this set); `discard` is a real verdict, not an error — a cosmetic or
+#: consumable, a product carrying celebrity or cultural-icon IP, or an item
+#: that cannot be air-freighted to Australia.
 PILLAR_OPTIONS: Dict[str, str] = {
-    "curated_home": "home, kitchen or lifestyle goods for the modern day to day",
-    "self_care_rituals": "personal care, grooming and wellbeing ritual tools",
-    "other": "a genuine product that fits neither named pillar",
+    "brew_fuel": (
+        "The Brew & Fuel — the morning drink ritual. Manual coffee tools "
+        "(drippers, pour-over cones, French presses, moka pots, tampers, "
+        "distribution tools, grinders, gooseneck kettles), espresso "
+        "accessories, portable milk frothers and steamers, tea infusers and "
+        "tea pots, matcha bowls and whisks, minimalist tumblers and keep-cups. "
+        "Anything a person uses to MAKE or SERVE a hot morning drink."
+    ),
+    "sunrise_move": (
+        "The Sunrise Move — the active morning and the way out the door. "
+        "Aesthetic active gear, commuter backpacks and slings, waterproof "
+        "pouches and dry bags, travel and sports towels, hands-free and "
+        "running dog leashes, harnesses and walking accessories. Anything that "
+        "belongs to leaving the house in the morning."
+    ),
+    "mindful_awakening": (
+        "The Mindful Awakening — the quiet start. Backflow and cone incense "
+        "burners, incense holders and mallets, singing bowls and sound "
+        "instruments, candles and candle holders, journals and gratitude "
+        "pads, meditation cushions and accessories, shower steamers. Anything "
+        "that supports a calm, deliberate start to the day."
+    ),
+    "restful_reset": (
+        "The Restful Reset — winding down and sleeping. Silk and blackout "
+        "sleep masks, weighted and cooling eye masks, ergonomic and recovery "
+        "pillows, neck and shoulder supports, sunrise and wake-up alarm "
+        "clocks, facial ice rollers and massage tools. Anything that serves "
+        "rest, sleep or physical recovery."
+    ),
+    "morning_table": (
+        "The Morning Table — the kitchen and the shared meal. Cutting boards "
+        "and chopping boards, garlic presses and mashers, breakfast "
+        "preparation and serving aids, butter dishes, egg cups, serving "
+        "trays and platters, table linens, salt and pepper mills, kitchen "
+        "gadgets. Anything that belongs on or beside the table at breakfast."
+    ),
     "discard": (
-        "fails the store's boundaries: a cosmetic or consumable, celebrity or "
-        "cultural-icon IP, or an item that cannot be air-freighted to Australia"
+        "Use ONLY when the object itself cannot be sold by this store: a "
+        "cosmetic, cream, lotion or serum; a consumable that is eaten, drunk "
+        "or used up (food, drink, tea leaves, incense sticks, supplements); a "
+        "product carrying celebrity, brand or cultural-icon IP; or something "
+        "that plainly cannot be posted. Do NOT use `discard` merely because a "
+        "product is niche, unusual, seasonal, cheap, or hard to place — assign "
+        "it the nearest pillar instead."
     ),
 }
 
@@ -123,30 +165,43 @@ QUESTIONS: Dict[str, Dict[str, Any]] = {
         "instructions": (
             "Compare `products.{slug}` with every product in `gold_reference`. "
             "How closely does it match the kind, material, mechanism and use "
-            "of the closest gold-standard product? Judge product equivalence "
-            "only — not price, demand or marketing."
+            "of the closest gold-standard product — the same object a "
+            "shopper searching that product would expect to receive? Judge "
+            "product equivalence only — not price, demand or marketing. "
+            "Weigh the attached supplier photo as the strongest evidence of "
+            "what the object is; a supplier title may misdescribe it. Favour "
+            "RECALL: a false low score throws away a product the store could "
+            "sell, so when the object is plausibly a different form of the "
+            "same thing — a different size, a bundle, a variant — score it as "
+            "a match rather than docking it for the difference."
         ),
         "criteria": SIMILARITY_LEVELS,
     },
     "winning_value": {
         "type": "score",
         "instructions": (
-            "Judge the commercial value of `products.{slug}` from its own "
-            "suggested retail price, landed cost and projected margin, weighed "
-            "against the demand evidence recorded for comparable products in "
-            "`gold_reference`. Strong margin alone is not demand: a product "
-            "with no demand evidence for its type scores low however healthy "
-            "its margin."
+            "Judge the commercial value of `products.{slug}` from the AUD "
+            "figures it carries — `suggested_price_aud`, `estimated_cogs_aud`, "
+            "`projected_margin_aud` and the pre-computed `markup_multiplier` — "
+            "weighed against the demand evidence recorded for comparable "
+            "gold-standard products in `gold_reference`. Strong margin alone is "
+            "not demand: a product with no demand evidence for its type scores "
+            "low however healthy its margin, and a healthy margin on a price "
+            "Australian shoppers would not pay is not value."
         ),
         "criteria": VALUE_LEVELS,
     },
     "pillar": {
         "type": "choice",
         "instructions": (
-            "Classify `products.{slug}` into exactly one pillar. Choose "
-            "`discard` when it fails the store's boundaries — a cosmetic or "
-            "consumable, a product carrying celebrity or cultural-icon IP, or "
-            "an item that cannot be air-freighted to Australia."
+            "Classify `products.{slug}` into exactly one of The Morning "
+            "Anthem's five merchandising pillars, using the attached supplier "
+            "photo to confirm what the object actually is. Favour RECALL: the "
+            "store would rather place an unusual product in the nearest "
+            "pillar than lose a niche winner, so reserve `discard` for the "
+            "boundary cases the `discard` description names and nothing else. "
+            "A product that is merely niche, seasonal or hard to place is NOT "
+            "a discard — put it in the pillar it comes closest to."
         ),
         "criteria": PILLAR_OPTIONS,
     },
