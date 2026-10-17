@@ -42,7 +42,12 @@ from typing import Dict, List
 # Allow `python scripts/rank_optimal_candidates.py` (script dir is sys.path[0]).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import OUTPUTS_JSON_DIR, digest_path, settings  # noqa: E402
+from src.config import (  # noqa: E402
+    ALTERNATE_DECISION_MODEL,
+    OUTPUTS_JSON_DIR,
+    digest_path,
+    settings,
+)
 from src.main import render_intervention_block  # noqa: E402
 from src.ranking.jev_client import JevConfigError  # noqa: E402
 from src.ranking.jev_product_ranker import (  # noqa: E402
@@ -113,6 +118,16 @@ def main(argv: List[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--decision-model",
+        default=None,
+        help=(
+            "System One model that answers the Step-6 questions. Defaults to "
+            f"JEV_MODEL ({settings.JEV_MODEL}). Pass "
+            f"'{ALTERNATE_DECISION_MODEL}' for the cheaper, faster decider "
+            "(same protocol; measured text-only, it does not read images)"
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
@@ -136,6 +151,12 @@ def main(argv: List[str] | None = None) -> int:
             gold_products_path=args.gold_products,
             export_root=args.export_root,
             batch_size=args.batch_size,
+            decision_model=args.decision_model,
+        )
+        print(
+            f"  decision model: "
+            f"{args.decision_model or settings.JEV_MODEL}"
+            + ("" if args.decision_model else " (JEV_MODEL default)")
         )
         packages = ranker.collect_packages()
     except JevConfigError as exc:
@@ -200,6 +221,7 @@ def main(argv: List[str] | None = None) -> int:
         batch_size=args.batch_size,
         shortlist_min_score=ranker.shortlist_min_score,
         review_min_score=ranker.review_min_score,
+        model=ranker.decision_model or settings.JEV_MODEL,
     )
     print(f"\nwrote {args.output} and {markdown_path}")
     print("\n[STEP 6 COMPLETE] Ranked candidates are ready for Step 7 (human).")

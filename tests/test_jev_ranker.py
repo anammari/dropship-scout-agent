@@ -1060,3 +1060,23 @@ def test_a_battery_powered_product_is_still_deleted(tmp_path):
     assert package.tier == "disregard"
     assert "compliance gate: banned token" in package.notes
     assert "matched in product_title" in package.notes
+
+
+def test_the_decision_model_is_a_per_run_choice_defaulting_to_jev(tmp_path):
+    """Jev is the default; the cheaper decider is opt-in, never a .env edit."""
+    from src.config import ALTERNATE_DECISION_MODEL, DEFAULT_DECISION_MODEL
+
+    assert DEFAULT_DECISION_MODEL == "typesafe/jev-1.13"
+    assert ALTERNATE_DECISION_MODEL == "perplexity/pplx-decider-flash-v1.2"
+
+    root = _export_root(tmp_path, packages=(("cjdropshipping", "product-10"),))
+    _write_package(root, "cjdropshipping", "product-10", metadata=dict(METADATA))
+    client = ScriptedJevClient(lambda state, questions, i: _perfect_answers(questions))
+
+    default_ranker = _ranker(tmp_path, client, export_root=root)
+    assert default_ranker.decision_model is None
+
+    chosen = _ranker(
+        tmp_path, client, export_root=root, decision_model=ALTERNATE_DECISION_MODEL
+    )
+    assert chosen.decision_model == ALTERNATE_DECISION_MODEL

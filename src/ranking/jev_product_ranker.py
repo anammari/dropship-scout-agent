@@ -348,6 +348,7 @@ class JevProductRanker:
         batch_size: Optional[int] = None,
         shortlist_min_score: Optional[float] = None,
         review_min_score: Optional[float] = None,
+        decision_model: Optional[str] = None,
     ) -> None:
         self.gold_products_path = Path(
             gold_products_path or settings.MORNING_ANTHEM_GOLD_PRODUCTS_PATH
@@ -375,7 +376,16 @@ class JevProductRanker:
         self.gold_products = self._load_gold()
         # The client last: with an injected client this never touches `.env`,
         # so tests need no credential.
-        self.client = client if client is not None else JevClient()
+        # Which decision model answers the three questions is a PER-RUN choice
+        # (operator directive 2026-10-17): Jev unless `decision_model` names
+        # another System One model. Both speak the same protocol, so nothing
+        # else in this class changes.
+        self.decision_model = decision_model
+        self.client = (
+            client
+            if client is not None
+            else JevClient(model=decision_model or settings.JEV_MODEL)
+        )
 
     # --- intake -----------------------------------------------------------
 
@@ -617,6 +627,7 @@ def packages_to_payload(
     batch_size: int,
     shortlist_min_score: float,
     review_min_score: float,
+    model: str = settings.JEV_MODEL,
 ) -> Dict[str, Any]:
     """The structured JSON ranking document."""
     tiers = {tier: [] for tier in _TIER_ORDER}
@@ -633,7 +644,9 @@ def packages_to_payload(
             "review_min_score": review_min_score,
             "gold_products_path": str(gold_products_path),
             "export_root": str(export_root),
-            "model": settings.JEV_MODEL,
+            # The model that actually answered this run, so a report always
+            # states what produced it rather than what the default was.
+            "model": model,
         },
         "packages": [asdict(package) for package in packages],
         "tiers": tiers,
@@ -706,6 +719,7 @@ def write_reports(
     batch_size: int,
     shortlist_min_score: float,
     review_min_score: float,
+    model: str = settings.JEV_MODEL,
 ) -> Dict[str, Any]:
     """Write the JSON ranking and its Markdown digest; returns the payload."""
     payload = packages_to_payload(
@@ -715,6 +729,7 @@ def write_reports(
         batch_size=batch_size,
         shortlist_min_score=shortlist_min_score,
         review_min_score=review_min_score,
+        model=model,
     )
     json_path = Path(json_path)
     md_path = Path(md_path)

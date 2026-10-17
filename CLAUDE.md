@@ -534,7 +534,7 @@ with the AliExpress extractor (§1). CJ's MCP server needs only its token.
 | `MORNING_ANTHEM_EXPORT_DIR` | `…/my-store-build/inspiration/morning-anthem-candidates` | Step-5/6 gold-kernel root; the `cjdropshipping/` subfolder is numbered independently (§13.6) |
 | `OPENROUTER_API_KEY` | — | Jev (TypeSafe System One via OpenRouter), shared by the Step-2 product-intent gate, the Step-3 pillar gate and the Step-6 ranking (never logged) |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Jev client base; it appends `/systemone` |
-| `JEV_MODEL` | `typesafe/jev-1.13` | System One model id (pinned so a ranking is reproducible) |
+| `JEV_MODEL` | `typesafe/jev-1.13` | System One model id (pinned so a ranking is reproducible). **Jev is always the default**; the alternative `perplexity/pplx-decider-flash-v1.2` is chosen per run with `rank_optimal_candidates.py --decision-model …`, never by editing this key |
 | `JEV_BATCH_SIZE` | `4` | Step-6 packages per System One call (three questions each; ~13-question native batch) |
 | `JEV_SHORTLIST_MIN_SCORE` | `3.5` | Step-6 tier floor: `rank_score` ≥ this → shortlist (1–5 scale) |
 | `JEV_REVIEW_MIN_SCORE` | `2.5` | Step-6 tier floor: `rank_score` ≥ this → review, else disregard |

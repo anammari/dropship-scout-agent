@@ -34,6 +34,17 @@ DEFAULT_EXPORT_DIR = (
 # supplier subfolder per engine (CJdropshipping only), numbered independently;
 # this is the gold-kernel tree the Morning Anthem pipeline produces, distinct
 # from the general `dropship-candidates/` intake above.
+#: The Step-6 decision model. **Jev is the default, always** — the alternative
+#: is opt-in per run (`--decision-model perplexity/pplx-decider-flash-v1.2`),
+#: never a change of behaviour by editing .env. Both speak the same System One
+#: `state` + typed-questions protocol, so the transport is shared and only the
+#: model id differs.
+DEFAULT_DECISION_MODEL = "typesafe/jev-1.13"
+
+#: The cheaper, faster alternative decider. Same protocol, a fraction of Jev's
+#: price, and (measured 2026-10-17) text-only — it does not read images.
+ALTERNATE_DECISION_MODEL = "perplexity/pplx-decider-flash-v1.2"
+
 DEFAULT_MORNING_ANTHEM_EXPORT_DIR = (
     "/Users/ahmadammari/PD/my-store-build/inspiration/morning-anthem-candidates"
 )
@@ -321,9 +332,7 @@ class Settings:
         # pinned version; the `~typesafe/jev-latest` alias tracks the moving
         # latest and is deliberately not the default (a pinned model keeps a
         # ranking reproducible).
-        self.JEV_MODEL: str = (
-            os.getenv("JEV_MODEL") or "perplexity/pplx-decider-v1.1-27b"
-        )
+        self.JEV_MODEL: str = os.getenv("JEV_MODEL") or DEFAULT_DECISION_MODEL
         # Products per System One call. The native batch is one shared state +
         # many independent questions, and TypeSafe cites ~13 questions per
         # call as ~11.5x cheaper / 9.6x faster than separate calls; at three

@@ -1,82 +1,93 @@
 # The Morning Anthem — Pipeline Stats
 
-Numbers only. The design rationale lives in `CLAUDE.md` §13.8.
+Numbers only. Design rationale lives in `CLAUDE.md` §13.8.
 
-**Where we stand (2026-10-16):** the pipeline ran end to end, a catalogue review
-capped the dog-gear flood, and a second research round tried to fill the two
-brand-core pillars. **17 packages on disk** — 15 shortlist, 2 review.
+**Where we stand (2026-10-17).** Two research rounds ran end to end. Round 1
+built the launch catalogue; a review then removed a compliance false positive
+and capped the dog-gear flood; Round 2 tried and failed to fill the two
+brand-core pillars. **16 packages on disk, 20 products live in Shopify.**
 
-## Round 1 — the launch run
+## Every filtration step, in order
 
-| Step | What it does | Result |
-|---|---|---|
-| 1 | Trends research (HasData MCP, AU) | 7 calls → 63 candidates |
-| 2 | Jev product-intent gate + selection | 63 → 61 gated → 30 keywords |
-| 3 | Google Shopping scrape, curate, Jev pillar gate | 30 keywords → 600 rows → 117 gold |
-| 4 | Keyword bank, exact title first | 117 gold → 80 products → 156 keywords |
-| 5 | CJ-only ingestion | 156 keywords → 78 packages |
-| 6 | Jev product ranking | 78 ranked → 23 shortlist · 10 review · 45 disregard |
-| 7 | Cleanup + family cap | 78 → **33 kept** |
+| # | Stage | In | Out | What it cut |
+|---|---|---|---|---|
+| 1 | Trends research (HasData, AU) | 7 calls | 63 candidates | — |
+| 2 | Jev intent gate + selection | 63 candidates | 30 keywords | 2 non-product, 31 held in reserve |
+| 3 | Shopping scrape + curate + pillar gate | 30 keywords | 117 gold products | 483 of 600 rows (no rating/price) |
+| 4 | Keyword bank (exact titles + fallbacks) | 117 gold | 80 products → 156 keywords | 37 same-type products collapsed |
+| 5 | CJ ingestion | 156 keywords | 78 packages | rejects, duplicates, thin galleries |
+| 6 | Ranking | 78 packages | 23 shortlist · 10 review · 45 disregard | — |
+| 7 | Cleanup: drop `disregard` | 78 | 33 kept | **−45** |
+| 8 | Re-rank after the gate fixes | 33 packages | 23 shortlist · 9 review · 1 disregard | — |
+| 9 | Cleanup: dog-gear family cap of 5 | 33 | 16 kept | **−17** (16 dog gear + 1 disregard) |
+| 10 | Round 2 promoted one keeper | +1 | 17 | — |
+| 11 | Cross-tree duplicate removed | 17 | **16** | **−1** (`product-35`, same CJ pid as `optimal-dropship-candidates/product-95`) |
 
-## Round 2 — the minor-pillar re-source (2026-10-16)
+## Step 5 — the two ingestion funnels
 
-Seeded only the pillars Round 1 left empty. No seed, string or paraphrase from
-Round 1 was reused. Saturated pillars were deliberately not touched.
+| Round | Bank | Products | Exports | scraped | accepted | rejected |
+|---|---|---|---|---|---|---|
+| 1 | 156 keywords | 80 | 78 packages on disk | 1,035 | 402 | 605 |
+| 2 (rebuild) | 251 keywords | 38 | 26 packages | 1,090 | 162 | 885 |
 
-| Step | Result |
+Round 2's bank was the wider one: exact titles, up to 5 model fallbacks ranked
+by evidence, code-derived sub-terms, and each pillar's head term. It produced
+**fewer** packages than Round 1 — the extra rungs mostly reached category terms
+CJ indexes with unrelated goods.
+
+## Round 2 — why the minor pillars are still empty
+
+Round 2 seeded only `brew_fuel`, `morning_table` and `mindful_awakening` with
+fresh terms, then ranked against a gold set built from those same pillars.
+
+| Tier | Count |
 |---|---|
-| 1–2 | 3 Trends calls → 15 keywords (all fresh) |
-| 3 | 15 keywords → 300 rows → **56 gold** (brew_fuel 42, mindful_awakening 10, morning_table 4) |
-| 4 | 38 products → **143 keywords** (38 exact + 105 fallback) |
-| 5 | 143 keywords → **21 packages** (accepted 124, rejected 574) |
-| 6 | 21 ranked → **0 shortlist · 1 review · 20 disregard** |
-| 7 | 1 kept, merged into the main tree as `product-48` |
+| shortlist | **0** |
+| review | **0** |
+| disregard | **26** |
 
-**The result was poor and it is worth stating plainly: 180 credits bought one
-review-grade package** — a hand-made ceramic coffee pot at 3.10. The next best
-scored 2.22 (a stainless steel *vehicle heating cup*), then everything below 2.0.
+Best six, for scale — the review floor is 2.5:
 
-### What it proved
+```
+2.28  sim 2.14  Kitchen Natural Wooden Bowl
+2.25  sim 1.95  304 stainless steel mug coffee cup
+2.23  sim 2.09  Stainless Steel Vehicle Heating Cup (electric)
+2.10  sim 1.72  Copper Lid Ceramic Incense Burner
+2.10  sim 1.78  Portable Car Cup Stainless Steel
+2.04  sim 1.85  3 Sizes Sliding Pizza Peel
+```
 
-The bottleneck is the **CJ catalogue match**, not the keywords.
+**The conclusion, now tested twice:** the bottleneck is the CJ catalogue match,
+not the keywords. `brew_fuel`'s gold set came back clean this time — drippers,
+kettles, presses — and CJ still answered with mugs and car cups. No keyword
+strategy fixes what the supplier does not stock.
 
-`brew_fuel` was re-seeded with manual-brew terms (`pour over coffee`,
-`gooseneck kettle`, `v60 pour over`, `french press`) and the gold set came back
-clean — 42 products, drippers, kettles, presses, no appliances. CJ then returned
-ceramic cups, plain mugs, a vehicle heating cup and a garden watering dripper.
+## Where the products are
 
-The enrichment worked exactly as designed — 143 keywords against ~76 before,
-105 fallbacks at ~2.8 per product — and moved the outcome by one package.
+| Location | Packages | State |
+|---|---|---|
+| `morning-anthem-candidates/` | **16** | the Round-1 kernel, reviewed and clean |
+| `optimal-dropship-candidates/` | 8 | the earlier shortlist |
+| `morning-anthem-candidates-tmp/` | 26 | Round 2, all `disregard`, held pending a decision |
+| **Shopify** (`2giusj-zm.myshopify.com`) | **20** | all `ACTIVE` |
 
-## The 17 on disk
+## The 16 on disk
 
 | Pillar | Shortlist | Review | Total |
 |---|---|---|---|
 | `sunrise_move` | 6 | 0 | **6** |
 | `restful_reset` | 5 | 1 | **6** |
-| `mindful_awakening` | 2 | 1 | **3** |
-| `brew_fuel` | 2 | 0 | **2** |
+| `mindful_awakening` | 1 | 1 | **2** |
+| `brew_fuel` | 1 | 1 | **2** |
 | `morning_table` | 0 | 0 | **0** |
-| **Total** | **15** | **2** | **17** |
+| **Total** | **13** | **3** | **16** |
 
 `sunrise_move`'s 6 = 5 dog gear (the cap) + 1 beach towel.
-`brew_fuel`'s 2 = the milk frother + the new ceramic coffee pot.
-Rank scores 3.10–4.12 · prices AUD 24.99–49.95.
-
-## Cleanup history
-
-| Action | Packages |
-|---|---|
-| Ranked at Round 1 Step 6 | 78 |
-| Deleted as `disregard` | −45 |
-| Deleted as dog gear over the cap of 5 | −16 |
-| Deleted as `disregard` (re-rank) | −1 |
-| Added from Round 2 | +1 |
-| **On disk now** | **17** |
+`brew_fuel`'s review is `product-48`, the one keeper Round 2 produced.
 
 ## Cost
 
-| Round | Trends | Step 3 | Total |
+| Round | Trends | Shopping | Total |
 |---|---|---|---|
 | 1 | 70 | 300 | **370** |
 | 2 | 30 | 150 | **180** |
@@ -85,27 +96,29 @@ Rank scores 3.10–4.12 · prices AUD 24.99–49.95.
 ## Two fixes from the catalogue review
 
 **Compliance gate is field-scoped.** A banned token in `product_title` is
-supplier fact and still deletes. A token in `marketing_ad_copy` or `features` is
-our own wording — note only. Live case: the highest-scoring package of Round 1,
-a cutting board at 4.34, was deleted because its ad copy said "oil" while
-describing board conditioning.
+supplier fact and still deletes. A token in our own generated copy only adds a
+note. Live case: the run's highest-scoring package, a cutting board at 4.34,
+was deleted because its ad copy said "oil" while describing board care.
 
 **Family cap.** `CLEANUP_MAX_PER_FAMILY` = 5, global, and it overrides the
-shortlist keep. 22 of the 23 kept `sunrise_move` packages were dog gear.
+shortlist keep — 22 of the 23 kept `sunrise_move` packages were dog gear.
+
+**Electrical goods are sellable again.** `electric`, `usb`, `rechargeable` no
+longer delete; a shortlist or review match gains an `[ESCALATE]` note for an
+EESS/ACMA check with CJ before linking. **Batteries remain banned.**
 
 ## Constraints each step imposes
 
 | Step | Blocks |
 |---|---|
-| 2 | Non-product searches; retailer-qualified strings |
-| 3 | Cosmetics, liquids, consumables, IP; rows with no rating or price |
-| 4 | Gold products whose own name carries an AICIS token |
-| 5 | Unproven stock; unquotable freight; galleries under 3 valid images; **under 1.2 kg, air-freight, no fragile untreated ceramics**; the AUD 10 margin floor |
-| 6 | Banned tokens in `product_title` — including `electric`, `usb`, `rechargeable` |
-| 7 | Everything `disregard`; one family above 5 |
+| 2 | non-product searches; retailer-qualified strings |
+| 3 | cosmetics, liquids, consumables, IP; rows with no rating or price |
+| 4 | gold products whose own name carries an AICIS token |
+| 5 | unproven stock; unquotable freight; galleries under 3 valid images; under 1.2 kg, air-freight, no fragile untreated ceramics; the AUD 10 margin floor |
+| 6 | AICIS tokens and **batteries** in `product_title`; electrical goods kept but escalated |
+| 7 | everything `disregard`; one product family above 5 |
 
 ## Where things live
 
-- `outputs/json/` structured deliverables · `outputs/md/` digests ·
-  `outputs/logs/` run logs
-- `my-store-build/inspiration/morning-anthem-candidates/cjdropshipping/` the 17
+`outputs/json/` deliverables · `outputs/md/` digests · `outputs/logs/` run logs
+Production packages: `my-store-build/inspiration/`
