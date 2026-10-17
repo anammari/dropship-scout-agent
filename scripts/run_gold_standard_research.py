@@ -61,6 +61,7 @@ from src.evaluators.gold_curator import (  # noqa: E402
 from src.extractors.google_shopping_hasdata import (  # noqa: E402
     HasDataShoppingError,
     HasDataShoppingScraper,
+    price_value_from_text,
 )
 from src.extractors.shopping_row import ShoppingRow  # noqa: E402
 from src.main import render_intervention_block  # noqa: E402
@@ -296,6 +297,22 @@ def main() -> None:
             # Curate a previous scrape's dump — no scrape source is built.
             raw = json.loads(args.from_raw.read_text(encoding="utf-8"))
             rows = [ShoppingRow(**entry) for entry in raw]
+            # A dump written before `price_value` existed carries `price_text`
+            # but no numeric price, and the Step-3 price filter would drop every
+            # such row. Rebuild the number from the saved display price so a
+            # stored scrape still replays.
+            rebuilt = 0
+            for row in rows:
+                if row.price_value is None:
+                    value = price_value_from_text(row.price_text)
+                    if value is not None:
+                        row.price_value = value
+                        rebuilt += 1
+            if rebuilt:
+                print(
+                    f"  rebuilt price_value for {rebuilt} legacy row(s) from "
+                    "their display price"
+                )
             # The Step-2 file is irrelevant on this path; report the
             # keywords the rows themselves claim instead.
             keywords = sorted({row.source_keyword for row in rows})

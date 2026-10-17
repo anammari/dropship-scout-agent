@@ -100,6 +100,26 @@ _PRICE_ANCHORED_RE = re.compile(
 _PRICE_DECIMAL_RE = re.compile(r"\b(\d[\d,]*\.\d{2})\b")
 
 
+def price_value_from_text(price: Any) -> Optional[float]:
+    """The number in a display price string, or None.
+
+    Public so the `--from-raw` replay path can rebuild `price_value` for a dump
+    written before that field existed: those rows carry `price_text` but no
+    numeric price, and the Step-3 price filter would drop every one of them.
+    Same cautious parse `_price_value` uses, and the same reason — a wrong
+    figure reaching a decision model is worse than an absent one.
+    """
+    if price is None:
+        return None
+    match = _PRICE_ANCHORED_RE.search(str(price)) or _PRICE_DECIMAL_RE.search(str(price))
+    if not match:
+        return None
+    try:
+        return float(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
+
+
 def _price_value(item: Dict[str, Any], price: Any) -> Optional[float]:
     """The row's retail price as a number, or None.
 
@@ -112,16 +132,7 @@ def _price_value(item: Dict[str, Any], price: Any) -> Optional[float]:
     extracted = item.get("extractedPrice")
     if isinstance(extracted, (int, float)) and not isinstance(extracted, bool):
         return float(extracted)
-    if price is None:
-        return None
-    text = str(price)
-    match = _PRICE_ANCHORED_RE.search(text) or _PRICE_DECIMAL_RE.search(text)
-    if not match:
-        return None
-    try:
-        return float(match.group(1).replace(",", ""))
-    except ValueError:
-        return None
+    return price_value_from_text(price)
 
 
 def parse_response(
@@ -216,10 +227,12 @@ class HasDataShoppingScraper:
 
     #: Published rate for the Google Shopping API; used for the runner's
     #: spend banner and the run telemetry. HasData returns no per-call usage
-    #: figure, so this is a rate, not a measurement. The config key
-    #: `HASDATA_SHOPPING_CREDITS_PER_REQUEST` is what the *guardrails* read, so
-    #: the two stay in step if the rate ever changes.
-    CREDITS_PER_REQUEST = 10
+    #: figure, so this is a rate, not a measurement.
+    #:
+    #: Bound to `HASDATA_SHOPPING_CREDITS_PER_REQUEST` rather than hard-coded:
+    #: the guardrails already read the setting, and two sources let a run
+    #: approve one spend envelope and report another when the rate is changed.
+    CREDITS_PER_REQUEST = settings.HASDATA_SHOPPING_CREDITS_PER_REQUEST
 
     def __init__(
         self,

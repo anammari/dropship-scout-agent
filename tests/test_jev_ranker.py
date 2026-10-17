@@ -1080,3 +1080,37 @@ def test_the_decision_model_is_a_per_run_choice_defaulting_to_jev(tmp_path):
         tmp_path, client, export_root=root, decision_model=ALTERNATE_DECISION_MODEL
     )
     assert chosen.decision_model == ALTERNATE_DECISION_MODEL
+
+
+def test_a_failed_report_write_leaves_the_previous_deliverable_intact(tmp_path, monkeypatch):
+    """The Step-6 report is Step 7's input, so a crash must not truncate it.
+
+    `write_reports` routes both files through `write_text_atomic`, so a failure
+    mid-write leaves whatever the destination held before rather than a partial
+    report that Step 7 would read as real.
+    """
+    import src.ranking.jev_product_ranker as ranker_module
+
+    json_path = tmp_path / "report.json"
+    md_path = tmp_path / "report.md"
+    json_path.write_text('{"old": true}', encoding="utf-8")
+    md_path.write_text("old digest", encoding="utf-8")
+
+    def boom(path, text):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ranker_module, "write_text_atomic", boom)
+    with pytest.raises(OSError):
+        write_reports(
+            [],
+            json_path,
+            md_path,
+            gold_products_path=tmp_path / "gold.json",
+            export_root=tmp_path,
+            batch_size=4,
+            shortlist_min_score=3.5,
+            review_min_score=2.5,
+        )
+
+    assert json_path.read_text(encoding="utf-8") == '{"old": true}'
+    assert md_path.read_text(encoding="utf-8") == "old digest"

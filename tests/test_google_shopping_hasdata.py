@@ -26,6 +26,7 @@ from src.extractors.google_shopping_hasdata import (
     HasDataShoppingError,
     HasDataShoppingRunFailedError,
     HasDataShoppingScraper,
+    price_value_from_text,
     parse_response,
 )
 
@@ -706,3 +707,19 @@ def test_a_run_where_no_row_has_a_price_raises_rather_than_yielding_nothing():
     curator = _curator_returning([])
     with pytest.raises(GoldCurationError, match="readable price"):
         curator.curate([priceless])
+
+
+def test_price_value_from_text_reads_a_legacy_display_price():
+    """`--from-raw` replay rebuilds price_value for dumps written before it existed."""
+    assert price_value_from_text("$24.95") == 24.95
+    assert price_value_from_text("AUD 1,299.00") == 1299.00
+    assert price_value_from_text("24.95") == 24.95
+    assert price_value_from_text("no price here") is None
+    assert price_value_from_text(None) is None
+
+
+def test_the_credit_rate_follows_the_setting_not_a_hard_coded_ten():
+    """One source: the guardrails and the telemetry read the same number."""
+    assert HasDataShoppingScraper.CREDITS_PER_REQUEST == (
+        settings.HASDATA_SHOPPING_CREDITS_PER_REQUEST
+    )

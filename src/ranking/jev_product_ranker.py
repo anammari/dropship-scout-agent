@@ -45,6 +45,7 @@ from src.keywords.generator import (
     KeywordGenerationError,
     load_gold_products,
 )
+from src.pipeline.atomic_write import write_text_atomic
 from src.ranking.jev_client import (
     QUESTIONS,
     JevClient,
@@ -731,10 +732,11 @@ def write_reports(
         review_min_score=review_min_score,
         model=model,
     )
+    # Atomic, like every other deliverable writer: this report is Step 7's
+    # input, so a crash mid-write must not truncate it and destroy the previous
+    # good copy. `write_text_atomic` also creates the parent directory.
     json_path = Path(json_path)
     md_path = Path(md_path)
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    md_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    md_path.write_text(render_markdown(packages, payload), encoding="utf-8")
+    write_text_atomic(json_path, json.dumps(payload, indent=2))
+    write_text_atomic(md_path, render_markdown(packages, payload))
     return payload
