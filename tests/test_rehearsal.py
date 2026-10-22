@@ -58,6 +58,7 @@ def test_the_chain_produces_and_then_cleans_real_packages(tmp_path, capsys):
 
     # The real exporter wrote the real contract, and Step 7 pruned the tree.
     assert packages, "the chain should leave packages behind"
+    assert f"{len(packages)} package(s) survived cleanup in the batch root" in out
     for package in packages:
         metadata = package / "metadata.json"
         assert metadata.is_file()

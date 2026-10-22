@@ -23,6 +23,7 @@ from src.pipeline.cleanup import (
     package_family,
     plan_cleanup,
     summarize,
+    _supplier_root,
 )
 
 # ---------------------------------------------------------------------------
@@ -67,6 +68,19 @@ def _actions(root: Path, rows: List[Dict[str, Any]], **kwargs) -> List[CleanupAc
 
 def _deleted_names(actions) -> List[str]:
     return sorted(a.package_dir.name for a in actions if a.delete)
+
+
+def test_supplier_root_handles_empty_new_and_legacy_batch_roots(tmp_path):
+    new_batch = tmp_path / "morning-anthem-20261022"
+    new_batch.mkdir()
+    custom_empty = tmp_path / "custom-batch"
+    custom_empty.mkdir()
+    legacy = tmp_path / "morning-anthem-candidates"
+    (legacy / "cjdropshipping").mkdir(parents=True)
+
+    assert _supplier_root(new_batch) == new_batch
+    assert _supplier_root(custom_empty) == custom_empty
+    assert _supplier_root(legacy) == legacy / "cjdropshipping"
 
 
 # ---------------------------------------------------------------------------

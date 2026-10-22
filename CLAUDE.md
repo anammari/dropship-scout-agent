@@ -543,7 +543,7 @@ with the AliExpress extractor (§1). CJ's MCP server needs only its token.
 | `TREND_SELECT_TARGET` | `30` | how many keywords the selection picks for the Step-3 scrape — **this IS the Step-3 budget** (10 credits each) |
 | `TREND_SELECT_MIN_PER_PILLAR` | `2` | per-pillar floor inside each pillar's proportional selection quota, so a crowded pillar cannot consume every paid slot |
 | `PILLAR_GATE_BATCH_SIZE` | `4` | Step-3 Jev pillar gate: candidate products per System One call |
-| `EXPORT_DIR` | `…/my-store-build/ingestion/single-keyword` | single-keyword pipeline (CJ packages below `cjdropshipping/`) |
+| `EXPORT_DIR` | `…/my-store-build/ingestion/single-keyword` | single-keyword pipeline; CJ packages are directly below this folder |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads |
 
 **Removed keys** (with their pipelines): `ALI_DS_STATE_PATH`,
@@ -1228,8 +1228,8 @@ Four green/failed runs, each fix below coming out of a failure:
 
 > **Historical: this was the dual-supplier (CJ + AliExpress) ingestion.** Step 5
 > is now **CJ-only**: `BANK_ENGINES` holds one engine, the gold-kernel root is
-> `MORNING_ANTHEM_EXPORT_DIR` (`…/ingestion/cjdropshipping/morning-anthem-YYYYMMDD`) with one
-> `cjdropshipping/` subfolder, the runner has no `--only` flag, and the
+> `MORNING_ANTHEM_EXPORT_DIR` (`…/ingestion/cjdropshipping/morning-anthem-YYYYMMDD`), with
+> `product-NN/` packages directly in that batch root; the runner has no `--only` flag, and the
 > AliExpress DS Center Session intervention block is gone. The per-leg fold,
 > the shared evaluator, the exporter-counter delta arithmetic and the
 > fail-closed loader all still stand as described below.

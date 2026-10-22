@@ -719,10 +719,10 @@ def main(argv: List[str] | None = None) -> int:
     for path in _tree(scratch):
         print(f"  {path}")
 
-    packages = sorted((candidates / "cjdropshipping").glob("product-*"))
+    packages = sorted(candidates.glob("product-*"))
     print(
-        f"\n  {len(packages)} package(s) survived cleanup in "
-        f"cjdropshipping/ (from {len(_tree(candidates))} file(s) before)"
+        f"\n  {len(packages)} package(s) survived cleanup in the batch root "
+        f"(from {len(_tree(candidates))} file(s) before)"
     )
     print("\n[REHEARSAL COMPLETE] 0 HasData credits spent — every socket was blocked.")
     return 0
