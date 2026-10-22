@@ -1,5 +1,11 @@
 # Implementation Plan — The Morning Anthem Multi-Step Pipeline (Global, CJ-Only, HasData-Only)
 
+> **Output-path amendment (2026-10-22):** Step 5 writes one date-stamped batch
+> to `my-store-build/ingestion/cjdropshipping/morning-anthem-YYYYMMDD/`;
+> Steps 6–7 take that exact batch root through `--export-root`. Pipeline 1
+> writes separately to `my-store-build/ingestion/single-keyword/`. Older paths
+> below describe the original implementation.
+
 **Status:** implementation spec for the coding agent. **Tracked** — `plans/` is
 tracked as of 2026-10-12 (operator decision) and split into `technical/` (this
 file and the CJ gate directive) and `simplified/` (plain-English walkthroughs of

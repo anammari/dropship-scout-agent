@@ -5,6 +5,7 @@ so each test is isolated from import order / env pollution.
 """
 
 import re
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -374,12 +375,18 @@ def test_ranked_candidates_path_defaults_to_the_step_6_report(monkeypatch):
 
 
 def test_morning_anthem_export_dir_defaults_to_the_gold_kernel_tree(monkeypatch):
-    # Distinct from EXPORT_DIR: the gold-kernel intake is its own tree, with
-    # the CJdropshipping supplier subfolder under it.
+    # One date-stamped CJ batch root; later steps can pin an older root.
     monkeypatch.delenv("MORNING_ANTHEM_EXPORT_DIR", raising=False)
     assert load_settings().MORNING_ANTHEM_EXPORT_DIR == (
-        "/Users/ahmadammari/PD/my-store-build/inspiration/"
-        "morning-anthem-candidates"
+        f"/Users/ahmadammari/PD/my-store-build/ingestion/cjdropshipping/"
+        f"morning-anthem-{date.today():%Y%m%d}"
+    )
+
+
+def test_single_keyword_export_dir_defaults_outside_demo_and_batches(monkeypatch):
+    monkeypatch.delenv("EXPORT_DIR", raising=False)
+    assert load_settings().EXPORT_DIR == (
+        "/Users/ahmadammari/PD/my-store-build/ingestion/single-keyword"
     )
 
 
@@ -391,8 +398,8 @@ def test_morning_anthem_export_dir_env_override_is_respected(monkeypatch):
 def test_morning_anthem_export_dir_blank_falls_back_to_the_default(monkeypatch):
     monkeypatch.setenv("MORNING_ANTHEM_EXPORT_DIR", "")
     assert load_settings().MORNING_ANTHEM_EXPORT_DIR == (
-        "/Users/ahmadammari/PD/my-store-build/inspiration/"
-        "morning-anthem-candidates"
+        f"/Users/ahmadammari/PD/my-store-build/ingestion/cjdropshipping/"
+        f"morning-anthem-{date.today():%Y%m%d}"
     )
 
 

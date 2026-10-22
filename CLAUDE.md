@@ -24,7 +24,7 @@ strict commercial and logistical criteria and exports 3–5 validated,
 high-margin winning product packages directly into the Shopify workspace:
 
 ```
-/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates/
+/Users/ahmadammari/PD/my-store-build/ingestion/single-keyword/
 ```
 
 The pipeline ingests **live, verified products directly from the supplier
@@ -531,7 +531,7 @@ with the AliExpress extractor (§1). CJ's MCP server needs only its token.
 | `MORNING_ANTHEM_GOLD_PRODUCTS_PATH` | `outputs/json/morning-anthem-step-3-gold-products.json` | Step-3 gold-product deliverable — Steps 4 + 6 read it |
 | `MORNING_ANTHEM_KEYWORD_BANK_PATH` | `outputs/json/morning-anthem-step-4-keyword-bank.json` | Step-4 bank deliverable — Step 5's intake |
 | `BANK_TARGET_PER_KEYWORD` | `2` | Step-5 packages exported per (keyword, engine) leg — a PER-LEG target, so the bank's keyword count multiplies it (§13.6) |
-| `MORNING_ANTHEM_EXPORT_DIR` | `…/my-store-build/inspiration/morning-anthem-candidates` | Step-5/6 gold-kernel root; the `cjdropshipping/` subfolder is numbered independently (§13.6) |
+| `MORNING_ANTHEM_EXPORT_DIR` | `…/my-store-build/ingestion/cjdropshipping/morning-anthem-YYYYMMDD` | Exact Step-5 batch root; pass same path to later Steps 6–7 (§13.6) |
 | `OPENROUTER_API_KEY` | — | Jev (TypeSafe System One via OpenRouter), shared by the Step-2 product-intent gate, the Step-3 pillar gate and the Step-6 ranking (never logged) |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Jev client base; it appends `/systemone` |
 | `JEV_MODEL` | `typesafe/jev-1.13` | System One model id (pinned so a ranking is reproducible). **Jev is always the default**; the alternative `perplexity/pplx-decider-flash-v1.2` is chosen per run with `rank_optimal_candidates.py --decision-model …`, never by editing this key |
@@ -543,7 +543,7 @@ with the AliExpress extractor (§1). CJ's MCP server needs only its token.
 | `TREND_SELECT_TARGET` | `30` | how many keywords the selection picks for the Step-3 scrape — **this IS the Step-3 budget** (10 credits each) |
 | `TREND_SELECT_MIN_PER_PILLAR` | `2` | per-pillar floor inside each pillar's proportional selection quota, so a crowded pillar cannot consume every paid slot |
 | `PILLAR_GATE_BATCH_SIZE` | `4` | Step-3 Jev pillar gate: candidate products per System One call |
-| `EXPORT_DIR` | `…/my-store-build/inspiration/dropship-candidates` | exporter (general intake §9) |
+| `EXPORT_DIR` | `…/my-store-build/ingestion/single-keyword` | single-keyword pipeline (CJ packages below `cjdropshipping/`) |
 | `USER_AGENT` | desktop Chrome UA | CDN downloads |
 
 **Removed keys** (with their pipelines): `ALI_DS_STATE_PATH`,
@@ -813,8 +813,8 @@ to a runner — it is the only thing that exercises the *seams* between the step
 The pipeline produces a **gold kernel**: a small set of proven-demand AU
 retail products (Google Shopping evidence) that drives keyword generation,
 supplier ingestion and Jev ranking, exported to
-`my-store-build/inspiration/morning-anthem-candidates/cjdropshipping/`
-(Step 5, §13.6). The existing `dropship-candidates/` intake (§8) stays as
+`my-store-build/ingestion/cjdropshipping/morning-anthem-YYYYMMDD/`
+(Step 5, §13.6). The existing `dropship-candidates-demo/` intake (§8) stays as
 the general flow.
 
 **Jev's role changed with the Morning Anthem plan: it is now used at three
@@ -829,14 +829,14 @@ older spike proposed is still dead and must still never be built.
 | 2 | Trends → candidate strings → **Jev product-intent gate** → AU product-search keywords, tagged with the five Morning Anthem pillars | **done — §13.8**, deliverable `outputs/json/morning-anthem-step-2-trend-keywords.json` (untracked) |
 | 3 | Google Shopping AU scrape (**HasData only**, no `--source`) + LLM select-by-url curation + **Jev pillar gate** → gold-standard product list | **done — §13.8**; §13.2 describes the superseded design |
 | 4 | **Exact-title-first** keyword bank: each product's own title in code, plus one optional LLM fallback | **done — §13.8**; §13.3 describes the superseded design |
-| 5 | **CJ-only** ingestion of the keyword bank → `morning-anthem-candidates/cjdropshipping/` | **done — §13.8**; §13.6 describes the superseded design |
+| 5 | **CJ-only** ingestion of the keyword bank → `ingestion/cjdropshipping/morning-anthem-YYYYMMDD/` | **done — §13.8**; §13.6 describes the superseded design |
 | 6 | Jev ranks supplier candidates against the gold products | **done — §13.8**; §13.7 describes the superseded design |
 | 7–8 | Human-only: CJ app linking; store curation | no code (deliberately) |
 
 All research deliverables live under `outputs/` — **untracked**
 (gitignored; scoping data, not repo artefacts) — while the Step-5 gold-kernel
 packages are written into the Shopify workspace tree
-(`morning-anthem-candidates/`, §13.6), like the general intake (§8).
+(`ingestion/cjdropshipping/morning-anthem-YYYYMMDD/`, §13.6); the single-keyword intake has its own destination (§8).
 
 **`plans/` is tracked** (operator decision 2026-10-12) and holds only plans that
 describe live codebase behaviour, in two subfolders: `plans/technical/` (this
@@ -1228,7 +1228,7 @@ Four green/failed runs, each fix below coming out of a failure:
 
 > **Historical: this was the dual-supplier (CJ + AliExpress) ingestion.** Step 5
 > is now **CJ-only**: `BANK_ENGINES` holds one engine, the gold-kernel root is
-> `MORNING_ANTHEM_EXPORT_DIR` (`…/morning-anthem-candidates`) with one
+> `MORNING_ANTHEM_EXPORT_DIR` (`…/ingestion/cjdropshipping/morning-anthem-YYYYMMDD`) with one
 > `cjdropshipping/` subfolder, the runner has no `--only` flag, and the
 > AliExpress DS Center Session intervention block is gone. The per-leg fold,
 > the shared evaluator, the exporter-counter delta arithmetic and the
@@ -1363,7 +1363,7 @@ arm auto-rejected). AliExpress contributed **0 exports**: every leg answered
 note) — `scraped=6 evaluated=6 accepted=1` and the `aliexpress/` subfolder
 never created, as it is written only on its first export. The operator
 cleared the 38 PR#3-run packages before this run; the general-intake
-`dropship-candidates/` tree was untouched.
+`dropship-candidates-demo/` tree was untouched.
 
 ### 13.7 Step 6 — Jev product ranking (SUPERSEDED — see §13.8)
 
@@ -1873,7 +1873,7 @@ supplier engine — under the full gate stack: the commercial gate (§6.2), the 
 payload liveness gate (§5), the mandatory freight quote to
 `CJ_DEFAULT_DEST_COUNTRY` (§6.3), the LLM viability gate, the AUD margin floor
 (`MIN_MARGIN_AUD`) and the 3-image gallery gate. Survivors are written to
-`<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/`.
+`<MORNING_ANTHEM_EXPORT_DIR>/product-NN/`.
 
 **The unit of ingestion is the product, not the keyword** (operator decision
 2026-10-12). A product's rows run in order — its **exact title first**, then its
@@ -1890,7 +1890,7 @@ counter for the fallbacks that were not needed.
 
 #### Step 6 — Jev ranking (the gold kernel's last automated step)
 
-Reads the packages from `<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/`
+Reads the packages from `<MORNING_ANTHEM_EXPORT_DIR>/product-NN/`
 plus the Step-3 gold list, and ranks each package with Jev on three questions:
 `<slug>__similarity` (score — is it the same object as a gold product?),
 `<slug>__winning_value` (score — its own **AUD** retail, landed cost and

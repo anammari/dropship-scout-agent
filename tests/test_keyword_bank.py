@@ -654,25 +654,33 @@ async def test_ingest_with_one_engine_still_raises_when_it_fails_everything(tmp_
 # ----------------------------------------------------------------------
 
 
-async def test_export_roots_are_the_supplier_subfolders(tmp_path):
+async def test_export_roots_are_the_batch_root(tmp_path):
     summary = await _ingest(_keywords(1), tmp_path)
     assert summary.export_roots == {
-        "cjdropshipping": str(tmp_path / "cjdropshipping"),
+        "cjdropshipping": str(tmp_path),
     }
 
 
-def test_default_exporters_bind_one_exporter_per_supplier_subfolder(tmp_path):
+def test_default_exporters_bind_cj_to_batch_root(tmp_path):
     exporters = _default_exporters(tmp_path, list(BANK_ENGINES))
     assert set(exporters) == set(BANK_ENGINES)
-    assert Path(exporters["cjdropshipping"].export_dir) == tmp_path / "cjdropshipping"
-    # Nothing is created until a package is actually written.
-    assert not (tmp_path / "cjdropshipping").exists()
+    assert Path(exporters["cjdropshipping"].export_dir) == tmp_path
+    assert tmp_path.exists()
+    assert not list(tmp_path.iterdir())
 
 
-async def test_exported_packages_land_under_the_supplier_subfolder(tmp_path):
-    summary = await _ingest(_keywords(1), tmp_path)
+async def test_exported_packages_land_under_the_batch_root(tmp_path):
+    bound = _default_exporters(tmp_path, list(BANK_ENGINES))
+    exporters = {
+        engine: _FakeExporter(engine, export_dir=exporter.export_dir)
+        for engine, exporter in bound.items()
+    }
+    summary = await _ingest(
+        _keywords(1), tmp_path,
+        exporters=exporters,
+    )
     folders = {Path(result.product_dir).parent.name for result in summary.exports}
-    assert folders == set(BANK_ENGINES)
+    assert folders == {tmp_path.name}
 
 
 # ----------------------------------------------------------------------

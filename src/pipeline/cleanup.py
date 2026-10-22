@@ -109,7 +109,11 @@ class CleanupReport:
 def _supplier_root(export_root: Optional[Path] = None) -> Path:
     """The one directory this step may ever delete inside."""
     root = Path(export_root or settings.MORNING_ANTHEM_EXPORT_DIR)
-    return root / "cjdropshipping"
+    return (
+        root if root.name.startswith("morning-anthem-")
+        or any(root.glob("product-*/"))
+        else root / "cjdropshipping"
+    )
 
 
 def _is_contained(package_dir: Path, supplier_root: Path) -> bool:

@@ -53,8 +53,8 @@ def test_the_chain_produces_and_then_cleans_real_packages(tmp_path, capsys):
     assert harness.main(["--scratch", str(scratch)]) == 0
 
     out = capsys.readouterr().out
-    supplier = scratch / "candidates" / "cjdropshipping"
-    packages = sorted(supplier.glob("product-*"))
+    batch = scratch / "candidates"
+    packages = sorted(batch.glob("product-*"))
 
     # The real exporter wrote the real contract, and Step 7 pruned the tree.
     assert packages, "the chain should leave packages behind"

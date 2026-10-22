@@ -1,7 +1,7 @@
 """Step 6 — rank the Step-5 Morning Anthem packages against the gold products.
 
 Intake is the gold-kernel tree written by Step 5
-(`<MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/`, each a
+(`<MORNING_ANTHEM_EXPORT_DIR>/product-NN/`, each a
 `metadata.json` + `images/` package — CJdropshipping is The Morning Anthem's
 sole supplier) plus the Step-3 gold-standard product list
 (`outputs/json/morning-anthem-step-3-gold-products.json`). Every package in
@@ -56,7 +56,7 @@ from src.ranking.jev_client import (
 
 logger = logging.getLogger(__name__)
 
-#: The supplier subfolder Step 5 writes (CJdropshipping is the sole supplier).
+#: Supported supplier keys (CJdropshipping is the sole supplier).
 SUPPLIER_DIRS = ("cjdropshipping",)
 
 #: A package directory is `product-NN` (two or more digits), same shape the
@@ -406,8 +406,15 @@ class JevProductRanker:
         all is a hard failure naming the Step-5 runner.
         """
         packages: List[PackageRef] = []
+        direct_packages = any(
+            entry.is_dir() and _PRODUCT_DIR_RE.match(entry.name)
+            for entry in self.export_root.iterdir()
+        ) if self.export_root.exists() else False
         for engine in SUPPLIER_DIRS:
-            supplier_dir = self.export_root / engine
+            supplier_dir = (
+                self.export_root if direct_packages and engine == "cjdropshipping"
+                else self.export_root / engine
+            )
             if not supplier_dir.exists():
                 continue
             for entry in sorted(supplier_dir.iterdir()):
@@ -438,7 +445,7 @@ class JevProductRanker:
         if not packages:
             raise JevRankingError(
                 f"No Step-5 packages found under {self.export_root} "
-                f"(expected {{{','.join(SUPPLIER_DIRS)}}}/product-NN/). Run "
+                "(expected product-NN/ in the batch root). Run "
                 "Step 5 first: source .venv/bin/activate && python "
                 "scripts/ingest_keyword_bank.py"
             )
