@@ -30,20 +30,14 @@ media are local, untracked ingestion data.
 
 ## HasData and Apify costs
 
-The surviving Step-5 logs record CJ supplier requests and package exports, but
-do not record HasData or Apify charges against an ingestion folder. The tracked
-manifests have no research-run ID, so per-folder attribution is **unknown**.
-Step 5's CJ ingestion itself uses neither HasData nor Apify credits.
+The available records report research-service spend, but do not tie it to a
+specific ingestion folder. The CJ supplier-ingestion step itself uses neither
+service.
 
-| Ingestion folder | HasData credits | Apify spend (USD) |
-|---|---:|---:|
-| `ingestion/cjdropshipping/morning-anthem-001/` | Unknown | Unknown |
-| `ingestion/cjdropshipping/morning-anthem-002/` | Unknown | Unknown |
-| `ingestion/cjdropshipping/morning-anthem-20260930/` | Unknown | Unknown |
-| **Folder-attributed total** | **Unknown** | **Unknown** |
+| Service | Recorded usage | Known spend | Scope |
+|---|---|---:|---|
+| HasData | 10 Trends requests + 45 Google Shopping requests | **550 credits** (100 + 450) | Two historical runs: 370 + 180 credits; not allocated by ingestion folder |
+| Apify | `damilo/google-shopping-apify`, run `rP09Pk3x0nkqlSuLB`, 1,567 rows | **USD 4.06** for this run; **USD 6.76** historical cumulative spend | 2026-09-29 production research; not allocated by ingestion folder |
 
-Historical research records show **550 HasData credits** across two runs
-(370 + 180), and **USD 6.76 total Apify spend**; the recorded 2026-09-29 Apify
-run was USD 4.06. These are unallocated historical totals, not costs assigned
-to the three ingestion folders. HasData credits and Apify dollars are different
-units and are not combined.
+HasData usage is reported in credits; Apify usage is reported in USD. These
+figures remain separate and are not assigned to individual batches.
