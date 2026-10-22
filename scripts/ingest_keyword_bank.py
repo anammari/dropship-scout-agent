@@ -7,7 +7,7 @@ Every bank PRODUCT runs through CJdropshipping (MCP) — The Morning Anthem's so
 supplier engine — under its own gates, and what survives the viability gate, the
 margin floor and the 3-image gallery gate is written to:
 
-    <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/…
+    <MORNING_ANTHEM_EXPORT_DIR>/product-NN/…
 
 That tree is a production deliverable, not a repo artefact, and stays
 untracked.
@@ -280,7 +280,7 @@ def main(argv: List[str] | None = None) -> int:
         "--export-root",
         type=Path,
         default=Path(settings.MORNING_ANTHEM_EXPORT_DIR),
-        help="gold-kernel intake root (default: MORNING_ANTHEM_EXPORT_DIR)",
+        help="dated batch root (default: MORNING_ANTHEM_EXPORT_DIR)",
     )
     args = parser.parse_args(argv)
 

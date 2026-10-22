@@ -4,7 +4,7 @@ gold-standard products with Jev (TypeSafe System One via OpenRouter).
 
 Reads the gold-kernel tree Step 5 wrote —
 
-    <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/…
+    <MORNING_ANTHEM_EXPORT_DIR>/product-NN/…
 
 — and the Step-3 deliverable (`outputs/json/step-3-gold-standard-products.json`),
 asks Jev for a similarity score, a winning-value score and a pillar per
@@ -106,7 +106,7 @@ def main(argv: List[str] | None = None) -> int:
         "--export-root",
         type=Path,
         default=Path(settings.MORNING_ANTHEM_EXPORT_DIR),
-        help="Step-5 gold-kernel root (default: MORNING_ANTHEM_EXPORT_DIR)",
+        help="exact Step-5 batch root (default: MORNING_ANTHEM_EXPORT_DIR)",
     )
     parser.add_argument(
         "--batch-size",
@@ -186,7 +186,7 @@ def main(argv: List[str] | None = None) -> int:
                     "outputs/json/step-3-gold-standard-products.json (re-run "
                     "scripts/run_gold_standard_research.py if not)",
                     "Confirm the Step-5 gold-kernel tree holds product-NN "
-                    "packages: <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/ "
+                    "packages: <MORNING_ANTHEM_EXPORT_DIR>/ "
                     "(re-run scripts/ingest_keyword_bank.py if not)",
                     "Re-run the ranking: python scripts/rank_optimal_candidates.py",
                 ],

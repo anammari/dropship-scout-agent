@@ -11,6 +11,7 @@ field values, so an accidental `repr(settings)` can never leak
 """
 
 import os
+from datetime import date
 from pathlib import Path
 from typing import List, Optional
 
@@ -27,13 +28,10 @@ DEFAULT_USER_AGENT = (
 )
 
 DEFAULT_EXPORT_DIR = (
-    "/Users/ahmadammari/PD/my-store-build/inspiration/dropship-candidates"
+    "/Users/ahmadammari/PD/my-store-build/ingestion/single-keyword"
 )
 
-# Step-5 Morning Anthem gold-kernel intake destination (plan §7.2). One
-# supplier subfolder per engine (CJdropshipping only), numbered independently;
-# this is the gold-kernel tree the Morning Anthem pipeline produces, distinct
-# from the general `dropship-candidates/` intake above.
+# Step-5 default batch. Pass this exact path to Steps 6–7 when resuming later.
 #: The Step-6 decision model. **Jev is the default, always** — the alternative
 #: is opt-in per run (`--decision-model perplexity/pplx-decider-flash-v1.2`),
 #: never a change of behaviour by editing .env. Both speak the same System One
@@ -46,7 +44,8 @@ DEFAULT_DECISION_MODEL = "typesafe/jev-1.13"
 ALTERNATE_DECISION_MODEL = "perplexity/pplx-decider-flash-v1.2"
 
 DEFAULT_MORNING_ANTHEM_EXPORT_DIR = (
-    "/Users/ahmadammari/PD/my-store-build/inspiration/morning-anthem-candidates"
+    "/Users/ahmadammari/PD/my-store-build/ingestion/cjdropshipping/"
+    f"morning-anthem-{date.today():%Y%m%d}"
 )
 
 # Deliverable layout of the untracked `outputs/` tree. A run writes three
@@ -305,9 +304,7 @@ class Settings:
         self.CLEANUP_MAX_PER_FAMILY: int = _parse_int(
             os.getenv("CLEANUP_MAX_PER_FAMILY"), default=5
         )
-        # Step-5 Morning Anthem gold-kernel intake root: the supplier
-        # subfolder is created under it by the runner, numbered independently
-        # (`cjdropshipping/product-NN`).
+        # Exact dated Step-5 batch root; pass it to Steps 6–7 when resuming later.
         self.MORNING_ANTHEM_EXPORT_DIR: str = (
             os.getenv("MORNING_ANTHEM_EXPORT_DIR")
             or DEFAULT_MORNING_ANTHEM_EXPORT_DIR

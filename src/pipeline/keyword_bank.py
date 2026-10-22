@@ -12,7 +12,7 @@ The Morning Anthem's sole supplier engine (the AliExpress Dropshipping
 Center extractor was retired on this branch) — and exports what survives
 into the gold-kernel tree:
 
-    <MORNING_ANTHEM_EXPORT_DIR>/cjdropshipping/product-NN/…
+    <MORNING_ANTHEM_EXPORT_DIR>/product-NN/…
 
 The per-(keyword, engine) leg is its own call into the existing
 `run_pipeline` with a single-engine list, a shared evaluator and a
@@ -259,15 +259,16 @@ def _default_extractor_factories() -> Dict[str, Callable[[], Any]]:
 
 
 def _default_exporters(export_root: Path, engines: Sequence[str]) -> Dict[str, Any]:
-    """One exporter per engine, each bound to its own supplier subfolder.
+    """Bind CJ packages directly to the batch root.
 
-    Numbering and the already-exported duplicate check are per exporter. The
-    subfolder is created on the first write, so a run that exports nothing
-    leaves no empty directory behind.
+    Numbering and duplicate checks stay per exporter.
     """
     return {
         engine: CandidateExporter(
-            export_dir=str(export_root / OPTIMAL_SUPPLIER_DIRS[engine])
+            export_dir=str(
+                export_root if engine == "cjdropshipping"
+                else export_root / OPTIMAL_SUPPLIER_DIRS[engine]
+            )
         )
         for engine in engines
     }
@@ -325,7 +326,10 @@ async def ingest_keyword_bank(
             for engine in engines
         },
         export_roots={
-            engine: str(export_root / OPTIMAL_SUPPLIER_DIRS[engine])
+            engine: str(
+                export_root if engine == "cjdropshipping"
+                else export_root / OPTIMAL_SUPPLIER_DIRS[engine]
+            )
             for engine in engines
         },
     )

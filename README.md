@@ -62,6 +62,8 @@ python -m src.main --keyword "kitchen gadgets" --target-count 3
 python -m src.main --keyword "garlic press" --target-count 3 --extractor cjdropshipping
 ```
 
+Default output: `my-store-build/ingestion/single-keyword/`.
+
 ---
 
 ## Pipeline 2 — Morning Anthem multi-step
@@ -74,7 +76,7 @@ input stops the run rather than producing a short list that looks successful.
  Step 2  gate + select                       →  ~30 product-search keywords
  Step 3  Google Shopping + curate + pillar   →  gold-standard products
  Step 4  keyword bank (title → fallbacks → sub-terms → head term)
- Step 5  CJ ingestion (all Pipeline-1 gates) →  product-NN packages
+ Step 5  CJ ingestion (all Pipeline-1 gates) →  ingestion/cjdropshipping/morning-anthem-YYYYMMDD/product-NN
  Step 6  decision model ranks every package  →  shortlist | review | disregard
  Step 7  cleanup                             →  what stays on disk
 ```
@@ -88,6 +90,10 @@ input stops the run rather than producing a short list that looks successful.
 | 5 | CJ packages | everything in Pipeline 1, plus unproven stock |
 | 6 | tiered ranking | banned tokens in `product_title`; **batteries**; electrical goods kept but flagged `[ESCALATE]` for an EESS/ACMA check |
 | 7 | final tree | all `disregard`; one product family above 5 |
+
+Step 5 creates a dated batch root under `my-store-build/ingestion/`. Pass that
+same `--export-root` to Steps 6–7 when resuming on another date. Pipeline 1
+uses its separate `ingestion/single-keyword/` destination.
 
 **Step 2 — the descent ladder.** A keyword is only worth a Step-3 request if it
 is a real product search, so a decision model classifies each candidate first.
@@ -115,7 +121,7 @@ python scripts/run_gold_standard_research.py                # Step 3
 python scripts/generate_gold_keywords.py                    # Step 4
 python scripts/ingest_keyword_bank.py                       # Step 5
 python scripts/rank_optimal_candidates.py                   # Step 6
-python scripts/cleanup_candidates.py                        # Step 7, dry run
+python scripts/cleanup_candidates.py                         # Step 7, dry run
 python scripts/cleanup_candidates.py --apply                # Step 7, deletes
 ```
 

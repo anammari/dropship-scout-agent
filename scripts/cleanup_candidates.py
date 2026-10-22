@@ -122,7 +122,7 @@ def main(argv: List[str] | None = None) -> int:
         "--export-root",
         type=Path,
         default=Path(settings.MORNING_ANTHEM_EXPORT_DIR),
-        help="gold-kernel root holding cjdropshipping/product-NN (default: "
+        help="exact dated batch root holding product-NN (default: "
              "MORNING_ANTHEM_EXPORT_DIR)",
     )
     parser.add_argument(
@@ -178,7 +178,7 @@ def main(argv: List[str] | None = None) -> int:
         )
         return 1
 
-    supplier_root = args.export_root / "cjdropshipping"
+    supplier_root = args.export_root
     _print_plan(
         actions, supplier_root, args.review_keep, args.apply,
         max_per_family=args.max_per_family,
